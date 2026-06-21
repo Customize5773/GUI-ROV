@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HYDROSHIPS Dashboard</title>
+    <link rel="stylesheet" href="dashboard.css">
+</head>
+<body>
+    <div class="dashboard-container">
+        <!-- Header -->
+        <header class="dashboard-header">
+            <div class="header-left">
+                <h1 class="dashboard-title">HYDROSHIPS</h1>
+                <p class="dashboard-subtitle">ROV Digital Twin</p>
+            </div>
+            <div class="header-right">
+                <button class="btn btn-icon">
+                    <span class="icon">🎤</span> Voice
+                </button>
+                <button class="btn btn-icon">
+                    <span class="icon">💡</span> Light
+                </button>
+                <button class="btn btn-secondary">UDP OFF</button>
+                <button class="btn btn-success">
+                    <span class="dot"></span> Connect
+                </button>
+                <button class="btn btn-danger">STOP</button>
+            </div>
+        </header>
+
+        <div class="dashboard-body">
+            <!-- Left Sidebar -->
+            <aside class="sidebar">
+                <nav class="nav-menu">
+                    <div class="nav-item active">
+                        <span class="nav-icon">⚙️</span>
+                        <span class="nav-label">Control</span>
+                    </div>
+                    <div class="nav-item">
+                        <span class="nav-icon">📷</span>
+                        <span class="nav-label">Camera</span>
+                    </div>
+                    <div class="nav-item">
+                        <span class="nav-icon">🎮</span>
+                        <span class="nav-label">Unity VR</span>
+                    </div>
+                    <div class="nav-item">
+                        <span class="nav-icon">📊</span>
+                        <span class="nav-label">Telemetry</span>
+                    </div>
+                    <div class="nav-item">
+                        <span class="nav-icon">🔧</span>
+                        <span class="nav-label">Setup</span>
+                    </div>
+                </nav>
+            </aside>
+
+            <!-- Main Content -->
+            <main class="main-content">
+                <!-- Status Cards Row -->
+                <div class="status-row">
+                    <div class="status-card">
+                        <div class="status-label">Depth</div>
+                        <div class="status-value">0.00 m</div>
+                        <div class="status-detail">Pool depth 3.00 m</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-label">Heading</div>
+                        <div class="status-value">0°</div>
+                        <div class="status-detail">Standby</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-label">Altitude</div>
+                        <div class="status-value">0.0°</div>
+                        <div class="status-detail">Roll / pitch</div>
+                    </div>
+                    <div class="status-card">
+                        <div class="status-label">Latency</div>
+                        <div class="status-value">0 ms</div>
+                        <div class="status-detail">Data</div>
+                    </div>
+                </div>
+
+                <!-- Main Control & Camera Section -->
+                <div class="content-grid">
+                    <!-- Left Panel - ROV Control -->
+                    <div class="panel-left">
+                        <div class="panel-header">
+                            <h2>ROV Control</h2>
+                            <div class="control-tabs">
+                                <button class="tab-btn active">Full Scopes</button>
+                                <button class="tab-btn">Standby</button>
+                                <button class="tab-btn">Dry Cal</button>
+                                <button class="tab-btn">Manual</button>
+                                <button class="tab-btn">Hold</button>
+                            </div>
+                        </div>
+
+                        <!-- Depth Chart -->
+                        <div class="chart-container">
+                            <div class="chart-title">DEPTH</div>
+                            <div class="chart-value">0.00m</div>
+                            <div class="chart-placeholder">
+                                <svg viewBox="0 0 100 150" class="depth-chart">
+                                    <rect x="10" y="20" width="20" height="100" fill="#00AEEF" opacity="0.3"/>
+                                    <text x="5" y="130" font-size="8" fill="#00E5FF">0</text>
+                                    <text x="5" y="60" font-size="8" fill="#00E5FF">1.5m</text>
+                                    <text x="5" y="20" font-size="8" fill="#00E5FF">3m</text>
+                                </svg>
+                            </div>
+                            <div class="chart-legend">
+                                <span>Follow ROV</span>
+                                <span>AUTO</span>
+                            </div>
+                        </div>
+
+                        <!-- Compass & Controls -->
+                        <div class="compass-section">
+                            <div class="compass">
+                                <div class="compass-center"></div>
+                                <div class="compass-needle"></div>
+                            </div>
+                        </div>
+
+                        <!-- Keyboard Controls -->
+                        <div class="controller-section">
+                            <h3>CONTROLLER</h3>
+                            <h4>Keyboard</h4>
+                            <div class="keyboard-inputs">
+                                <div class="input-group">
+                                    <label>Surge</label>
+                                    <input type="number" value="0">
+                                </div>
+                                <div class="input-group">
+                                    <label>Sway</label>
+                                    <input type="number" value="0">
+                                </div>
+                                <div class="input-group">
+                                    <label>Heave</label>
+                                    <input type="number" value="0">
+                                </div>
+                                <div class="input-group">
+                                    <label>Yaw</label>
+                                    <input type="number" value="0">
+                                </div>
+                            </div>
+                            <button class="btn-control">Set Surface Level & Depth = 0</button>
+                        </div>
+                    </div>
+
+                    <!-- Right Panel - Camera & Vision -->
+                    <div class="panel-right">
+                        <div class="panel-header">
+                            <h2>Live Camera</h2>
+                            <div class="control-buttons">
+                                <button class="btn-small">CAM 7</button>
+                                <button class="btn-small">Start Stream</button>
+                                <button class="btn-small">IDLE</button>
+                                <button class="btn-small">Full Screen</button>
+                            </div>
+                        </div>
+
+                        <!-- Camera Feed -->
+                        <div class="camera-feed">
+                            <div class="camera-placeholder">
+                                <div class="camera-error">
+                                    <p>ROV camera not connected</p>
+                                    <p class="camera-detail">Waiting for WebRTC stream from Raspberry Pi</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Vision Stats -->
+                        <div class="vision-stats">
+                            <div class="stat-box">
+                                <span class="stat-label">Depth: 6.40 m</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Heading: 988 deg</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Pitch: 5.8 deg</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Roll: 5.0 deg</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Mode: Standby</span>
+                            </div>
+                            <div class="stat-box">
+                                <span class="stat-label">Motion: Healthy</span>
+                            </div>
+                        </div>
+
+                        <!-- Camera Controls -->
+                        <div class="camera-controls">
+                            <button class="btn-control-large">Snapshot</button>
+                            <button class="btn-control-large">Record</button>
+                            <button class="btn-control-large hud-btn">HUD</button>
+                        </div>
+
+                        <!-- Media Management -->
+                        <div class="media-section">
+                            <div class="media-group">
+                                <span class="label">Images</span>
+                                <span class="value">DST_Kubah/TA/data ROV/Kamera/Gambar</span>
+                                <button class="btn-small-link">Change</button>
+                            </div>
+                            <div class="media-group">
+                                <span class="label">Video</span>
+                                <span class="value">DST_Kubah/TA/data ROV/Kamera/Video</span>
+                                <button class="btn-small-link">Change</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Bottom Status Panels -->
+                <div class="bottom-panels">
+                    <div class="bottom-panel">
+                        <div class="panel-title">STREAM</div>
+                        <div class="panel-status">Waiting</div>
+                    </div>
+                    <div class="bottom-panel">
+                        <div class="panel-title">RECORDER</div>
+                        <div class="panel-status">Idle</div>
+                    </div>
+                    <div class="bottom-panel">
+                        <div class="panel-title">LIDAR</div>
+                        <div class="panel-status">Offline sim</div>
+                    </div>
+                    <div class="bottom-panel">
+                        <div class="panel-title">CONTROL</div>
+                        <div class="panel-status">Keyboard</div>
+                    </div>
+                    <div class="bottom-panel">
+                        <div class="panel-title">COMMAND</div>
+                        <div class="panel-status">Sub SwD YO V0</div>
+                    </div>
+                    <div class="bottom-panel">
+                        <div class="panel-title">POWER / FAULT</div>
+                        <div class="panel-status">0.0A | PWM 0</div>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="dashboard.js"></script>
+</body>
+</html>
