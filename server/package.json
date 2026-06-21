@@ -1,0 +1,13 @@
+{
+  "name": "hydroship-server",
+  "version": "1.0.0",
+  "description": "Jembatan WebSocket <-> UDP untuk dashboard ROV HYDROSHIP",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "sim": "node server.js --sim"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

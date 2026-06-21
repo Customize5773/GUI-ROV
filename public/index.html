@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>HYDROSHIP — GUI ROV Control</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="css/style.css" />
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="console">
+
+    <!-- ============================ HEADER ============================ -->
+    <header class="bar">
+      <div class="brand">
+        <img class="brand__logo" src="images/Logo2.png" alt="HYDROSHIP logo" />
+        <span class="brand__mark" aria-hidden="true"></span>
+        <span class="brand__name">HYDROSHIP</span>
+        <span class="brand__sub">ROV CONTROL</span>
+      </div>
+
+      <div class="link" id="linkPill" data-state="off">
+        <span class="link__dot"></span>
+        <span class="link__label" id="linkLabel">OFFLINE</span>
+      </div>
+      <button class="ctrl ctrl--theme" id="btnTheme" aria-pressed="false">
+        <span class="theme__icon"></span><span class="theme__label">LIGHT</span>
+      </button>
+
+      <div class="bar__spacer"></div>
+
+      <button class="ctrl" id="btnLight" aria-pressed="false">
+        <span class="ctrl__led"></span> LIGHT
+      </button>
+      <button class="ctrl ctrl--arm" id="btnArm" aria-pressed="false">
+        <span class="ctrl__led"></span> <span id="armLabel">DISARMED</span>
+      </button>
+      <button class="ctrl ctrl--demo" id="btnDemo" aria-pressed="false">DEMO</button>
+      <button class="stop" id="btnStop" title="Hentikan semua thruster (Spasi)">STOP</button>
+    </header>
+
+    <!-- ========================= TELEMETRY STRIP ========================= -->
+    <section class="strip" aria-label="Telemetri">
+      <div class="readout"><span class="readout__k">HEADING</span><span class="readout__v" id="vHeading">—</span><span class="readout__u">°</span></div>
+      <div class="readout"><span class="readout__k">DEPTH</span><span class="readout__v" id="vDepth">—</span><span class="readout__u">m</span></div>
+      <div class="readout"><span class="readout__k">ROLL</span><span class="readout__v" id="vRoll">—</span><span class="readout__u">°</span></div>
+      <div class="readout"><span class="readout__k">PITCH</span><span class="readout__v" id="vPitch">—</span><span class="readout__u">°</span></div>
+      <div class="readout"><span class="readout__k">TEMP</span><span class="readout__v" id="vTemp">—</span><span class="readout__u">°C</span></div>
+      <div class="readout"><span class="readout__k">VOLT</span><span class="readout__v" id="vVolt">—</span><span class="readout__u">V</span></div>
+      <div class="readout readout--lat"><span class="readout__k">LATENCY</span><span class="readout__v" id="vLat">—</span><span class="readout__u">ms</span></div>
+    </section>
+
+    <!-- ============================== MAIN ============================== -->
+    <main class="grid">
+
+      <!-- ATTITUDE / 3D -->
+      <section class="panel panel--attitude">
+        <div class="panel__head">
+          <span class="panel__title">ATTITUDE</span>
+          <span class="panel__tag" id="modelTag">MODEL: BUILT-IN</span>
+        </div>
+        <div class="stage" id="stage">
+          <div class="attitude__compass" id="miniCompass" aria-hidden="true">
+            <div class="attitude__compass-ring">
+              <span class="attitude__compass-needle" id="miniCompassNeedle"></span>
+            </div>
+            <div class="attitude__compass-label">
+              <span class="attitude__compass-dir" id="miniCompassDir">N</span>
+              <span class="attitude__compass-value" id="miniCompassValue">—°</span>
+            </div>
+          </div>
+        </div>
+        <div class="hud">
+          <div class="hud__compass" id="hudHeading">HDG —°</div>
+          <div class="hud__rp"><span id="hudRoll">R —°</span><span id="hudPitch">P —°</span></div>
+        </div>
+      </section>
+
+      <!-- LIVE CAMERA -->
+      <section class="panel panel--cam">
+        <div class="panel__head">
+          <span class="panel__title">LIVE CAMERA</span>
+          <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
+        </div>
+        <div class="cam">
+          <img id="camImg" alt="Umpan kamera ROV" />
+
+          <div class="cam__overlay" id="camOverlay">
+            <span id="camRes" class="cam__res">—</span>
+            <span id="camRecIndicator" class="cam__rec" aria-hidden="true" title="Recording"></span>
+          </div>
+
+          <div class="cam__nosignal" id="camNoSignal">
+            <span>TIDAK ADA SINYAL</span>
+            <small>Atur CAMERA_URL di config.js</small>
+          </div>
+
+          <div class="cam__bar">
+            <button class="chip" id="btnSnap">SNAPSHOT</button>
+            <button class="chip" id="btnRec" aria-pressed="false">REC</button>
+            <button class="chip" id="btnHud" aria-pressed="true">HUD</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- DEPTH TAPE -->
+      <section class="panel panel--depth">
+        <div class="panel__head"><span class="panel__title">DEPTH</span></div>
+        <div class="tape" id="tape"><div class="tape__needle"></div><div class="tape__scale" id="tapeScale"></div></div>
+        <div class="tape__val" id="tapeVal">0.00 m</div>
+      </section>
+
+      <!-- CONSOLE LOG -->
+      <section class="panel panel--log">
+        <div class="panel__head"><span class="panel__title">CONSOLE</span></div>
+        <ul class="log" id="log"></ul>
+      </section>
+
+    </main>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
