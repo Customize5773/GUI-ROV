@@ -1,4 +1,4 @@
-# SUBWISE — Dashboard ROV
+# HYDROSHIP — Dashboard ROV
 
 Dashboard operator ROV: telemetri real-time, visualisasi attitude 3D (three.js),
 dan umpan kamera. Dibangun dengan HTML/CSS/JS murni di sisi tampilan, jembatan
