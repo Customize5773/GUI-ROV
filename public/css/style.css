@@ -1,7 +1,3 @@
-/* ============================================================
-   HYDROSHIP — dive console theme
-   Palette: deep navy hull + cyan sonar accent + amber/red states
-   ============================================================ */
 :root {
   /* Palette aligned with logo: deep navy -> mid blue -> cyan */
   --abyss:    #081423;
