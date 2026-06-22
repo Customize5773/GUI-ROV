@@ -19,6 +19,57 @@ const els = {
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
 };
 
+/* ====================== PAGE NAVIGATION ====================== */
+const pages = {
+  control: $("page-control"),
+  camera: $("page-camera"),
+  mission: $("page-mission"),
+  telemetry: $("page-telemetry"),
+  setup: $("page-setup"),
+};
+
+const navLinks = document.querySelectorAll(".sidebar__link");
+
+function showPage(pageName) {
+  // Hide all pages
+  Object.values(pages).forEach(page => {
+    if (page) page.style.display = "none";
+  });
+  
+  // Show selected page
+  if (pages[pageName]) {
+    pages[pageName].style.display = "grid";
+  }
+  
+  // Update nav highlight
+  navLinks.forEach(link => {
+    const linkPage = link.getAttribute("data-page");
+    if (linkPage === pageName) {
+      link.classList.add("sidebar__link--active");
+    } else {
+      link.classList.remove("sidebar__link--active");
+    }
+  });
+  
+  // Store current page
+  sessionStorage.setItem("current-page", pageName);
+}
+
+// Initialize page navigation
+navLinks.forEach(link => {
+  link.addEventListener("click", (e) => {
+    e.preventDefault();
+    const pageName = link.getAttribute("data-page");
+    showPage(pageName);
+  });
+});
+
+// Restore last visited page on load
+window.addEventListener("load", () => {
+  const savedPage = sessionStorage.getItem("current-page") || "control";
+  showPage(savedPage);
+});
+
 // recording helpers
 let mediaRecorder = null;
 let recordChunks = [];
@@ -27,8 +78,14 @@ let recordCtx = null;
 let recordRAF = null;
 
 /*  scene 3D  */
-const scene = new RovScene($("stage"));
-if (CONFIG.MODEL_URL) scene.loadModel(CONFIG.MODEL_URL, (t) => (els.modelTag.textContent = t));
+let scene = null;
+
+function initScene() {
+  if (!scene && $("stage")) {
+    scene = new RovScene($("stage"));
+    if (CONFIG.MODEL_URL) scene.loadModel(CONFIG.MODEL_URL, (t) => (els.modelTag.textContent = t));
+  }
+}
 
 /*  console log  */
 function log(msg, level = "") {
@@ -126,7 +183,7 @@ function applyTelemetry(d) {
     els.miniCompassValue.textContent = `${Math.round(displayH)}°`;
   }
 
-  scene.setAttitude(d.roll, d.pitch, d.heading);
+  if (scene) scene.setAttitude(d.roll, d.pitch, d.heading);
   updateTape(d.depth || 0);
 
   if (typeof d.armed === "boolean") reflectArm(d.armed);
@@ -330,5 +387,6 @@ window.addEventListener("keydown", (e) => {
 /*  mulai  */
 log("HYDROSHIP dashboard siap", "ok");
 loadTheme();
+initScene();
 connect();
 maybeDemo();

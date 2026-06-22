@@ -4,6 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>HYDROSHIP | GUI ROV Control</title>
+  <link rel="icon" type="image/png" href="images/Logo1.png" />
 
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -21,11 +22,35 @@
 </head>
 <body>
   <div class="console">
+    <!-- ======================= SIDEBAR ======================= -->
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar__logo">
+        <img class="sidebar__logo-img" src="images/Logo2.png" alt="HYDROSHIP" />
+      </div>
+      <nav class="sidebar__nav" id="sidebarNav">
+        <a class="sidebar__link sidebar__link--active" href="#" data-page="control" title="Control Panel">
+          <span class="sidebar__label">Control</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="camera" title="Camera Streams">
+          <span class="sidebar__label">Camera</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="mission" title="Mission Planner">
+          <span class="sidebar__label">Mission</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="telemetry" title="Telemetry & Health">
+          <span class="sidebar__label">Telemetry</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="setup" title="Setup & Config">
+          <span class="sidebar__label">Setup</span>
+        </a>
+      </nav>
+    </aside>
 
-    <!-- ============================ HEADER ============================ -->
-    <header class="bar">
+    <div class="console__wrapper">
+      <!-- ============================ HEADER ============================ -->
+      <header class="bar">
       <div class="brand">
-        <img class="brand__logo" src="images/Logo2.png" alt="HYDROSHIP logo" />
+        <img class="brand__logo" src="images/Logo1.png" alt="HYDROSHIP logo" />
         <span class="brand__mark" aria-hidden="true"></span>
         <span class="brand__name">HYDROSHIP</span>
         <span class="brand__sub">ROV CONTROL</span>
@@ -62,73 +87,110 @@
       <div class="readout readout--lat"><span class="readout__k">LATENCY</span><span class="readout__v" id="vLat">—</span><span class="readout__u">ms</span></div>
     </section>
 
-    <!-- ============================== MAIN ============================== -->
-    <main class="grid">
-
-      <!-- ATTITUDE / 3D -->
-      <section class="panel panel--attitude">
-        <div class="panel__head">
-          <span class="panel__title">ATTITUDE</span>
-          <span class="panel__tag" id="modelTag">MODEL: BUILT-IN</span>
-        </div>
-        <div class="stage" id="stage">
-          <div class="attitude__compass" id="miniCompass" aria-hidden="true">
-            <div class="attitude__compass-ring">
-              <span class="attitude__compass-needle" id="miniCompassNeedle"></span>
+    <!-- ========================= PAGES ========================= -->
+    <div class="pages">
+      
+      <!-- PAGE 1: CONTROL -->
+      <div class="page page--control" id="page-control" data-page="control">
+        <main class="grid">
+          <!-- ATTITUDE / 3D -->
+          <section class="panel panel--attitude">
+            <div class="panel__head">
+              <span class="panel__title">ATTITUDE</span>
+              <span class="panel__tag" id="modelTag">MODEL: BUILT-IN</span>
             </div>
-            <div class="attitude__compass-label">
-              <span class="attitude__compass-dir" id="miniCompassDir">N</span>
-              <span class="attitude__compass-value" id="miniCompassValue">—°</span>
+            <div class="stage" id="stage">
+              <div class="attitude__compass" id="miniCompass" aria-hidden="true">
+                <div class="attitude__compass-ring">
+                  <span class="attitude__compass-needle" id="miniCompassNeedle"></span>
+                </div>
+                <div class="attitude__compass-label">
+                  <span class="attitude__compass-dir" id="miniCompassDir">N</span>
+                  <span class="attitude__compass-value" id="miniCompassValue">—°</span>
+                </div>
+              </div>
             </div>
-          </div>
-        </div>
-        <div class="hud">
-          <div class="hud__compass" id="hudHeading">HDG —°</div>
-          <div class="hud__rp"><span id="hudRoll">R —°</span><span id="hudPitch">P —°</span></div>
-        </div>
-      </section>
+            <div class="hud">
+              <div class="hud__compass" id="hudHeading">HDG —°</div>
+              <div class="hud__rp"><span id="hudRoll">R —°</span><span id="hudPitch">P —°</span></div>
+            </div>
+          </section>
 
-      <!-- LIVE CAMERA -->
-      <section class="panel panel--cam">
-        <div class="panel__head">
-          <span class="panel__title">LIVE CAMERA</span>
-          <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
-        </div>
-        <div class="cam">
-          <img id="camImg" alt="Umpan kamera ROV" />
+          <!-- LIVE CAMERA -->
+          <section class="panel panel--cam">
+            <div class="panel__head">
+              <span class="panel__title">LIVE CAMERA</span>
+              <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
+            </div>
+            <div class="cam">
+              <img id="camImg" alt="Umpan kamera ROV" />
 
-          <div class="cam__overlay" id="camOverlay">
-            <span id="camRes" class="cam__res">—</span>
-            <span id="camRecIndicator" class="cam__rec" aria-hidden="true" title="Recording"></span>
-          </div>
+              <div class="cam__overlay" id="camOverlay">
+                <span id="camRes" class="cam__res">—</span>
+                <span id="camRecIndicator" class="cam__rec" aria-hidden="true" title="Recording"></span>
+              </div>
 
-          <div class="cam__nosignal" id="camNoSignal">
-            <span>TIDAK ADA SINYAL</span>
-          </div>
+              <div class="cam__nosignal" id="camNoSignal">
+                <span>TIDAK ADA SINYAL</span>
+              </div>
 
-          <div class="cam__bar">
-            <button class="chip" id="btnSnap">SNAPSHOT</button>
-            <button class="chip" id="btnRec" aria-pressed="false">REC</button>
-            <button class="chip" id="btnHud" aria-pressed="true">HUD</button>
-          </div>
-        </div>
-      </section>
+              <div class="cam__bar">
+                <button class="chip" id="btnSnap">SNAPSHOT</button>
+                <button class="chip" id="btnRec" aria-pressed="false">REC</button>
+                <button class="chip" id="btnHud" aria-pressed="true">HUD</button>
+              </div>
+            </div>
+          </section>
 
-      <!-- DEPTH TAPE -->
-      <section class="panel panel--depth">
-        <div class="panel__head"><span class="panel__title">DEPTH</span></div>
-        <div class="tape" id="tape"><div class="tape__needle"></div><div class="tape__scale" id="tapeScale"></div></div>
-        <div class="tape__val" id="tapeVal">0.00 m</div>
-      </section>
+          <!-- DEPTH TAPE -->
+          <section class="panel panel--depth">
+            <div class="panel__head"><span class="panel__title">DEPTH</span></div>
+            <div class="tape" id="tape"><div class="tape__needle"></div><div class="tape__scale" id="tapeScale"></div></div>
+            <div class="tape__val" id="tapeVal">0.00 m</div>
+          </section>
 
-      <!-- CONSOLE LOG -->
-      <section class="panel panel--log">
-        <div class="panel__head"><span class="panel__title">CONSOLE</span></div>
-        <ul class="log" id="log"></ul>
-      </section>
+          <!-- CONSOLE LOG -->
+          <section class="panel panel--log">
+            <div class="panel__head"><span class="panel__title">CONSOLE</span></div>
+            <ul class="log" id="log"></ul>
+          </section>
+        </main>
+      </div>
 
-    </main>
-  </div>
+      <!-- PAGE 2: CAMERA -->
+      <div class="page page--camera" id="page-camera" data-page="camera" style="display:none;">
+        <main class="page__content">
+          <div class="page__title">Camera Streams</div>
+          <p style="padding: 20px; color: var(--ink-dim);">Camera page content coming soon...</p>
+        </main>
+      </div>
+
+      <!-- PAGE 3: MISSION -->
+      <div class="page page--mission" id="page-mission" data-page="mission" style="display:none;">
+        <main class="page__content">
+          <div class="page__title">Mission Planner</div>
+          <p style="padding: 20px; color: var(--ink-dim);">Mission planner content coming soon...</p>
+        </main>
+      </div>
+
+      <!-- PAGE 4: TELEMETRY -->
+      <div class="page page--telemetry" id="page-telemetry" data-page="telemetry" style="display:none;">
+        <main class="page__content">
+          <div class="page__title">Telemetry & Health</div>
+          <p style="padding: 20px; color: var(--ink-dim);">Telemetry content coming soon...</p>
+        </main>
+      </div>
+
+      <!-- PAGE 5: SETUP -->
+      <div class="page page--setup" id="page-setup" data-page="setup" style="display:none;">
+        <main class="page__content">
+          <div class="page__title">Setup & Configuration</div>
+          <p style="padding: 20px; color: var(--ink-dim);">Setup content coming soon...</p>
+        </main>
+      </div>
+
+    </div>
+    </div>
 
   <script type="module" src="js/app.js"></script>
 </body>
