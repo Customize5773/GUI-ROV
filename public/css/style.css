@@ -799,7 +799,21 @@ body[data-theme="light"] .theme__icon::after {
 
 /* fullscreen pilot viewport */
 .panel--attitude:fullscreen { border-radius: 0; background: var(--abyss); }
-.panel--attitude:fullscreen .stage { min-height: 0; }
+.panel--attitude:fullscreen .stage,
+.panel--attitude.pseudo-fs .stage { min-height: 0; }
+
+/* pseudo-fullscreen fallback (saat Fullscreen API diblokir, mis. di webview) */
+.pseudo-fs {
+  position: fixed !important;
+  inset: 0 !important;
+  width: 100vw !important;
+  height: 100vh !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
+  z-index: 9999 !important;
+  background: var(--abyss);
+}
+body.pseudo-fs-lock { overflow: hidden; }
 
 /* depth tape */
 .tape { flex: 1; position: relative; overflow: hidden; }

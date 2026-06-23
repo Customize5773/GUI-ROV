@@ -81,3 +81,57 @@ export function createRecorder(img, prefix = "hydroship_record") {
 export function num(v, d = 1) {
   return (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toFixed(d);
 }
+
+/* Fullscreen yang tahan banting:
+   coba Fullscreen API (lintas-browser); jika tidak tersedia atau ditolak
+   (mis. di dalam iframe/webview yang memblokirnya), jatuh ke "pseudo-fullscreen"
+   berbasis CSS (.pseudo-fs) sehingga tombol selalu berfungsi.
+   onToggle(isFull) dipanggil setiap kali status berubah. */
+export function makeFullscreen(el, { onToggle } = {}) {
+  const req = el.requestFullscreen || el.webkitRequestFullscreen || el.msRequestFullscreen;
+  const exitFn = document.exitFullscreen || document.webkitExitFullscreen || document.msExitFullscreen;
+  const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement;
+
+  function pseudoOn() {
+    el.classList.add("pseudo-fs");
+    document.body.classList.add("pseudo-fs-lock");
+    el._pseudoFs = true;
+    if (onToggle) onToggle(true);
+  }
+  function pseudoOff() {
+    el.classList.remove("pseudo-fs");
+    document.body.classList.remove("pseudo-fs-lock");
+    el._pseudoFs = false;
+    if (onToggle) onToggle(false);
+  }
+
+  function isFull() { return fsEl() === el || !!el._pseudoFs; }
+
+  function toggle() {
+    if (isFull()) {
+      if (el._pseudoFs) pseudoOff();
+      else if (exitFn) exitFn.call(document);
+      return;
+    }
+    if (req) {
+      let p;
+      try { p = req.call(el); } catch (e) { p = null; }
+      if (p && typeof p.then === "function") {
+        p.catch(() => pseudoOn());
+      }
+      // fallback: jika 150ms kemudian native tak aktif, paksa pseudo
+      setTimeout(() => { if (!el._pseudoFs && fsEl() !== el) pseudoOn(); }, 150);
+    } else {
+      pseudoOn();
+    }
+  }
+
+  // sinkronkan label saat keluar via Esc / tombol browser (mode native)
+  const onChange = () => { if (!el._pseudoFs && onToggle) onToggle(fsEl() === el); };
+  document.addEventListener("fullscreenchange", onChange);
+  document.addEventListener("webkitfullscreenchange", onChange);
+  // Esc menutup pseudo-fullscreen
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && el._pseudoFs) pseudoOff(); });
+
+  return { toggle, isFull };
+}

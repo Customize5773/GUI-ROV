@@ -1,6 +1,6 @@
 // camera.js — Halaman Camera: satu feed besar + pengaturan sumber/stream.
 import { CONFIG } from "../config.js";
-import { pilotAxes, log, num, snapshotImage, createRecorder } from "../core.js";
+import { pilotAxes, log, num, snapshotImage, createRecorder, makeFullscreen } from "../core.js";
 
 export const cameraPage = {
   active: 0,
@@ -40,7 +40,9 @@ export const cameraPage = {
             <div class="hud__compass" id="cpHeading">HDG —°</div>
             <div class="hud__rp"><span id="cpDepth">D —m</span><span id="cpRP">R —° P —°</span></div>
           </div>
-          <div class="cam__nosignal" id="cpNoSignal"><span>ROV CAMERA NOT CONNECTED</span><small>set stream URL below</small></div>
+          <div class="cam__nosignal" id="cpNoSignal">
+          <span>ROV CAMERA NOT CONNECTED</span>
+          </div>
           <div class="campage__bar">
             <button class="chip" id="cpSnap">Snapshot</button>
             <button class="chip" id="cpRecBtn" aria-pressed="false">Record</button>
@@ -90,7 +92,11 @@ export const cameraPage = {
 
     root.querySelector("#camStart").onclick = () => this._toggleStream();
     root.querySelector("#camApply").onclick = () => this._applyUrl();
-    root.querySelector("#camFull").onclick = () => this._fullscreen();
+    const fullBtn = root.querySelector("#camFull");
+    this._fs = makeFullscreen(this.els.viewport, {
+      onToggle: (fs) => { fullBtn.textContent = fs ? "⛶ Exit Full Screen" : "⛶ Full Screen"; fullBtn.setAttribute("aria-pressed", String(fs)); },
+    });
+    fullBtn.onclick = () => this._fs.toggle();
     root.querySelector("#cpSnap").onclick = () => {
       if (!snapshotImage(this.els.img)) { log("Tidak ada frame untuk snapshot", "warn"); return; }
       log("Snapshot kamera diambil", "ok");
@@ -180,11 +186,6 @@ export const cameraPage = {
       log("Perekaman kamera berhenti", "warn");
     }
     this._updateInfo();
-  },
-
-  _fullscreen() {
-    if (document.fullscreenElement === this.els.viewport) document.exitFullscreen?.();
-    else this.els.viewport.requestFullscreen?.().catch(() => log("Fullscreen ditolak browser", "warn"));
   },
 
   _updateInfo() {

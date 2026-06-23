@@ -20,14 +20,6 @@ export const setupPage = {
           </div>
 
           <div class="card">
-            <span class="panel__eyebrow">UNITY STREAM</span>
-            <h3 class="card__title">Unity VR</h3>
-            <label class="card__label">Unity stream URL</label>
-            <input class="card__input" id="suUnity" type="text" placeholder="Not set yet" />
-            <button class="btn-wide" id="suApplyUnity">Apply Unity Stream</button>
-          </div>
-
-          <div class="card">
             <span class="panel__eyebrow">THRUSTER SETUP</span>
             <h3 class="card__title">ArduSub Mixer Gain</h3>
             <p class="card__desc">Konfigurasi mixer & gain thruster untuk ArduSub.</p>
@@ -87,13 +79,6 @@ export const setupPage = {
     if (CONFIG.CAMERA_URL) this.els.camLink.href = CONFIG.CAMERA_URL;
     root.querySelector("#suOpenCam").onclick = () => {
       document.querySelector('.sidebar__link[data-page="camera"]')?.click();
-    };
-
-    // Unity
-    root.querySelector("#suApplyUnity").onclick = () => {
-      const url = root.querySelector("#suUnity").value.trim();
-      CONFIG.UNITY_URL = url;
-      log(url ? `Unity stream diset: ${url}` : "Unity stream dikosongkan", url ? "ok" : "warn");
     };
 
     // Pool depth

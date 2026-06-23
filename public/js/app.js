@@ -1,6 +1,6 @@
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
-import { setServices, pilotAxes, snapshotImage, createRecorder } from "./core.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
@@ -375,19 +375,16 @@ els.btnRec.onclick = () => {
 
 /* ====================== PILOT VIEWPORT ====================== */
 
-/* Full Screen toggle for the digital twin viewport */
-function isFs() { return document.fullscreenElement === els.pilotPanel; }
-els.btnPilotFull.onclick = () => {
-  if (isFs()) document.exitFullscreen?.();
-  else els.pilotPanel.requestFullscreen?.().catch((e) => log("Fullscreen ditolak browser", "warn"));
-};
-document.addEventListener("fullscreenchange", () => {
-  const fs = isFs();
-  els.pilotFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
-  els.btnPilotFull.setAttribute("aria-pressed", String(fs));
-  // beri waktu layout settle, lalu picu resize agar canvas 3D mengikuti
-  setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+/* Full Screen toggle for the digital twin viewport (native + fallback CSS) */
+const pilotFs = makeFullscreen(els.pilotPanel, {
+  onToggle: (fs) => {
+    els.pilotFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
+    els.btnPilotFull.setAttribute("aria-pressed", String(fs));
+    // beri waktu layout settle, lalu picu resize agar canvas 3D mengikuti
+    setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+  },
 });
+els.btnPilotFull.onclick = () => pilotFs.toggle();
 
 /* pilot mode tabs: Standby | Dry Cal | Manual | Hold */
 let pilotMode = "manual";
