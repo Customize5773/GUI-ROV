@@ -20,9 +20,10 @@ const els = {
   camImg: $("camImg"), camNoSignal: $("camNoSignal"), camTag: $("camTag"),
   modelTag: $("modelTag"), log: $("log"),
   btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
-  btnDemo: $("btnDemo"), btnTheme: $("btnTheme"), armLabel: $("armLabel"),
+  armLabel: $("armLabel"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
   pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
+  pilotPipImg: $("pilotPipImg"), pilotPipNo: $("pilotPipNo"),
   ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
   axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axVert: $("axVert"),
 };
@@ -130,19 +131,12 @@ function setLink(mode) {
 
 function setTheme(name) {
   document.body.dataset.theme = name;
-  const isLight = name === "light";
-  els.btnTheme.setAttribute("aria-pressed", String(isLight));
-  els.btnTheme.querySelector(".theme__label").textContent = isLight ? "LIGHT" : "DARK";
   localStorage.setItem("hydroship-theme", name);
 }
 
 function loadTheme() {
   const saved = localStorage.getItem("hydroship-theme");
-  if (saved === "light" || saved === "dark") {
-    setTheme(saved);
-  } else {
-    setTheme("dark");
-  }
+  setTheme(saved === "light" ? "light" : "dark");
 }
 
 function num(v, d = 1) {
@@ -281,7 +275,7 @@ setInterval(() => {
 /*  simulator  */
 function startDemo() {
   if (demo) return;
-  setLink("demo"); els.btnDemo.setAttribute("aria-pressed", "true");
+  setLink("demo");
   log("Mode simulasi aktif", "warn");
   let t = 0;
   demo = setInterval(() => {
@@ -302,7 +296,6 @@ function startDemo() {
 function stopDemo() {
   if (!demo) return;
   clearInterval(demo); demo = null;
-  els.btnDemo.setAttribute("aria-pressed", "false");
 }
 function maybeDemo() { if (CONFIG.DEMO_ON_START && !demo) startDemo(); }
 
@@ -327,14 +320,11 @@ initCamera();
 /*  kontrol UI  */
 els.btnLight.onclick = () => { reflectLight(!state.light); sendCmd("light", state.light); };
 els.btnArm.onclick = () => { reflectArm(!state.armed); sendCmd("arm", state.armed); };
-els.btnTheme.onclick = () => { setTheme(document.body.dataset.theme === "light" ? "dark" : "light"); };
 els.btnStop.onclick = () => {
   sendCmd("stop", true); reflectArm(false);
   ["surge", "sway", "yaw", "vert"].forEach((a) => setAxis(a, 0));
   log("⏹ STOP — semua thruster netral", "err");
 };
-els.btnDemo.onclick = () => (demo ? (stopDemo(), maybeDemoOff()) : startDemo());
-function maybeDemoOff() { setLink(ws && ws.readyState === WebSocket.OPEN ? "on" : "off"); }
 
 els.btnHud.onclick = () => {
   state.hud = !state.hud;
@@ -375,11 +365,25 @@ els.btnRec.onclick = () => {
 
 /* ====================== PILOT VIEWPORT ====================== */
 
+/* mini live-stream (PiP) di sudut viewport saat fullscreen */
+els.pilotPipImg.onerror = () => { els.pilotPipImg.style.display = "none"; els.pilotPipNo.style.display = "flex"; };
+els.pilotPipImg.onload = () => { els.pilotPipImg.style.display = ""; els.pilotPipNo.style.display = "none"; };
+function setPilotPip(on) {
+  if (on && CONFIG.CAMERA_URL) {
+    els.pilotPipImg.src = CONFIG.CAMERA_URL;       // umpan kamera live
+  } else {
+    els.pilotPipImg.removeAttribute("src");         // hentikan muat saat keluar / tanpa kamera
+    els.pilotPipImg.style.display = "none";
+    els.pilotPipNo.style.display = on ? "flex" : "none";
+  }
+}
+
 /* Full Screen toggle for the digital twin viewport (native + fallback CSS) */
 const pilotFs = makeFullscreen(els.pilotPanel, {
   onToggle: (fs) => {
     els.pilotFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
     els.btnPilotFull.setAttribute("aria-pressed", String(fs));
+    setPilotPip(fs);
     // beri waktu layout settle, lalu picu resize agar canvas 3D mengikuti
     setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
   },

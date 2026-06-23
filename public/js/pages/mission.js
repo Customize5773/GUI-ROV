@@ -3,6 +3,8 @@
 // telemetri. Menandai titik Start (S), garis lintasan, dan titik akhir (E).
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import { CONFIG } from "../config.js";
 import { pilotAxes, log, num } from "../core.js";
 
 const SONAR = 0x14d8ff;
@@ -117,7 +119,57 @@ export const missionPage = {
     scene.add(path);
 
     // marker ROV
-    const rov = new THREE.Group();
+    //const rov = new THREE.Group();
+    //const body = new THREE.Mesh(
+    //  new THREE.BoxGeometry(0.5, 0.28, 0.7),
+    //  new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 })
+    //);
+    //rov.add(body);
+    //const bow = new THREE.Mesh(
+    //  new THREE.ConeGeometry(0.16, 0.4, 16),
+    //  new THREE.MeshStandardMaterial({ color: SONAR, emissive: SONAR, emissiveIntensity: 0.7 })
+    //);
+    //bow.rotation.x = Math.PI / 2;
+    //bow.position.z = 0.5;
+    //rov.add(bow);
+    //rov.rotation.order = "YXZ";
+    //scene.add(rov);
+
+    // marker ROV — model FBX nyata
+const rov = new THREE.Group();
+scene.add(rov);
+
+const loader = new FBXLoader();
+loader.load(
+  "/public/models/rov.fbx",          // path relatif dari root server
+  (fbx) => {
+    // Sesuaikan skala — ubah angka ini kalau model terlalu besar/kecil
+    fbx.scale.setScalar(0.01);
+
+    // Pusatkan pivot ke tengah bounding box model
+    const box = new THREE.Box3().setFromObject(fbx);
+    const center = box.getCenter(new THREE.Vector3());
+    fbx.position.sub(center);
+
+    // Pastikan semua mesh di dalam FBX menerima pencahayaan dengan benar
+    fbx.traverse((child) => {
+      if (child.isMesh) {
+        child.castShadow = true;
+        child.receiveShadow = true;
+        // Opsional: pertahankan material asli FBX, atau override warnanya:
+        // child.material = new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 });
+      }
+    });
+
+    rov.add(fbx);
+  },
+  (xhr) => {
+    console.log(`ROV model: ${((xhr.loaded / xhr.total) * 100).toFixed(0)}% loaded`);
+  },
+  (err) => {
+    console.warn("Gagal memuat rov.fbx, pakai placeholder:", err);
+
+    // Fallback ke placeholder box+cone jika file tidak ditemukan
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.28, 0.7),
       new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 })
@@ -132,6 +184,10 @@ export const missionPage = {
     rov.add(bow);
     rov.rotation.order = "YXZ";
     scene.add(rov);
+  }
+);
+
+rov.rotation.order = "YXZ";
 
     // garis tegak penanda kedalaman dari permukaan ke ROV
     const dropGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);

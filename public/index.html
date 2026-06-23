@@ -61,9 +61,6 @@
         <span class="link__dot"></span>
         <span class="link__label" id="linkLabel">OFFLINE</span>
       </div>
-      <button class="ctrl ctrl--theme" id="btnTheme" aria-pressed="false">
-        <span class="theme__icon"></span><span class="theme__label">LIGHT</span>
-      </button>
 
       <div class="bar__spacer"></div>
 
@@ -73,7 +70,6 @@
       <button class="ctrl ctrl--arm" id="btnArm" aria-pressed="false">
         <span class="ctrl__led"></span> <span id="armLabel">DISARMED</span>
       </button>
-      <button class="ctrl ctrl--demo" id="btnDemo" aria-pressed="false">DEMO</button>
       <button class="stop" id="btnStop" title="Hentikan semua thruster (Spasi)">STOP</button>
     </header>
 
@@ -140,6 +136,13 @@
                 <button class="chip" id="btnPreviewAir" aria-pressed="false">Preview AIR</button>
               </div>
               <button class="chip vpbtns__echo" id="btnEcho" aria-pressed="false">Echo</button>
+
+              <!-- picture-in-picture kamera live (tampil saat fullscreen) -->
+              <div class="pip" id="pilotPip" aria-hidden="true">
+                <img id="pilotPipImg" alt="Live camera" />
+                <div class="pip__nosignal" id="pilotPipNo">NO CAM</div>
+                <span class="pip__label">LIVE CAM</span>
+              </div>
             </div>
 
             <!-- controller -->

@@ -4,12 +4,10 @@ export const CONFIG = {
   //http://192.168.2.2:8080/?action=stream
   CAMERA_URL: "",
 
-  // sumber kamera tambahan untuk halaman Camera (label + url)
+  // sumber kamera untuk halaman Camera (label + url)
   CAMERAS: [
     { id: "CAM 1", url: "" },
     { id: "CAM 2", url: "" },
-    { id: "CAM 3", url: "" },
-    { id: "CAM 4", url: "" },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".

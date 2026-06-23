@@ -48,6 +48,13 @@ export const cameraPage = {
             <button class="chip" id="cpRecBtn" aria-pressed="false">Record</button>
             <button class="chip" id="cpHud" aria-pressed="true">HUD</button>
           </div>
+
+          <!-- PiP kamera lain (tampil saat fullscreen) -->
+          <div class="pip" id="camPip" aria-hidden="true">
+            <img id="camPipImg" alt="Kamera lain" />
+            <div class="pip__nosignal" id="camPipNo">NO CAM</div>
+            <span class="pip__label" id="camPipLabel">CAM 2</span>
+          </div>
         </div>
 
         <div class="campage__cfg">
@@ -82,6 +89,11 @@ export const cameraPage = {
     this.els.url = root.querySelector("#camUrl");
     this.els.viewport = root.querySelector("#camViewport");
     this.els.hudEl = root.querySelector(".campage__viewport .hud");
+    this.els.pipImg = root.querySelector("#camPipImg");
+    this.els.pipNo = root.querySelector("#camPipNo");
+    this.els.pipLabel = root.querySelector("#camPipLabel");
+    this.els.pipImg.onerror = () => { this.els.pipImg.style.display = "none"; this.els.pipNo.style.display = "flex"; };
+    this.els.pipImg.onload = () => { this.els.pipImg.style.display = ""; this.els.pipNo.style.display = "none"; };
 
     this.els.img.onload = () => {
       this.els.noSignal.style.display = "none";
@@ -94,7 +106,12 @@ export const cameraPage = {
     root.querySelector("#camApply").onclick = () => this._applyUrl();
     const fullBtn = root.querySelector("#camFull");
     this._fs = makeFullscreen(this.els.viewport, {
-      onToggle: (fs) => { fullBtn.textContent = fs ? "⛶ Exit Full Screen" : "⛶ Full Screen"; fullBtn.setAttribute("aria-pressed", String(fs)); },
+      onToggle: (fs) => {
+        fullBtn.textContent = fs ? "⛶ Exit Full Screen" : "⛶ Full Screen";
+        fullBtn.setAttribute("aria-pressed", String(fs));
+        this.fsOn = fs;
+        this._updatePip();
+      },
     });
     fullBtn.onclick = () => this._fs.toggle();
     root.querySelector("#cpSnap").onclick = () => {
@@ -146,6 +163,22 @@ export const cameraPage = {
     const cam = (CONFIG.CAMERAS || [])[i] || { url: "" };
     this.els.url.value = cam.url || "";
     if (this.streaming) this._loadActive();
+    this._updatePip();
+  },
+
+  /* PiP menampilkan kamera "lain" (dengan 2 kamera: lawan dari yang aktif) */
+  _updatePip() {
+    const cams = CONFIG.CAMERAS || [];
+    if (cams.length < 2) { this.els.pipImg.removeAttribute("src"); return; }
+    const other = (this.active + 1) % cams.length;
+    this.els.pipLabel.textContent = cams[other].id;
+    if (this.fsOn && cams[other].url) {
+      this.els.pipImg.src = cams[other].url;
+    } else {
+      this.els.pipImg.removeAttribute("src");
+      this.els.pipImg.style.display = "none";
+      this.els.pipNo.style.display = this.fsOn ? "flex" : "none";
+    }
   },
 
   _loadActive() {
@@ -160,6 +193,7 @@ export const cameraPage = {
     this.els.state.classList.toggle("badge--active", this.streaming);
     if (this.streaming) { this._loadActive(); log("Stream kamera dimulai", "ok"); }
     else { this.els.img.removeAttribute("src"); this.els.noSignal.style.display = "flex"; log("Stream kamera dihentikan", "warn"); }
+    this._updatePip();
     this._updateInfo();
   },
 
