@@ -119,57 +119,7 @@ export const missionPage = {
     scene.add(path);
 
     // marker ROV
-    //const rov = new THREE.Group();
-    //const body = new THREE.Mesh(
-    //  new THREE.BoxGeometry(0.5, 0.28, 0.7),
-    //  new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 })
-    //);
-    //rov.add(body);
-    //const bow = new THREE.Mesh(
-    //  new THREE.ConeGeometry(0.16, 0.4, 16),
-    //  new THREE.MeshStandardMaterial({ color: SONAR, emissive: SONAR, emissiveIntensity: 0.7 })
-    //);
-    //bow.rotation.x = Math.PI / 2;
-    //bow.position.z = 0.5;
-    //rov.add(bow);
-    //rov.rotation.order = "YXZ";
-    //scene.add(rov);
-
-    // marker ROV — model FBX nyata
-const rov = new THREE.Group();
-scene.add(rov);
-
-const loader = new FBXLoader();
-loader.load(
-  "/public/models/rov.fbx",          // path relatif dari root server
-  (fbx) => {
-    // Sesuaikan skala — ubah angka ini kalau model terlalu besar/kecil
-    fbx.scale.setScalar(0.01);
-
-    // Pusatkan pivot ke tengah bounding box model
-    const box = new THREE.Box3().setFromObject(fbx);
-    const center = box.getCenter(new THREE.Vector3());
-    fbx.position.sub(center);
-
-    // Pastikan semua mesh di dalam FBX menerima pencahayaan dengan benar
-    fbx.traverse((child) => {
-      if (child.isMesh) {
-        child.castShadow = true;
-        child.receiveShadow = true;
-        // Opsional: pertahankan material asli FBX, atau override warnanya:
-        // child.material = new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 });
-      }
-    });
-
-    rov.add(fbx);
-  },
-  (xhr) => {
-    console.log(`ROV model: ${((xhr.loaded / xhr.total) * 100).toFixed(0)}% loaded`);
-  },
-  (err) => {
-    console.warn("Gagal memuat rov.fbx, pakai placeholder:", err);
-
-    // Fallback ke placeholder box+cone jika file tidak ditemukan
+    const rov = new THREE.Group();
     const body = new THREE.Mesh(
       new THREE.BoxGeometry(0.5, 0.28, 0.7),
       new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 })
@@ -184,10 +134,6 @@ loader.load(
     rov.add(bow);
     rov.rotation.order = "YXZ";
     scene.add(rov);
-  }
-);
-
-rov.rotation.order = "YXZ";
 
     // garis tegak penanda kedalaman dari permukaan ke ROV
     const dropGeo = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]);
@@ -201,6 +147,7 @@ rov.rotation.order = "YXZ";
     scene.add(sMark); scene.add(eMark);
 
     this.three = { scene, camera, renderer, controls, container, path, pathGeo, rov, drop, dropGeo, sMark, eMark };
+    this._loadRovModel(rov);
     this._resize = () => {
       const w2 = container.clientWidth, h2 = container.clientHeight;
       if (!w2 || !h2) return;
@@ -208,6 +155,29 @@ rov.rotation.order = "YXZ";
       renderer.setSize(w2, h2);
     };
     window.addEventListener("resize", this._resize);
+  },
+
+  _loadRovModel(rovGroup) {
+    const url = CONFIG.MODEL_URL;
+    if (!url) return;
+    new FBXLoader().load(
+      url,
+      (fbx) => {
+        while (rovGroup.children.length) rovGroup.remove(rovGroup.children[0]);
+        fbx.rotation.x = -Math.PI / 2;
+        const box = new THREE.Box3().setFromObject(fbx);
+        const size = box.getSize(new THREE.Vector3());
+        const center = box.getCenter(new THREE.Vector3());
+        const maxDim = Math.max(size.x, size.y, size.z) || 1;
+        const s = 1.0 / maxDim;
+        fbx.scale.setScalar(s);
+        fbx.position.sub(center.multiplyScalar(s));
+        rovGroup.add(fbx);
+        log("Mission: model ROV dimuat", "ok");
+      },
+      undefined,
+      () => log("Mission: gagal muat model ROV, menggunakan built-in", "warn")
+    );
   },
 
   _marker(text, color) {
