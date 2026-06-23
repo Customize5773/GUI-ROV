@@ -15,7 +15,8 @@
   {
     "imports": {
       "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
+      "chart.js/auto": "https://cdn.jsdelivr.net/npm/chart.js@4.4.3/auto/+esm"
     }
   }
   </script>
@@ -204,37 +205,17 @@
         </main>
       </div>
 
-      <!-- PAGE 2: CAMERA -->
-      <div class="page page--camera" id="page-camera" data-page="camera" style="display:none;">
-        <main class="page__content">
-          <div class="page__title">Camera Streams</div>
-          <p style="padding: 20px; color: var(--ink-dim);">Camera page content coming soon...</p>
-        </main>
-      </div>
+      <!-- PAGE 2: CAMERA (diisi oleh js/pages/camera.js) -->
+      <div class="page page--camera" id="page-camera" data-page="camera" style="display:none;"></div>
 
-      <!-- PAGE 3: MISSION -->
-      <div class="page page--mission" id="page-mission" data-page="mission" style="display:none;">
-        <main class="page__content">
-          <div class="page__title">Mission Planner</div>
-          <p style="padding: 20px; color: var(--ink-dim);">Mission planner content coming soon...</p>
-        </main>
-      </div>
+      <!-- PAGE 3: MISSION (diisi oleh js/pages/mission.js) -->
+      <div class="page page--mission" id="page-mission" data-page="mission" style="display:none;"></div>
 
-      <!-- PAGE 4: TELEMETRY -->
-      <div class="page page--telemetry" id="page-telemetry" data-page="telemetry" style="display:none;">
-        <main class="page__content">
-          <div class="page__title">Telemetry & Health</div>
-          <p style="padding: 20px; color: var(--ink-dim);">Telemetry content coming soon...</p>
-        </main>
-      </div>
+      <!-- PAGE 4: TELEMETRY (diisi oleh js/pages/telemetry.js) -->
+      <div class="page page--telemetry" id="page-telemetry" data-page="telemetry" style="display:none;"></div>
 
-      <!-- PAGE 5: SETUP -->
-      <div class="page page--setup" id="page-setup" data-page="setup" style="display:none;">
-        <main class="page__content">
-          <div class="page__title">Setup & Configuration</div>
-          <p style="padding: 20px; color: var(--ink-dim);">Setup content coming soon...</p>
-        </main>
-      </div>
+      <!-- PAGE 5: SETUP (diisi oleh js/pages/setup.js) -->
+      <div class="page page--setup" id="page-setup" data-page="setup" style="display:none;"></div>
 
     </div>
     </div>

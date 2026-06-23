@@ -1,5 +1,10 @@
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder } from "./core.js";
+import { telemetryPage } from "./pages/telemetry.js";
+import { missionPage } from "./pages/mission.js";
+import { cameraPage } from "./pages/camera.js";
+import { setupPage } from "./pages/setup.js";
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -33,17 +38,27 @@ const pages = {
 
 const navLinks = document.querySelectorAll(".sidebar__link");
 
+// modul per-halaman (Control tidak punya modul; logikanya inline di app.js)
+const pageModules = {
+  camera: cameraPage,
+  mission: missionPage,
+  telemetry: telemetryPage,
+  setup: setupPage,
+};
+const initedModules = new Set();
+let activeModule = null;
+
 function showPage(pageName) {
   // Hide all pages
   Object.values(pages).forEach(page => {
     if (page) page.style.display = "none";
   });
-  
+
   // Show selected page
   if (pages[pageName]) {
     pages[pageName].style.display = "grid";
   }
-  
+
   // Update nav highlight
   navLinks.forEach(link => {
     const linkPage = link.getAttribute("data-page");
@@ -53,9 +68,21 @@ function showPage(pageName) {
       link.classList.remove("sidebar__link--active");
     }
   });
-  
+
   // Store current page
   sessionStorage.setItem("current-page", pageName);
+
+  // Hentikan render-loop halaman sebelumnya, init lazy + tampilkan yang baru
+  if (activeModule && activeModule.onHide) { try { activeModule.onHide(); } catch (e) {} }
+  activeModule = null;
+  const mod = pageModules[pageName];
+  if (mod) {
+    if (!initedModules.has(pageName)) {
+      try { mod.init(pages[pageName]); initedModules.add(pageName); }
+      catch (e) { console.error(`init ${pageName} gagal`, e); log(`Gagal inisialisasi halaman ${pageName}`, "err"); }
+    }
+    if (initedModules.has(pageName)) { activeModule = mod; if (mod.onShow) mod.onShow(); }
+  }
 }
 
 // Initialize page navigation
@@ -72,13 +99,6 @@ window.addEventListener("load", () => {
   const savedPage = sessionStorage.getItem("current-page") || "control";
   showPage(savedPage);
 });
-
-// recording helpers
-let mediaRecorder = null;
-let recordChunks = [];
-let recordCanvas = null;
-let recordCtx = null;
-let recordRAF = null;
 
 /*  scene 3D  */
 let scene = null;
@@ -191,6 +211,13 @@ function applyTelemetry(d) {
 
   if (typeof d.armed === "boolean") reflectArm(d.armed);
   if (typeof d.light === "boolean") reflectLight(d.light);
+
+  // teruskan sampel ke modul halaman yang sudah di-init (buffering murah;
+  // render sebenarnya digerbang oleh onShow/onHide)
+  for (const name of initedModules) {
+    const m = pageModules[name];
+    if (m && m.onTelemetry) { try { m.onTelemetry(d); } catch (e) {} }
+  }
 }
 
 function reflectArm(on) {
@@ -234,6 +261,9 @@ function sendCmd(name, value) {
   send({ type: "cmd", name, value });
   log(`CMD ${name} = ${value}`);
 }
+
+// sediakan log & sendCmd untuk modul halaman
+setServices({ log, sendCmd });
 function setLatency(ms) { els.lat.textContent = Math.round(ms); }
 
 // ping berkala untuk ukur latency
@@ -311,66 +341,26 @@ els.btnHud.onclick = () => {
   els.btnHud.setAttribute("aria-pressed", String(state.hud));
   document.querySelector(".hud").style.display = state.hud ? "flex" : "none";
 };
-/* snapshot: download current frame */
+/* snapshot: download current frame (pakai util bersama core.js) */
 function captureSnapshot() {
-  const img = els.camImg;
-  if (!img || !img.naturalWidth) { log("Tidak ada frame untuk snapshot", "warn"); return; }
-  const c = document.createElement("canvas");
-  c.width = img.naturalWidth; c.height = img.naturalHeight;
-  const cx = c.getContext("2d");
-  cx.drawImage(img, 0, 0, c.width, c.height);
-  c.toBlob((b) => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(b);
-    a.download = `hydroship_snapshot_${Date.now()}.png`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }, "image/png");
+  if (!snapshotImage(els.camImg)) { log("Tidak ada frame untuk snapshot", "warn"); return; }
   log("Snapshot diambil", "ok");
   sendCmd("snapshot", true);
 }
 
-/* recording: capture canvas frames and MediaRecorder -> webm */
+/* recording: rekam frame kamera ke WebM (util bersama core.js) */
+let controlRecorder = null;
 function startRecording() {
-  const img = els.camImg;
-  if (!img || !img.naturalWidth) { log("Tidak ada frame untuk merekam", "warn"); return; }
-  recordCanvas = document.createElement("canvas");
-  recordCanvas.width = img.naturalWidth; recordCanvas.height = img.naturalHeight;
-  recordCtx = recordCanvas.getContext("2d");
-
-  function drawLoop() {
-    if (img.naturalWidth) recordCtx.drawImage(img, 0, 0, recordCanvas.width, recordCanvas.height);
-    recordRAF = requestAnimationFrame(drawLoop);
-  }
-  drawLoop();
-
-  const stream = recordCanvas.captureStream(25);
-  recordChunks = [];
-  try {
-    mediaRecorder = new MediaRecorder(stream, { mimeType: 'video/webm;codecs=vp8' });
-  } catch (e) {
-    mediaRecorder = new MediaRecorder(stream);
-  }
-  mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) recordChunks.push(ev.data); };
-  mediaRecorder.onstop = () => {
-    const blob = new Blob(recordChunks, { type: 'video/webm' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = `hydroship_record_${Date.now()}.webm`; a.click();
-    URL.revokeObjectURL(url);
-    recordChunks = [];
-  };
-  mediaRecorder.start();
+  controlRecorder = createRecorder(els.camImg);
+  if (!controlRecorder.start()) { controlRecorder = null; log("Tidak ada frame untuk merekam", "warn"); return; }
   if (els.camRecIndicator) els.camRecIndicator.classList.add('active');
   log('Perekaman dimulai', 'ok');
   sendCmd('record', true);
 }
 
 function stopRecording() {
-  if (recordRAF) cancelAnimationFrame(recordRAF);
-  recordRAF = null;
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  if (controlRecorder) { controlRecorder.stop(); controlRecorder = null; }
   if (els.camRecIndicator) els.camRecIndicator.classList.remove('active');
-  if (recordCanvas) { recordCanvas.width = 0; recordCanvas = null; recordCtx = null; }
   log('Perekaman berhenti', 'warn');
   sendCmd('record', false);
 }
@@ -440,11 +430,13 @@ function setAxis(name, value, live = false) {
   if (!el) return;
   el.value = String(value);
   el.classList.toggle("axis--live", live && value !== 0);
+  if (name in pilotAxes) pilotAxes[name] = Number(value) || 0;
 }
 Object.entries(axisEls).forEach(([name, el]) => {
   el.addEventListener("change", () => {
     const v = Number(el.value) || 0;
     el.value = String(v);
+    if (name in pilotAxes) pilotAxes[name] = v;
     sendCmd(name, v);
   });
 });
