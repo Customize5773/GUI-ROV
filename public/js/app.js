@@ -17,6 +17,9 @@ const els = {
   btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
   btnDemo: $("btnDemo"), btnTheme: $("btnTheme"), armLabel: $("armLabel"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
+  pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
+  ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
+  axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axVert: $("axVert"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -297,6 +300,7 @@ els.btnArm.onclick = () => { reflectArm(!state.armed); sendCmd("arm", state.arme
 els.btnTheme.onclick = () => { setTheme(document.body.dataset.theme === "light" ? "dark" : "light"); };
 els.btnStop.onclick = () => {
   sendCmd("stop", true); reflectArm(false);
+  ["surge", "sway", "yaw", "vert"].forEach((a) => setAxis(a, 0));
   log("⏹ STOP — semua thruster netral", "err");
 };
 els.btnDemo.onclick = () => (demo ? (stopDemo(), maybeDemoOff()) : startDemo());
@@ -378,6 +382,118 @@ els.btnRec.onclick = () => {
   els.btnRec.textContent = state.recording ? 'REC ●' : 'REC';
   if (state.recording) startRecording(); else stopRecording();
 };
+
+/* ====================== PILOT VIEWPORT ====================== */
+
+/* Full Screen toggle for the digital twin viewport */
+function isFs() { return document.fullscreenElement === els.pilotPanel; }
+els.btnPilotFull.onclick = () => {
+  if (isFs()) document.exitFullscreen?.();
+  else els.pilotPanel.requestFullscreen?.().catch((e) => log("Fullscreen ditolak browser", "warn"));
+};
+document.addEventListener("fullscreenchange", () => {
+  const fs = isFs();
+  els.pilotFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
+  els.btnPilotFull.setAttribute("aria-pressed", String(fs));
+  // beri waktu layout settle, lalu picu resize agar canvas 3D mengikuti
+  setTimeout(() => window.dispatchEvent(new Event("resize")), 80);
+});
+
+/* pilot mode tabs: Standby | Dry Cal | Manual | Hold */
+let pilotMode = "manual";
+document.querySelectorAll("#modeBar .mode").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll("#modeBar .mode").forEach((b) => {
+      b.classList.remove("mode--active");
+      b.removeAttribute("aria-selected");
+    });
+    btn.classList.add("mode--active");
+    btn.setAttribute("aria-selected", "true");
+    pilotMode = btn.dataset.mode;
+    sendCmd("mode", pilotMode);
+    log(`Mode pilot: ${btn.textContent}`, "ok");
+  };
+});
+
+/* controller tabs: Keyboard | Gamepad | Meta Quest */
+let activeController = "Keyboard";
+document.querySelectorAll(".ctab").forEach((btn) => {
+  btn.onclick = () => {
+    document.querySelectorAll(".ctab").forEach((b) => {
+      b.classList.remove("ctab--active");
+      b.removeAttribute("aria-selected");
+    });
+    btn.classList.add("ctab--active");
+    btn.setAttribute("aria-selected", "true");
+    activeController = btn.dataset.ctl;
+    els.ctrlTitle.textContent = activeController;
+    els.ctrlBadge.textContent = "Active: " + activeController;
+    sendCmd("controller", activeController);
+    log(`Controller: ${activeController}`, "");
+  };
+});
+
+/* axis fields: Surge | Sway | Yaw | Vertical */
+const axisEls = { surge: els.axSurge, sway: els.axSway, yaw: els.axYaw, vert: els.axVert };
+function setAxis(name, value, live = false) {
+  const el = axisEls[name];
+  if (!el) return;
+  el.value = String(value);
+  el.classList.toggle("axis--live", live && value !== 0);
+}
+Object.entries(axisEls).forEach(([name, el]) => {
+  el.addEventListener("change", () => {
+    const v = Number(el.value) || 0;
+    el.value = String(v);
+    sendCmd(name, v);
+  });
+});
+
+/* keyboard piloting (hanya saat controller = Keyboard):
+   W/S surge · A/D sway · Q/E yaw · R/F vertical — tahan untuk ±50, lepas untuk 0 */
+const KEY_AXIS = {
+  KeyW: ["surge", 50], KeyS: ["surge", -50],
+  KeyD: ["sway", 50], KeyA: ["sway", -50],
+  KeyE: ["yaw", 50], KeyQ: ["yaw", -50],
+  KeyR: ["vert", 50], KeyF: ["vert", -50],
+};
+const heldKeys = new Set();
+function pilotKeyActive(e) {
+  return activeController === "Keyboard" && e.target === document.body && KEY_AXIS[e.code];
+}
+window.addEventListener("keydown", (e) => {
+  if (!pilotKeyActive(e) || heldKeys.has(e.code)) return;
+  heldKeys.add(e.code);
+  const [axis, val] = KEY_AXIS[e.code];
+  setAxis(axis, val, true);
+  sendCmd(axis, val);
+});
+window.addEventListener("keyup", (e) => {
+  if (!KEY_AXIS[e.code] || !heldKeys.has(e.code)) return;
+  heldKeys.delete(e.code);
+  const [axis] = KEY_AXIS[e.code];
+  setAxis(axis, 0);
+  sendCmd(axis, 0);
+});
+
+/* set surface level */
+$("btnSetSurface").onclick = () => {
+  sendCmd("set_surface", true);
+  log("Surface level diset — Depth = 0", "ok");
+};
+
+/* viewport toggles: Follow ROV | Preview AIR | Echo */
+function toggleChip(id, onLabel) {
+  const el = $(id);
+  el.onclick = () => {
+    const on = el.getAttribute("aria-pressed") !== "true";
+    el.setAttribute("aria-pressed", String(on));
+    log(`${onLabel}: ${on ? "ON" : "OFF"}`);
+  };
+}
+toggleChip("btnFollow", "Follow ROV");
+toggleChip("btnPreviewAir", "Preview AIR");
+toggleChip("btnEcho", "Echo");
 
 // keselamatan: tombol Spasi = STOP
 window.addEventListener("keydown", (e) => {

@@ -93,13 +93,36 @@
       <!-- PAGE 1: CONTROL -->
       <div class="page page--control" id="page-control" data-page="control">
         <main class="grid">
-          <!-- ATTITUDE / 3D -->
-          <section class="panel panel--attitude">
+          <!-- PILOT / DIGITAL TWIN -->
+          <section class="panel panel--attitude" id="pilotPanel">
             <div class="panel__head">
-              <span class="panel__title">ATTITUDE</span>
-              <span class="panel__tag" id="modelTag">MODEL: BUILT-IN</span>
+              <div class="pilot__title">
+                <span class="panel__eyebrow">PILOT</span>
+                <span class="panel__title">ROV Control</span>
+              </div>
+              <div class="pilot__head-actions">
+                <span class="panel__tag" id="modelTag">MODEL: BUILT-IN</span>
+                <button class="chip chip--ghost" id="btnPilotFull" title="Toggle fullscreen viewport">
+                  <span class="chip__ico">⛶</span><span id="pilotFullLabel">Full Screen</span>
+                </button>
+              </div>
             </div>
+
+            <!-- mode tabs -->
+            <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode">
+              <button class="mode" data-mode="standby" role="tab">Standby</button>
+              <button class="mode" data-mode="drycal" role="tab">Dry Cal</button>
+              <button class="mode mode--active" data-mode="manual" role="tab" aria-selected="true">Manual</button>
+              <button class="mode" data-mode="hold" role="tab">Hold</button>
+            </div>
+
             <div class="stage" id="stage">
+              <!-- attitude readout overlay (top-left) -->
+              <div class="hud">
+                <div class="hud__compass" id="hudHeading">HDG —°</div>
+                <div class="hud__rp"><span id="hudRoll">R —°</span><span id="hudPitch">P —°</span></div>
+              </div>
+
               <div class="attitude__compass" id="miniCompass" aria-hidden="true">
                 <div class="attitude__compass-ring">
                   <span class="attitude__compass-needle" id="miniCompassNeedle"></span>
@@ -109,10 +132,34 @@
                   <span class="attitude__compass-value" id="miniCompassValue">—°</span>
                 </div>
               </div>
+
+              <!-- viewport actions -->
+              <div class="vpbtns">
+                <button class="chip" id="btnFollow" aria-pressed="true">Follow ROV</button>
+                <button class="chip" id="btnPreviewAir" aria-pressed="false">Preview AIR</button>
+              </div>
+              <button class="chip vpbtns__echo" id="btnEcho" aria-pressed="false">Echo</button>
             </div>
-            <div class="hud">
-              <div class="hud__compass" id="hudHeading">HDG —°</div>
-              <div class="hud__rp"><span id="hudRoll">R —°</span><span id="hudPitch">P —°</span></div>
+
+            <!-- controller -->
+            <div class="controller">
+              <div class="controller__head">
+                <span class="panel__eyebrow">CONTROLLER</span>
+                <span class="controller__title" id="ctrlTitle">Keyboard</span>
+                <span class="badge badge--active" id="ctrlBadge">Active: Keyboard</span>
+              </div>
+              <div class="controller__tabs" role="tablist" aria-label="Controller">
+                <button class="ctab ctab--active" data-ctl="Keyboard" role="tab" aria-selected="true">Keyboard</button>
+                <button class="ctab" data-ctl="Gamepad" role="tab">Gamepad</button>
+                <button class="ctab" data-ctl="Meta Quest" role="tab">Meta Quest</button>
+              </div>
+              <div class="axes">
+                <label class="axis"><span class="axis__k">Surge</span><input class="axis__v" id="axSurge" type="number" value="0" step="1" /></label>
+                <label class="axis"><span class="axis__k">Sway</span><input class="axis__v" id="axSway" type="number" value="0" step="1" /></label>
+                <label class="axis"><span class="axis__k">Yaw</span><input class="axis__v" id="axYaw" type="number" value="0" step="1" /></label>
+                <label class="axis"><span class="axis__k">Vertical</span><input class="axis__v" id="axVert" type="number" value="0" step="1" /></label>
+              </div>
+              <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
             </div>
           </section>
 
