@@ -22,6 +22,7 @@ const els = {
   btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
   armLabel: $("armLabel"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
+  camStage: $("camStage"), btnCamFull: $("btnCamFull"), camFullLabel: $("camFullLabel"),
   pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
   pilotPipImg: $("pilotPipImg"), pilotPipNo: $("pilotPipNo"),
   ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
@@ -389,6 +390,15 @@ const pilotFs = makeFullscreen(els.pilotPanel, {
   },
 });
 els.btnPilotFull.onclick = () => pilotFs.toggle();
+
+/* Full Screen toggle untuk LIVE CAMERA di halaman Control */
+const camFs = makeFullscreen(els.camStage, {
+  onToggle: (fs) => {
+    els.camFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
+    els.btnCamFull.setAttribute("aria-pressed", String(fs));
+  },
+});
+els.btnCamFull.onclick = () => camFs.toggle();
 
 /* pilot mode tabs: Standby | Dry Cal | Manual | Hold */
 let pilotMode = "manual";

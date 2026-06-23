@@ -3,7 +3,7 @@
 // telemetri. Menandai titik Start (S), garis lintasan, dan titik akhir (E).
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import { loadModelOnce, fitAndCenter, orient } from "../model.js";
 import { CONFIG } from "../config.js";
 import { pilotAxes, log, num } from "../core.js";
 
@@ -160,24 +160,14 @@ export const missionPage = {
   _loadRovModel(rovGroup) {
     const url = CONFIG.MODEL_URL;
     if (!url) return;
-    new FBXLoader().load(
-      url,
-      (fbx) => {
-        while (rovGroup.children.length) rovGroup.remove(rovGroup.children[0]);
-        fbx.rotation.x = -Math.PI / 2;
-        const box = new THREE.Box3().setFromObject(fbx);
-        const size = box.getSize(new THREE.Vector3());
-        const center = box.getCenter(new THREE.Vector3());
-        const maxDim = Math.max(size.x, size.y, size.z) || 1;
-        const s = 1.0 / maxDim;
-        fbx.scale.setScalar(s);
-        fbx.position.sub(center.multiplyScalar(s));
-        rovGroup.add(fbx);
-        log("Mission: model ROV dimuat", "ok");
-      },
-      undefined,
-      () => log("Mission: gagal muat model ROV, menggunakan built-in", "warn")
-    );
+    loadModelOnce(url).then((base) => {
+      const model = base.clone(true);   // berbagi geometry/material dgn scene Control
+      orient(model, url, true);          // flip 180° agar menghadap arah maju
+      fitAndCenter(model, 1.0);
+      while (rovGroup.children.length) rovGroup.remove(rovGroup.children[0]);
+      rovGroup.add(model);
+      log("Mission: model ROV dimuat", "ok");
+    }).catch(() => log("Mission: gagal muat model ROV, menggunakan built-in", "warn"));
   },
 
   _marker(text, color) {

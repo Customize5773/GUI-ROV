@@ -1,7 +1,6 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-import { FBXLoader } from "three/addons/loaders/FBXLoader.js";
+import { loadModelOnce, fitAndCenter, orient } from "./model.js";
 
 const SONAR = 0x2be0d6;
 
@@ -154,15 +153,12 @@ export class RovScene {
     return g;
   }
 
-  // (.glb / .fbx)
+  // (.glb / .fbx) — parse sekali (bersama Mission) lalu pakai clone
   loadModel(url, onTag) {
-    const ext = url.split(".").pop().toLowerCase();
-    const done = (model) => {
-      if (ext === "fbx") {
-        model.rotation.x = -Math.PI / 2;
-      }
-
-      this._normalize(model);
+    loadModelOnce(url).then((base) => {
+      const model = base.clone(true);   // clone berbagi geometry/material
+      orient(model, url);
+      fitAndCenter(model, 0.9);
       const wrapper = new THREE.Group();
       wrapper.add(model);
       wrapper.rotation.order = "YXZ";
@@ -170,26 +166,10 @@ export class RovScene {
       this.rov = wrapper;
       this.scene.add(wrapper);
       onTag && onTag("MODEL: " + url.split("/").pop());
-    };
-    const fail = (e) => { console.warn("Gagal memuat model:", e); onTag && onTag("MODEL: BUILT-IN (load gagal)"); };
-
-    if (ext === "glb" || ext === "gltf") {
-      new GLTFLoader().load(url, (g) => done(g.scene), undefined, fail);
-    } else if (ext === "fbx") {
-      new FBXLoader().load(url, (o) => done(o), undefined, fail);
-    } else {
-      fail("ekstensi tidak didukung: " + ext);
-    }
-  }
-
-  _normalize(fbx) {
-    const box = new THREE.Box3().setFromObject(fbx);
-    const size = box.getSize(new THREE.Vector3());
-    const center = box.getCenter(new THREE.Vector3());
-    const maxDim = Math.max(size.x, size.y, size.z) || 1;
-    const s = 0.9 / maxDim;
-    fbx.scale.setScalar(s);
-    fbx.position.sub(center.multiplyScalar(s));
+    }).catch((e) => {
+      console.warn("Gagal memuat model:", e);
+      onTag && onTag("MODEL: BUILT-IN (load gagal)");
+    });
   }
 
   setAttitude(roll, pitch, yaw) {

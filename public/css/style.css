@@ -1011,10 +1011,10 @@ body.pseudo-fs-lock { overflow: hidden; }
 .thr-card__head { display: flex; align-items: center; justify-content: space-between; }
 .thr-card__name { font-family: "Chakra Petch", sans-serif; font-weight: 600; font-size: 13px; color: var(--ink); }
 .thr-card__name small { color: var(--ink-dim); font-weight: 400; font-size: 10px; letter-spacing: .5px; }
-.bar { height: 8px; border-radius: 4px; background: rgba(255,255,255,.06); overflow: hidden; }
-.bar__fill { height: 100%; background: linear-gradient(90deg, var(--sonar-dim), var(--sonar)); transition: width .3s ease; }
-.bar__fill--warn  { background: linear-gradient(90deg, #b9791a, var(--amber)); }
-.bar__fill--alert { background: linear-gradient(90deg, #b13636, var(--alert)); }
+.pbar { display: block; height: 8px; border-radius: 4px; background: rgba(255,255,255,.06); overflow: hidden; }
+.pbar__fill { display: block; height: 100%; background: linear-gradient(90deg, var(--sonar-dim), var(--sonar)); transition: width .3s ease; }
+.pbar__fill--warn  { background: linear-gradient(90deg, #b9791a, var(--amber)); }
+.pbar__fill--alert { background: linear-gradient(90deg, #b13636, var(--alert)); }
 .thr-card__stats { display: flex; justify-content: space-between; gap: 6px; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-dim); }
 .thr-card__stats b { color: var(--ink); font-weight: 700; }
 

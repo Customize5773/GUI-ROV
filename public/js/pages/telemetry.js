@@ -142,7 +142,7 @@ export const telemetryPage = {
           <span class="thr-card__name">${t.id} <small>${t.type}</small></span>
           <span class="badge badge--ok" id="thr-st-${t.id}">Normal</span>
         </div>
-        <div class="bar"><div class="bar__fill" id="thr-bar-${t.id}" style="width:100%"></div></div>
+        <div class="pbar"><div class="pbar__fill" id="thr-bar-${t.id}" style="width:100%"></div></div>
         <div class="thr-card__stats">
           <span>Health <b id="thr-h-${t.id}">100%</b></span>
           <span>Current <b id="thr-c-${t.id}">0.6</b></span>
@@ -321,8 +321,8 @@ export const telemetryPage = {
       document.getElementById(`thr-d-${t.id}`).textContent = s.degr.toFixed(2);
       if (bar) {
         bar.style.width = `${h}%`;
-        bar.classList.toggle("bar__fill--warn", h < 70 && h >= 50);
-        bar.classList.toggle("bar__fill--alert", h < 50);
+        bar.classList.toggle("pbar__fill--warn", h < 70 && h >= 50);
+        bar.classList.toggle("pbar__fill--alert", h < 50);
       }
       if (st) {
         const label = h >= 70 ? "Normal" : h >= 50 ? "Warning" : "Fault";

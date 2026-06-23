@@ -171,9 +171,14 @@
           <section class="panel panel--cam">
             <div class="panel__head">
               <span class="panel__title">LIVE CAMERA</span>
-              <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
+              <div class="pilot__head-actions">
+                <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
+                <button class="chip chip--ghost" id="btnCamFull" title="Toggle fullscreen kamera">
+                  <span class="chip__ico">⛶</span><span id="camFullLabel">Full Screen</span>
+                </button>
+              </div>
             </div>
-            <div class="cam">
+            <div class="cam" id="camStage">
               <img id="camImg" alt="Umpan kamera ROV" />
 
               <div class="cam__overlay" id="camOverlay">
