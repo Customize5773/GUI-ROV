@@ -37,8 +37,26 @@ npm run sim          # server + telemetri palsu
 ```
 Buka `http://localhost:8080`. ROV 3D akan bergerak mengikuti data simulasi.
 
-> Tanpa server pun dashboard tetap hidup: buka `public/index.html` langsung,
-> ia otomatis masuk **mode DEMO** (simulator di browser).
+> **Gunakan `npm run sim`, bukan `npm start sim`.** Simulator hanya aktif jika
+> server menerima flag persis `--sim`. `npm start sim` mengirim kata `sim`
+> (tanpa strip) sebagai argumen, sehingga server tetap jalan mode LIVE dan
+> dashboard akan mencatat *"Telemetri terputus (timeout)"*. Alternatif setara:
+> `npm start -- --sim`.
+
+### Telemetri terputus (timeout)?
+
+Pesan *"Telemetri terputus (timeout)"* berarti dashboard tersambung ke server
+(status **ONLINE**) tetapi **tidak ada telemetri masuk** selama >2.5 detik.
+Penyebab umum:
+
+| Perintah | Mode | Akibat |
+|---|---|---|
+| `npm start` | LIVE, tanpa simulator | Tidak ada data kecuali ROV nyata mengirim UDP ke port `14551` → timeout |
+| `npm start sim` | LIVE (flag salah) | `sim` ≠ `--sim`, simulator mati → timeout |
+| `npm run sim` | SIMULASI | Telemetri palsu tiap 100 ms → **tidak ada timeout** ✅ |
+
+Untuk uji tanpa hardware selalu pakai **`npm run sim`**. Untuk ROV nyata
+(`npm start`), pastikan Raspi benar-benar mengirim telemetri UDP ke port `14551`.
 
 ## Menjalankan (dengan ROV nyata)
 
