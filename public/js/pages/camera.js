@@ -1,4 +1,3 @@
-// camera.js — Halaman Camera: satu feed besar + pengaturan sumber/stream.
 import { CONFIG } from "../config.js";
 import { pilotAxes, log, num, snapshotImage, createRecorder, makeFullscreen } from "../core.js";
 

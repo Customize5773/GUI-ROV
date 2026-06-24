@@ -1,6 +1,3 @@
-// telemetry.js — Halaman Telemetry & Health.
-// Grafik live Yaw/Depth/Pitch/Roll (Real / DT / Error) dari feed telemetri yang
-// sama dengan halaman Control, plus metrik kesehatan dan grid kesehatan thruster.
 import Chart from "chart.js/auto";
 import { log, num } from "../core.js";
 

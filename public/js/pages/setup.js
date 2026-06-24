@@ -1,4 +1,3 @@
-// setup.js — Halaman Setup: 7 kartu konfigurasi (sebagian interaktif).
 import { CONFIG } from "../config.js";
 import { log } from "../core.js";
 

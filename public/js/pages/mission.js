@@ -1,6 +1,3 @@
-// mission.js — Halaman Mission: peta lintasan 3D realtime.
-// Posisi ROV di-dead-reckon dari Surge/Sway (pilotAxes) + heading; depth dari
-// telemetri. Menandai titik Start (S), garis lintasan, dan titik akhir (E).
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { loadModelOnce, fitAndCenter, orient } from "../model.js";
