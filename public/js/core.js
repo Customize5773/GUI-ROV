@@ -1,9 +1,3 @@
-// core.js — layanan bersama antara app.js dan modul-modul halaman.
-// app.js menyuntik log/sendCmd lewat setServices(); modul halaman meng-import
-// helper ini sehingga tidak ada ketergantungan melingkar dengan app.js.
-
-/* nilai sumbu pilot terkini (Surge/Sway/Yaw/Vertical), dibaca halaman Mission
-   untuk dead-reckoning posisi. Diperbarui oleh handler kontrol di app.js. */
 export const pilotAxes = { surge: 0, sway: 0, yaw: 0, vert: 0 };
 
 /* layanan yang disuntik app.js */

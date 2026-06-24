@@ -1,7 +1,3 @@
-// model.js — Pemuat model ROV bersama (single-parse + clone).
-// Model di-parse SEKALI per-URL lalu di-cache. Konsumen (scene Control & Mission)
-// memanggil loadModelOnce() dan meng-clone hasilnya: clone berbagi geometry &
-// material yang sama, jadi model 3D berat hanya menempati memori satu kali.
 import * as THREE from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { FBXLoader } from "three/addons/loaders/FBXLoader.js";

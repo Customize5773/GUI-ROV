@@ -8,7 +8,7 @@
 //   node server.js              koneksi nyata ke Raspi
 //   node server.js --sim        tanpa Raspi, server membuat telemetri palsu
 //
-// Konfigurasi via environment variable (opsional):
+// NOTE : Konfigurasi via environment variable (opsional):
 //   RPI_ADDR=192.168.2.2 WS_PORT=8080 UDP_IN=14551 UDP_OUT=14550 node server.js
 
 const http = require("http");
