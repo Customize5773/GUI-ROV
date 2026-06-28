@@ -62,6 +62,8 @@ wss.on("connection", (ws, req) => {
     let msg; try { msg = JSON.parse(raw); } catch { return; }
     if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong", t: msg.t })); return; }
     if (msg.type === "cmd") {
+      // di mode SIM, pantulkan status perintah agar tombol header berefek nyata
+      if (SIM) applySimCommand(msg.name, msg.value);
       // teruskan command ke Raspi via UDP
       const packet = Buffer.from(JSON.stringify({ name: msg.name, value: msg.value, t: Date.now() }));
       udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
@@ -83,6 +85,17 @@ udp.on("error", (e) => console.error("[UDP] error:", e.message));
 udp.bind(UDP_IN, () => console.log(`[UDP] mendengar telemetri di :${UDP_IN}`));
 
 /* ----------------------- simulator (opsional) ----------------------- */
+// status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
+const simState = { armed: false, light: false, mode: "manual" };
+function applySimCommand(name, value) {
+  switch (name) {
+    case "arm": simState.armed = !!value; break;
+    case "light": simState.light = !!value; break;
+    case "stop": simState.armed = false; break;          // failsafe: netralkan
+    case "control_mode": simState.mode = value; break;
+  }
+}
+
 if (SIM) {
   console.log("[SIM] menghasilkan telemetri palsu (tanpa Raspi).");
   let t = 0;
@@ -97,7 +110,7 @@ if (SIM) {
         pitch: 7 * Math.sin(t * 0.4 + 1),
         temp: 26.5 + Math.sin(t * 0.05),
         voltage: 15.7 + 0.2 * Math.sin(t),
-        armed: false, light: false,
+        armed: simState.armed, light: simState.light, mode: simState.mode,
       },
       recv: Date.now(),
     });

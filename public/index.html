@@ -62,8 +62,24 @@
         <span class="link__label" id="linkLabel">OFFLINE</span>
       </div>
 
+      <div class="ident" id="ident">
+        <span class="ident__team" id="identTeam">Nama Tim</span>
+        <span class="ident__uni" id="identUni">Perguruan Tinggi</span>
+      </div>
+
+      <div class="clock" id="clock">
+        <span class="clock__date" id="clockDate">—</span>
+        <span class="clock__time" id="clockTime">--:--:--</span>
+      </div>
+
       <div class="bar__spacer"></div>
 
+      <button class="ctrl ctrl--mode" id="btnMode" aria-pressed="false" title="Toggle Manual / Autonomous">
+        <span class="ctrl__led"></span> <span id="modeLabel">MANUAL</span>
+      </button>
+      <button class="ctrl" id="btnMute" aria-pressed="false" title="Bisukan alarm kedalaman">
+        <span class="ctrl__led"></span> ALARM
+      </button>
       <button class="ctrl" id="btnLight" aria-pressed="false">
         <span class="ctrl__led"></span> LIGHT
       </button>
@@ -77,6 +93,7 @@
     <section class="strip" aria-label="Telemetri">
       <div class="readout"><span class="readout__k">HEADING</span><span class="readout__v" id="vHeading">—</span><span class="readout__u">°</span></div>
       <div class="readout"><span class="readout__k">DEPTH</span><span class="readout__v" id="vDepth">—</span><span class="readout__u">m</span></div>
+      <div class="readout"><span class="readout__k">ALT</span><span class="readout__v" id="vAlt">—</span><span class="readout__u">m</span></div>
       <div class="readout"><span class="readout__k">ROLL</span><span class="readout__v" id="vRoll">—</span><span class="readout__u">°</span></div>
       <div class="readout"><span class="readout__k">PITCH</span><span class="readout__v" id="vPitch">—</span><span class="readout__u">°</span></div>
       <div class="readout"><span class="readout__k">TEMP</span><span class="readout__v" id="vTemp">—</span><span class="readout__u">°C</span></div>
@@ -234,6 +251,8 @@
     </div>
     </div>
 
+  <!-- jsQR (vendored, offline) — expose window.jsQR untuk deteksi QR di Camera -->
+  <script src="vendor/jsqr.min.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

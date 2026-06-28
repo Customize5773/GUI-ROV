@@ -281,9 +281,33 @@ body[data-theme="light"] .theme__icon::after {
   transition: all .2s ease;
 }
 
-.brand { 
-  display: flex; 
-  align-items: center; 
+/* mode autonomous aktif + alarm muted */
+.ctrl--mode[aria-pressed="true"] { border-color: var(--amber); color: var(--amber); box-shadow: 0 0 14px rgba(245,165,36,.3); }
+.ctrl--mode[aria-pressed="true"] .ctrl__led { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+#btnMute[aria-pressed="true"] { opacity: .55; }
+/* readout kedalaman berbahaya: kedip merah */
+.readout--danger .readout__v, .readout--danger .readout__u, .readout--danger .readout__k { color: var(--alert) !important; }
+.readout--danger { animation: danger-blink 1s steps(2) infinite; border-radius: 6px; }
+@keyframes danger-blink { 50% { background: rgba(255,90,90,.16); } }
+
+/* identitas tim + jam di header (KKI 2026) */
+.ident {
+  display: flex; flex-direction: column; gap: 1px;
+  padding: 0 14px; border-left: 1px solid rgba(20, 216, 255, .2);
+}
+.ident__team { font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 13px; color: var(--ink); letter-spacing: .5px; }
+.ident__uni { font-size: 10px; color: var(--ink-dim); letter-spacing: .3px; }
+.clock {
+  display: flex; flex-direction: column; align-items: flex-end; gap: 1px;
+  padding: 0 14px; border-left: 1px solid rgba(20, 216, 255, .2);
+  font-family: "JetBrains Mono", monospace;
+}
+.clock__date { font-size: 10px; color: var(--ink-dim); letter-spacing: .5px; }
+.clock__time { font-size: 15px; font-weight: 700; color: var(--sonar); letter-spacing: 1px; }
+
+.brand {
+  display: flex;
+  align-items: center;
   gap: 12px;
   padding-right: 16px;
   border-right: 1px solid rgba(20, 216, 255, .2);
@@ -1060,8 +1084,35 @@ body.pseudo-fs-lock { overflow: hidden; }
 .campage__viewport { flex: 1; position: relative; min-height: 0; background: #000; border: 1px solid rgba(20,216,255,.12); border-radius: var(--r); overflow: hidden; }
 .campage__viewport img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .campage__bar { position: absolute; left: 12px; bottom: 12px; display: flex; gap: 8px; }
-.campage__cfg { display: flex; gap: 10px; align-items: flex-end; }
+.campage__cfg { display: flex; flex-direction: column; gap: 10px; }
+.camcfg__row { display: flex; gap: 10px; align-items: flex-end; }
 .btn-wide--inline { width: auto; padding: 9px 18px; white-space: nowrap; }
+
+/* dual camera grid (KKI 2026: bottom + wall) */
+.camgrid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
+.camcell { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
+.camcell__bar { display: flex; align-items: center; justify-content: space-between; }
+.camcell__name { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--ink-dim); letter-spacing: 1px; }
+.camcell__name b { color: var(--sonar); }
+.camcell__view { flex: 1; position: relative; min-height: 160px; background: #000; border: 1px solid rgba(20,216,255,.12); border-radius: var(--r); overflow: hidden; }
+.camcell__view img { width: 100%; height: 100%; object-fit: contain; display: block; }
+
+/* panel hasil QR */
+.qrpanel { display: flex; align-items: center; gap: 16px; padding: 14px 18px; background: var(--surface); border: 1px solid rgba(255,255,255,.08); border-radius: var(--r); }
+.qrpanel__main { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.qr__row { display: flex; align-items: center; gap: 16px; }
+.qr__side {
+  flex: 0 0 auto; width: 64px; height: 64px; display: flex; align-items: center; justify-content: center;
+  font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 34px;
+  border-radius: 10px; border: 2px solid rgba(255,255,255,.12); color: var(--ink-dim); background: rgba(255,255,255,.03);
+}
+.qr__side--ok { color: var(--abyss); background: var(--ok); border-color: var(--ok); box-shadow: 0 0 18px rgba(55,211,146,.4); }
+.qr__side--unknown { color: var(--amber); border-color: var(--amber); }
+.qr__info { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.qr__status { font-size: 11px; color: var(--ink-dim); }
+.qr__data { font-family: "JetBrains Mono", monospace; font-size: 14px; color: var(--ink); word-break: break-all; }
+.qr__time { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--sonar); }
+.qrpanel__actions { display: flex; flex-direction: column; gap: 6px; }
 
 .infogrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
 .infocell { display: flex; flex-direction: column; gap: 2px; padding: 8px 12px; background: var(--surface); border: 1px solid rgba(255,255,255,.06); border-radius: 6px; }
@@ -1070,6 +1121,17 @@ body.pseudo-fs-lock { overflow: hidden; }
 
 /* ----------------------------- SETUP ----------------------------- */
 .setup { height: 100%; overflow-y: auto; padding: 16px; }
+.card__row--wrap { align-items: flex-end; }
+/* toggle thruster reverse (T1..T6) */
+.toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.toggle {
+  flex: 0 0 auto; min-width: 40px; padding: 6px 8px;
+  font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 700;
+  color: var(--ink-dim); background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.10); border-radius: 6px; cursor: pointer; transition: all .15s ease;
+}
+.toggle:hover { color: var(--ink); border-color: rgba(20,216,255,.4); }
+.toggle--on { color: var(--abyss); background: var(--sonar); border-color: var(--sonar); box-shadow: 0 0 12px rgba(20,216,255,.4); }
 .setup__grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
 .card { display: flex; flex-direction: column; gap: 10px; padding: 18px; background: var(--surface); border: 1px solid rgba(255,255,255,.08); border-radius: var(--r); }
 .card--wide { grid-column: 1 / -1; }

@@ -43,6 +43,28 @@ Buka `http://localhost:8080`. ROV 3D akan bergerak mengikuti data simulasi.
 > dashboard akan mencatat *"Telemetri terputus (timeout)"*. Alternatif setara:
 > `npm start -- --sim`.
 
+## Kesesuaian KKI 2026
+
+GUI memenuhi ketentuan Panduan KKI 2026 §4.7.3:
+- **2 kamera**: halaman Camera menampilkan CAM 1 (BOTTOM) & CAM 2 (WALL) bersamaan.
+- **Deteksi QR Code**: dibaca di browser dengan **jsQR** dari feed BOTTOM; panel QR
+  menampilkan data + sisi dinding **A/B/C/D**.
+- **Identitas** (nama tim, perguruan tinggi) + hari/tanggal/waktu di header (atur di
+  Setup → Team Identity, atau `config.js` `TEAM_NAME`/`UNIVERSITY`).
+- **Altitude** ROV terhadap dasar kolam = `POOL_DEPTH − depth` (readout `ALT`).
+- **Gambar disain ROV** (model 3D) + **trajectory** (halaman Mission).
+- **Emergency Stop** (tombol STOP) menetralkan seluruh thruster.
+- Fitur tambahan: toggle **Manual/Autonomous**, **alarm audio** kedalaman berbahaya
+  (ambang `DANGER_DEPTH`), **auto screenshot & logging** (aktif saat autonomous + armed).
+
+### Deteksi QR & CORS
+- `jsQR` di-vendor di `public/vendor/jsqr.min.js` agar jalan **offline** di venue.
+- Decode QR memakai `getImageData` pada canvas. Untuk stream MJPEG lintas-asal,
+  server kamera (mjpg-streamer/Pi) **harus mengirim header CORS**
+  (`Access-Control-Allow-Origin: *`) dan `<img>` memakai `crossOrigin="anonymous"`
+  (sudah diset). Jika CORS tidak tersedia, pakai tombol **"Scan dari gambar"** di
+  panel QR untuk men-decode dari berkas gambar.
+
 ### Telemetri terputus (timeout)?
 
 Pesan *"Telemetri terputus (timeout)"* berarti dashboard tersambung ke server

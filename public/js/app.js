@@ -4,14 +4,16 @@ import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen }
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
-import { setupPage } from "./pages/setup.js";
+import { setupPage, loadSetup } from "./pages/setup.js";
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
 const els = {
   link: $("linkPill"), linkLabel: $("linkLabel"),
-  heading: $("vHeading"), depth: $("vDepth"), roll: $("vRoll"),
+  heading: $("vHeading"), depth: $("vDepth"), alt: $("vAlt"), roll: $("vRoll"),
   pitch: $("vPitch"), temp: $("vTemp"), volt: $("vVolt"), lat: $("vLat"),
+  identTeam: $("identTeam"), identUni: $("identUni"),
+  clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
   miniCompass: $("miniCompass"), miniCompassNeedle: $("miniCompassNeedle"),
   miniCompassDir: $("miniCompassDir"), miniCompassValue: $("miniCompassValue"),
@@ -21,6 +23,7 @@ const els = {
   modelTag: $("modelTag"), log: $("log"),
   btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
   armLabel: $("armLabel"),
+  btnMode: $("btnMode"), modeLabel: $("modeLabel"), btnMute: $("btnMute"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
   camStage: $("camStage"), btnCamFull: $("btnCamFull"), camFullLabel: $("camFullLabel"),
   pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
@@ -181,6 +184,11 @@ function applyTelemetry(d) {
   lastTelemetry = performance.now();
   els.heading.textContent = num(d.heading, 0);
   els.depth.textContent = num(d.depth, 2);
+  // altitude = ketinggian ROV (titik tengah) di atas dasar kolam
+  if (els.alt) {
+    const alt = Number.isFinite(d.depth) ? Math.max(0, CONFIG.POOL_DEPTH - d.depth) : null;
+    els.alt.textContent = num(alt, 2);
+  }
   els.roll.textContent = num(d.roll, 1);
   els.pitch.textContent = num(d.pitch, 1);
   els.temp.textContent = num(d.temp, 1);
@@ -204,6 +212,17 @@ function applyTelemetry(d) {
   if (scene) scene.setAttitude(d.roll, d.pitch, d.heading);
   updateTape(d.depth || 0);
 
+  // alarm kedalaman berbahaya + kedip readout depth
+  const danger = Number.isFinite(d.depth) && d.depth >= CONFIG.DANGER_DEPTH;
+  depthAlarm(danger);
+  els.depth.parentElement.classList.toggle("readout--danger", danger);
+
+  // auto data-logging (saat autonomous + armed)
+  if (autoCap.logging && Number.isFinite(d.depth)) {
+    const alt = Math.max(0, CONFIG.POOL_DEPTH - d.depth);
+    autoCap.rows.push([Date.now(), num(d.heading, 0), num(d.depth, 3), num(alt, 3), num(d.roll, 2), num(d.pitch, 2)].join(","));
+  }
+
   if (typeof d.armed === "boolean") reflectArm(d.armed);
   if (typeof d.light === "boolean") reflectLight(d.light);
 
@@ -216,9 +235,11 @@ function applyTelemetry(d) {
 }
 
 function reflectArm(on) {
+  const changed = state.armed !== on;
   state.armed = on;
   els.btnArm.setAttribute("aria-pressed", String(on));
   els.armLabel.textContent = on ? "ARMED" : "DISARMED";
+  if (changed && typeof updateAutoCapture === "function") updateAutoCapture();
 }
 function reflectLight(on) {
   state.light = on;
@@ -527,8 +548,92 @@ window.addEventListener("keydown", (e) => {
   if (e.code === "Space" && e.target === document.body) { e.preventDefault(); els.btnStop.click(); }
 });
 
+/* ============ identitas tim + jam (KKI 2026) ============ */
+function initIdentity() {
+  if (els.identTeam) els.identTeam.textContent = CONFIG.TEAM_NAME || "Nama Tim";
+  if (els.identUni) els.identUni.textContent = CONFIG.UNIVERSITY || "Perguruan Tinggi";
+}
+function tickClock() {
+  const now = new Date();
+  if (els.clockDate) els.clockDate.textContent = now.toLocaleDateString("id-ID", { weekday: "long", day: "2-digit", month: "short", year: "numeric" });
+  if (els.clockTime) els.clockTime.textContent = now.toLocaleTimeString("id-ID", { hour12: false });
+}
+
+/* ============ alarm audio kedalaman berbahaya ============ */
+const alarm = { ctx: null, osc: null, on: false, muted: false };
+function depthAlarm(active) {
+  if (active && !alarm.muted) {
+    if (alarm.on) return;
+    try {
+      alarm.ctx = alarm.ctx || new (window.AudioContext || window.webkitAudioContext)();
+      const o = alarm.ctx.createOscillator(), g = alarm.ctx.createGain();
+      o.type = "square"; o.frequency.value = 880;
+      g.gain.value = 0.05;
+      o.connect(g); g.connect(alarm.ctx.destination);
+      // beep berulang via LFO sederhana
+      const lfo = alarm.ctx.createOscillator(), lg = alarm.ctx.createGain();
+      lfo.frequency.value = 3; lg.gain.value = 0.05;
+      lfo.connect(lg); lg.connect(g.gain);
+      o.start(); lfo.start();
+      alarm.osc = { o, lfo };
+      alarm.on = true;
+    } catch (e) {}
+  } else if (alarm.on) {
+    try { alarm.osc.o.stop(); alarm.osc.lfo.stop(); } catch (e) {}
+    alarm.osc = null; alarm.on = false;
+  }
+}
+els.btnMute.onclick = () => {
+  alarm.muted = !alarm.muted;
+  els.btnMute.setAttribute("aria-pressed", String(alarm.muted));
+  if (alarm.muted) depthAlarm(false);
+  log(`Alarm kedalaman ${alarm.muted ? "dibisukan" : "diaktifkan"}`, alarm.muted ? "warn" : "ok");
+};
+
+/* ============ toggle Manual / Autonomous ============ */
+let controlMode = "manual";
+els.btnMode.onclick = () => {
+  controlMode = controlMode === "manual" ? "autonomous" : "manual";
+  els.modeLabel.textContent = controlMode.toUpperCase();
+  els.btnMode.setAttribute("aria-pressed", String(controlMode === "autonomous"));
+  sendCmd("control_mode", controlMode);
+  log(`Mode kontrol: ${controlMode.toUpperCase()}`, "ok");
+  updateAutoCapture();
+};
+
+/* ============ auto screenshot & data logging ============ */
+const autoCap = { logging: false, rows: [], snapTimer: null };
+function updateAutoCapture() {
+  const shouldRun = controlMode === "autonomous" && state.armed;
+  if (shouldRun && !autoCap.logging) {
+    autoCap.logging = true;
+    autoCap.rows = [];
+    autoCap.snapTimer = setInterval(() => { snapshotImage(els.camImg, "hydroship_auto"); }, 15000);
+    log("Auto-capture ON (autonomous + armed): logging + snapshot", "ok");
+  } else if (!shouldRun && autoCap.logging) {
+    autoCap.logging = false;
+    if (autoCap.snapTimer) { clearInterval(autoCap.snapTimer); autoCap.snapTimer = null; }
+    exportAutoLog();
+  }
+}
+function exportAutoLog() {
+  if (!autoCap.rows.length) return;
+  const header = "timestamp,heading,depth,altitude,roll,pitch";
+  const blob = new Blob([header + "\n" + autoCap.rows.join("\n")], { type: "text/csv" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `hydroship_autolog_${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  log(`Auto-log diekspor (${autoCap.rows.length} baris)`, "ok");
+}
+
 /*  mulai  */
 log("HYDROSHIP dashboard siap", "ok");
+loadSetup();
+initIdentity();
+tickClock();
+setInterval(tickClock, 1000);
 loadTheme();
 initScene();
 connect();

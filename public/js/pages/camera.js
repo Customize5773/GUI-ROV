@@ -1,15 +1,15 @@
+// camera.js — Halaman Camera (KKI 2026): tampilkan 2 kamera bersamaan
+// (CAM 1 = BOTTOM, CAM 2 = WALL) + deteksi QR Code di feed BOTTOM.
+// QR menentukan sisi dinding (A/B/C/D) tempat payload digantung.
 import { CONFIG } from "../config.js";
-import { pilotAxes, log, num, snapshotImage, createRecorder, makeFullscreen } from "../core.js";
+import { log, num, snapshotImage, makeFullscreen } from "../core.js";
 
 export const cameraPage = {
-  active: 0,
   streaming: false,
-  hud: true,
-  recorder: null,
-  recording: false,
-  fpsCount: 0,
-  fps: 0,
-  fpsTimer: null,
+  scanRaf: null,
+  scanCanvas: null,
+  lastQR: "",
+  visible: false,
   els: {},
 
   init(root) {
@@ -19,291 +19,188 @@ export const cameraPage = {
         <div class="campage__head">
           <div>
             <span class="panel__eyebrow">VISION</span>
-            <h2 class="tele__title">Live Camera</h2>
+            <h2 class="tele__title">Live Cameras &amp; QR</h2>
           </div>
-          <div class="campage__sources" id="camSources"></div>
           <div class="campage__head-actions">
             <button class="chip chip--go" id="camStart">Start Stream</button>
             <span class="badge" id="camState">IDLE</span>
-            <button class="chip" id="camFull">⛶ Full Screen</button>
           </div>
         </div>
 
-        <div class="campage__viewport" id="camViewport">
-          <img id="cpImg" alt="Umpan kamera ROV" />
-          <div class="cam__overlay">
-            <span class="cam__res" id="cpRes">—</span>
-            <span class="cam__rec" id="cpRec"></span>
-          </div>
-          <div class="hud">
-            <div class="hud__compass" id="cpHeading">HDG —°</div>
-            <div class="hud__rp"><span id="cpDepth">D —m</span><span id="cpRP">R —° P —°</span></div>
-          </div>
-          <div class="cam__nosignal" id="cpNoSignal">
-          <span>ROV CAMERA NOT CONNECTED</span>
-          </div>
-          <div class="campage__bar">
-            <button class="chip" id="cpSnap">Snapshot</button>
-            <button class="chip" id="cpRecBtn" aria-pressed="false">Record</button>
-            <button class="chip" id="cpHud" aria-pressed="true">HUD</button>
-          </div>
+        <div class="camgrid" id="camGrid"></div>
 
-          <!-- PiP kamera lain (tampil saat fullscreen) -->
-          <div class="pip" id="camPip" aria-hidden="true">
-            <div class="pip__resize" id="camPipResize" title="Tarik untuk ubah ukuran"></div>
-            <img id="camPipImg" alt="Kamera lain" />
-            <div class="pip__nosignal" id="camPipNo">NO CAM</div>
-            <span class="pip__label" id="camPipLabel">CAM 2</span>
+        <div class="qrpanel" id="qrPanel">
+          <div class="qrpanel__main">
+            <span class="panel__eyebrow">QR CODE DETECTION</span>
+            <div class="qr__row">
+              <div class="qr__side" id="qrSide">—</div>
+              <div class="qr__info">
+                <span class="qr__status" id="qrStatus">Menunggu feed BOTTOM…</span>
+                <span class="qr__data" id="qrData">No QR detected</span>
+                <span class="qr__time" id="qrTime"></span>
+              </div>
+            </div>
+          </div>
+          <div class="qrpanel__actions">
+            <label class="chip" for="qrFile">Scan dari gambar</label>
+            <input id="qrFile" type="file" accept="image/*" hidden />
+            <button class="chip" id="qrClear">Clear</button>
           </div>
         </div>
 
-        <div class="campage__cfg">
-          <label class="field field--grow"><span>Stream URL (sumber aktif)</span>
-            <input id="camUrl" type="text" placeholder="http://192.168.2.2:8080/?action=stream" />
-          </label>
-          <button class="btn-wide btn-wide--inline" id="camApply">Apply</button>
-        </div>
-
-        <div class="infogrid" id="camInfo"></div>
+        <div class="campage__cfg" id="camCfg"></div>
       </div>`;
 
-    // sumber kamera
-    const srcWrap = root.querySelector("#camSources");
-    cams.forEach((c, i) => {
-      const b = document.createElement("button");
-      b.className = "chip" + (i === 0 ? " chip--active" : "");
-      b.textContent = c.id;
-      b.onclick = () => this._select(i);
-      srcWrap.appendChild(b);
+    // dua sel kamera
+    const grid = root.querySelector("#camGrid");
+    this.els.cells = cams.map((c, i) => {
+      const cell = document.createElement("div");
+      cell.className = "camcell";
+      cell.innerHTML = `
+        <div class="camcell__bar">
+          <span class="camcell__name">${c.id} <b>${c.role || ""}</b></span>
+          <button class="chip chip--ghost" data-full="${i}">⛶</button>
+        </div>
+        <div class="camcell__view" id="camView${i}">
+          <img id="camImg${i}" alt="${c.id}" />
+          <div class="hud">
+            <div class="hud__compass" id="camHdg${i}">HDG —°</div>
+            <div class="hud__rp"><span id="camDepth${i}">D —m</span> <span id="camAlt${i}">ALT —m</span></div>
+          </div>
+          <div class="cam__nosignal" id="camNo${i}"><span>${(c.role || c.id)} NOT CONNECTED</span></div>
+        </div>`;
+      grid.appendChild(cell);
+      const img = cell.querySelector(`#camImg${i}`);
+      const no = cell.querySelector(`#camNo${i}`);
+      img.onload = () => { no.style.display = "none"; };
+      img.onerror = () => { no.style.display = "flex"; img.removeAttribute("src"); };
+      // fullscreen per sel
+      const view = cell.querySelector(`#camView${i}`);
+      const fs = makeFullscreen(view);
+      cell.querySelector(`[data-full="${i}"]`).onclick = () => fs.toggle();
+      return { cell, img, no };
     });
-    this.els.sources = [...srcWrap.children];
 
-    this.els.img = root.querySelector("#cpImg");
-    this.els.res = root.querySelector("#cpRes");
-    this.els.rec = root.querySelector("#cpRec");
-    this.els.noSignal = root.querySelector("#cpNoSignal");
-    this.els.state = root.querySelector("#camState");
-    this.els.heading = root.querySelector("#cpHeading");
-    this.els.depth = root.querySelector("#cpDepth");
-    this.els.rp = root.querySelector("#cpRP");
-    this.els.url = root.querySelector("#camUrl");
-    this.els.viewport = root.querySelector("#camViewport");
-    this.els.hudEl = root.querySelector(".campage__viewport .hud");
-    this.els.pip = root.querySelector("#camPip");
-    this.els.pipImg = root.querySelector("#camPipImg");
-    this.els.pipNo = root.querySelector("#camPipNo");
-    this.els.pipLabel = root.querySelector("#camPipLabel");
-    this.els.pipImg.onerror = () => { this.els.pipImg.style.display = "none"; this.els.pipNo.style.display = "flex"; };
-    this.els.pipImg.onload = () => { this.els.pipImg.style.display = ""; this.els.pipNo.style.display = "none"; };
-    this._setupPipInteraction();
+    // config URL per kamera
+    const cfg = root.querySelector("#camCfg");
+    cams.forEach((c, i) => {
+      const wrap = document.createElement("div");
+      wrap.className = "camcfg__row";
+      wrap.innerHTML = `
+        <label class="field field--grow"><span>${c.id} — ${c.role || ""} URL</span>
+          <input id="camUrl${i}" type="text" placeholder="http://192.168.2.2:8080/?action=stream" value="${c.url || ""}" />
+        </label>
+        <button class="btn-wide btn-wide--inline" data-apply="${i}">Apply</button>`;
+      cfg.appendChild(wrap);
+      wrap.querySelector(`[data-apply="${i}"]`).onclick = () => {
+        const url = wrap.querySelector(`#camUrl${i}`).value.trim();
+        c.url = url;
+        if (i === 0) CONFIG.CAMERA_URL = url;
+        this.els.cells[i].img.crossOrigin = "anonymous"; // izinkan getImageData utk QR (perlu CORS server)
+        if (this.streaming && url) this.els.cells[i].img.src = url;
+        log(`URL ${c.id} (${c.role}) diset`, "ok");
+      };
+    });
 
-    this.els.img.onload = () => {
-      this.els.noSignal.style.display = "none";
-      this.els.res.textContent = `${this.els.img.naturalWidth}×${this.els.img.naturalHeight}`;
-      this.fpsCount++;
-    };
-    this.els.img.onerror = () => { this.els.noSignal.style.display = "flex"; this.els.res.textContent = "—"; };
+    // QR panel
+    this.els.qrSide = root.querySelector("#qrSide");
+    this.els.qrStatus = root.querySelector("#qrStatus");
+    this.els.qrData = root.querySelector("#qrData");
+    this.els.qrTime = root.querySelector("#qrTime");
+    root.querySelector("#qrClear").onclick = () => this._setQR(null, "Menunggu feed BOTTOM…");
+    root.querySelector("#qrFile").onchange = (e) => this._scanFile(e.target.files[0]);
 
     root.querySelector("#camStart").onclick = () => this._toggleStream();
-    root.querySelector("#camApply").onclick = () => this._applyUrl();
-    const fullBtn = root.querySelector("#camFull");
-    this._fs = makeFullscreen(this.els.viewport, {
-      onToggle: (fs) => {
-        fullBtn.textContent = fs ? "⛶ Exit Full Screen" : "⛶ Full Screen";
-        fullBtn.setAttribute("aria-pressed", String(fs));
-        this.fsOn = fs;
-        this._updatePip();
-      },
-    });
-    fullBtn.onclick = () => this._fs.toggle();
-    root.querySelector("#cpSnap").onclick = () => {
-      if (!snapshotImage(this.els.img)) { log("Tidak ada frame untuk snapshot", "warn"); return; }
-      log("Snapshot kamera diambil", "ok");
-    };
-    const recBtn = root.querySelector("#cpRecBtn");
-    recBtn.onclick = () => this._toggleRecord(recBtn);
-    const hudBtn = root.querySelector("#cpHud");
-    hudBtn.onclick = () => {
-      this.hud = !this.hud;
-      hudBtn.setAttribute("aria-pressed", String(this.hud));
-      this.els.hudEl.style.display = this.hud ? "flex" : "none";
-    };
+    this.els.state = root.querySelector("#camState");
 
-    // info grid
-    const cells = [
-      ["STREAM", "Waiting", "stream"], ["RECORDER", "Idle", "rec"], ["LINK", "Offline sim", "link"],
-      ["CONTROL", "Keyboard", "ctl"], ["COMMAND", "Su0 Sw0 Y0 V0", "cmd"], ["POWER/FAULT", "0.0A · PWM 0", "pwr"],
-    ];
-    const infoWrap = root.querySelector("#camInfo");
-    cells.forEach(([k, v, id]) => {
-      const el = document.createElement("div");
-      el.className = "infocell";
-      el.innerHTML = `<span class="infocell__k">${k}</span><span class="infocell__v" id="ci-${id}">${v}</span>`;
-      infoWrap.appendChild(el);
-      this.els[`ci_${id}`] = el.querySelector(`#ci-${id}`);
-    });
-
-    this._select(0);
+    this.scanCanvas = document.createElement("canvas");
   },
 
-  onShow() {
-    this.fpsTimer = setInterval(() => { this.fps = this.fpsCount; this.fpsCount = 0; this._updateInfo(); }, 1000);
-  },
-  onHide() {
-    if (this.fpsTimer) { clearInterval(this.fpsTimer); this.fpsTimer = null; }
-  },
+  onShow() { this.visible = true; if (!this.scanRaf) this._scanLoop(); },
+  onHide() { this.visible = false; if (this.scanRaf) { cancelAnimationFrame(this.scanRaf); this.scanRaf = null; } },
 
   onTelemetry(d) {
-    this.els.heading.textContent = "HDG " + num(d.heading, 0) + "°";
-    this.els.depth.textContent = "D " + num(d.depth, 2) + "m";
-    this.els.rp.textContent = `R ${num(d.roll, 0)}° P ${num(d.pitch, 0)}°`;
-  },
-
-  _select(i) {
-    this.active = i;
-    this.els.sources.forEach((b, j) => b.classList.toggle("chip--active", j === i));
-    const cam = (CONFIG.CAMERAS || [])[i] || { url: "" };
-    this.els.url.value = cam.url || "";
-    if (this.streaming) this._loadActive();
-    this._updatePip();
-  },
-
-  /* PiP menampilkan kamera "lain" (dengan 2 kamera: lawan dari yang aktif) */
-  _updatePip() {
-    const cams = CONFIG.CAMERAS || [];
-    if (cams.length < 2) { this.els.pipImg.removeAttribute("src"); return; }
-    const other = (this.active + 1) % cams.length;
-    this.els.pipLabel.textContent = cams[other].id;
-    if (this.fsOn && cams[other].url) {
-      this.els.pipImg.src = cams[other].url;
-    } else {
-      this.els.pipImg.removeAttribute("src");
-      this.els.pipImg.style.display = "none";
-      this.els.pipNo.style.display = this.fsOn ? "flex" : "none";
-    }
-  },
-
-  _loadActive() {
-    const cam = (CONFIG.CAMERAS || [])[this.active] || { url: "" };
-    if (!cam.url) { this.els.noSignal.style.display = "flex"; this.els.img.removeAttribute("src"); return; }
-    this.els.img.src = cam.url;
-  },
-
-  /* PiP interaktif (berguna saat fullscreen):
-     - klik (tanpa geser)  -> tukar kamera utama dengan kamera PiP
-     - tahan & geser        -> pindahkan posisi mini display (di-clamp ke viewport)
-     - tarik sudut kiri-atas -> ubah ukuran (tinggi ikut rasio 16:9) */
-  _setupPipInteraction() {
-    const pip = this.els.pip, vp = this.els.viewport;
-    if (!pip || !vp) return;
-    let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
-    pip.style.cursor = "grab";
-    pip.style.touchAction = "none";
-
-    pip.addEventListener("pointerdown", (e) => {
-      dragging = true; moved = false;
-      sx = e.clientX; sy = e.clientY;
-      const r = pip.getBoundingClientRect(), vr = vp.getBoundingClientRect();
-      ox = r.left - vr.left; oy = r.top - vr.top;
-      pip.style.left = ox + "px"; pip.style.top = oy + "px";
-      pip.style.right = "auto"; pip.style.bottom = "auto";
-      pip.style.cursor = "grabbing";
-      try { pip.setPointerCapture(e.pointerId); } catch (_) {}
-      e.preventDefault();
+    const alt = Number.isFinite(d.depth) ? Math.max(0, CONFIG.POOL_DEPTH - d.depth) : null;
+    (this.els.cells || []).forEach((_, i) => {
+      const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+      set(`camHdg${i}`, "HDG " + num(d.heading, 0) + "°");
+      set(`camDepth${i}`, "D " + num(d.depth, 2) + "m");
+      set(`camAlt${i}`, "ALT " + num(alt, 2) + "m");
     });
-    pip.addEventListener("pointermove", (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - sx, dy = e.clientY - sy;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) moved = true;
-      const vr = vp.getBoundingClientRect();
-      const nx = Math.max(0, Math.min(ox + dx, vr.width - pip.offsetWidth));
-      const ny = Math.max(0, Math.min(oy + dy, vr.height - pip.offsetHeight));
-      pip.style.left = nx + "px"; pip.style.top = ny + "px";
-    });
-    const end = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      pip.style.cursor = "grab";
-      try { pip.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (!moved) {
-        const cams = CONFIG.CAMERAS || [];
-        if (cams.length >= 2) this._select((this.active + 1) % cams.length); // tukar kamera
-      }
-    };
-    pip.addEventListener("pointerup", end);
-    pip.addEventListener("pointercancel", end);
-
-    // pegangan resize (kiri-atas)
-    const handle = pip.querySelector("#camPipResize");
-    if (handle) {
-      let rz = false, rsx = 0, rw = 0;
-      handle.addEventListener("pointerdown", (e) => {
-        rz = true; rsx = e.clientX; rw = pip.offsetWidth;
-        try { handle.setPointerCapture(e.pointerId); } catch (_) {}
-        e.preventDefault(); e.stopPropagation();   // jangan picu drag/swap
-      });
-      handle.addEventListener("pointermove", (e) => {
-        if (!rz) return;
-        const vr = vp.getBoundingClientRect();
-        const w = Math.max(140, Math.min(rw + (rsx - e.clientX), vr.width * 0.85));
-        pip.style.width = w + "px";
-        e.stopPropagation();
-      });
-      const rend = (e) => {
-        if (!rz) return; rz = false;
-        try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
-        if (pip.style.left) {
-          const vr = vp.getBoundingClientRect();
-          pip.style.left = Math.max(0, Math.min(parseFloat(pip.style.left) || 0, vr.width - pip.offsetWidth)) + "px";
-          pip.style.top = Math.max(0, Math.min(parseFloat(pip.style.top) || 0, vr.height - pip.offsetHeight)) + "px";
-        }
-      };
-      handle.addEventListener("pointerup", rend);
-      handle.addEventListener("pointercancel", rend);
-    }
   },
 
   _toggleStream() {
     this.streaming = !this.streaming;
     this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";
     this.els.state.classList.toggle("badge--active", this.streaming);
-    if (this.streaming) { this._loadActive(); log("Stream kamera dimulai", "ok"); }
-    else { this.els.img.removeAttribute("src"); this.els.noSignal.style.display = "flex"; log("Stream kamera dihentikan", "warn"); }
-    this._updatePip();
-    this._updateInfo();
+    (CONFIG.CAMERAS || []).forEach((c, i) => {
+      const cell = this.els.cells[i];
+      if (this.streaming && c.url) { cell.img.crossOrigin = "anonymous"; cell.img.src = c.url; }
+      else { cell.img.removeAttribute("src"); cell.no.style.display = "flex"; }
+    });
+    log(this.streaming ? "Stream kamera dimulai" : "Stream kamera dihentikan", this.streaming ? "ok" : "warn");
   },
 
-  _applyUrl() {
-    const url = this.els.url.value.trim();
-    (CONFIG.CAMERAS || [])[this.active] && (CONFIG.CAMERAS[this.active].url = url);
-    if (this.active === 0) CONFIG.CAMERA_URL = url;
-    log(`URL ${(CONFIG.CAMERAS[this.active] || {}).id || "CAM"} diset`, "ok");
-    if (this.streaming) this._loadActive();
+  /* loop scan QR dari kamera BOTTOM (indeks 0) */
+  _scanLoop() {
+    this.scanRaf = requestAnimationFrame(() => this._scanLoop());
+    if (!this.visible || !window.jsQR) return;
+    const img = this.els.cells && this.els.cells[0] && this.els.cells[0].img;
+    if (!img || !img.naturalWidth) return;
+    // throttle: ~6x/detik
+    const now = performance.now();
+    if (this._lastScan && now - this._lastScan < 160) return;
+    this._lastScan = now;
+    const code = this._decode(img);
+    if (code) this._setQR(code.data, "QR terdeteksi");
+    else if (this.els.qrStatus.textContent === "Menunggu feed BOTTOM…") this.els.qrStatus.textContent = "Memindai…";
   },
 
-  _toggleRecord(btn) {
-    this.recording = !this.recording;
-    btn.setAttribute("aria-pressed", String(this.recording));
-    btn.textContent = this.recording ? "Record ●" : "Record";
-    if (this.recording) {
-      this.recorder = createRecorder(this.els.img);
-      if (!this.recorder.start()) { this.recording = false; btn.setAttribute("aria-pressed", "false"); btn.textContent = "Record"; this.recorder = null; log("Tidak ada frame untuk merekam", "warn"); return; }
-      this.els.rec.classList.add("active");
-      log("Perekaman kamera dimulai", "ok");
-    } else {
-      if (this.recorder) { this.recorder.stop(); this.recorder = null; }
-      this.els.rec.classList.remove("active");
-      log("Perekaman kamera berhenti", "warn");
+  _decode(source, w, h) {
+    const cv = this.scanCanvas;
+    cv.width = w || source.naturalWidth || source.width;
+    cv.height = h || source.naturalHeight || source.height;
+    const ctx = cv.getContext("2d", { willReadFrequently: true });
+    try {
+      ctx.drawImage(source, 0, 0, cv.width, cv.height);
+      const data = ctx.getImageData(0, 0, cv.width, cv.height);
+      return window.jsQR(data.data, cv.width, cv.height);
+    } catch (e) {
+      // CORS taint → getImageData diblokir
+      this.els.qrStatus.textContent = "Feed cross-origin: aktifkan CORS di server kamera, atau pakai 'Scan dari gambar'";
+      return null;
     }
-    this._updateInfo();
   },
 
-  _updateInfo() {
-    if (this.els.ci_stream) this.els.ci_stream.textContent = this.streaming ? `Live · ${this.fps} fps` : "Waiting";
-    if (this.els.ci_rec) this.els.ci_rec.textContent = this.recording ? "Recording" : "Idle";
-    if (this.els.ci_cmd) {
-      const a = pilotAxes;
-      this.els.ci_cmd.textContent = `Su${Math.round(a.surge)} Sw${Math.round(a.sway)} Y${Math.round(a.yaw)} V${Math.round(a.vert)}`;
+  _scanFile(file) {
+    if (!file || !window.jsQR) return;
+    const im = new Image();
+    im.onload = () => {
+      const code = this._decode(im, im.naturalWidth, im.naturalHeight);
+      if (code) this._setQR(code.data, "QR dari gambar");
+      else this._setQR(null, "Tidak ada QR pada gambar");
+    };
+    im.src = URL.createObjectURL(file);
+  },
+
+  /* tampilkan hasil QR + sisi A/B/C/D */
+  _setQR(data, status) {
+    this.els.qrStatus.textContent = status || "";
+    if (!data) {
+      this.els.qrSide.textContent = "—";
+      this.els.qrSide.className = "qr__side";
+      this.els.qrData.textContent = "No QR detected";
+      this.els.qrTime.textContent = "";
+      this.lastQR = "";
+      return;
     }
+    this.els.qrData.textContent = data;
+    // ambil huruf A-D yang berdiri sendiri (tidak diapit huruf lain), mis. "A", "SIDE_B", "WALL-C"
+    const m = String(data).toUpperCase().match(/(?<![A-Z])([ABCD])(?![A-Z])/);
+    const side = m ? m[1] : "?";
+    this.els.qrSide.textContent = side;
+    this.els.qrSide.className = "qr__side qr__side--" + (side === "?" ? "unknown" : "ok");
+    this.els.qrTime.textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });
+    if (data !== this.lastQR) { log(`QR terbaca: "${data}" → sisi ${side}`, "ok"); this.lastQR = data; }
   },
 };
