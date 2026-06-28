@@ -82,7 +82,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 8px;
+  padding: 4px;
   border-bottom: 1px solid rgba(20, 216, 255, .15);
   margin-bottom: 8px;
 }
@@ -147,7 +147,7 @@ html, body {
   display: flex;
   align-items: center;
   gap: 14px;
-  padding: 26px 20px;
+  padding: 21px 20px;
   min-height: 84px;
   background: linear-gradient(135deg, rgba(13, 30, 47, .95) 0%, rgba(19, 44, 66, .95) 100%);
   border: 1px solid rgba(20, 216, 255, .15);
