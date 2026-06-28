@@ -18,7 +18,7 @@ export class RovScene {
     this.camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
     this.camera.position.set(1.6, 1.15, 1.9);
 
-    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(w, h);
     container.appendChild(this.renderer.domElement);

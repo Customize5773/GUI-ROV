@@ -391,11 +391,35 @@ const pilotFs = makeFullscreen(els.pilotPanel, {
 });
 els.btnPilotFull.onclick = () => pilotFs.toggle();
 
+/* mirror viewport pilot/digital-twin ke PiP saat kamera Control fullscreen */
+let pilotMirrorRaf = null;
+function pilotMirror(on) {
+  const cv = document.getElementById("ctrlCamPipCanvas");
+  if (on) {
+    if (!cv || !scene) return;
+    const ctx = cv.getContext("2d");
+    const src = scene.renderer.domElement;
+    const loop = () => {
+      pilotMirrorRaf = requestAnimationFrame(loop);
+      const w = cv.clientWidth, h = cv.clientHeight;
+      if (!w || !h) return;
+      if (cv.width !== w) cv.width = w;
+      if (cv.height !== h) cv.height = h;
+      try { ctx.drawImage(src, 0, 0, cv.width, cv.height); } catch (e) {}
+    };
+    loop();
+  } else if (pilotMirrorRaf) {
+    cancelAnimationFrame(pilotMirrorRaf);
+    pilotMirrorRaf = null;
+  }
+}
+
 /* Full Screen toggle untuk LIVE CAMERA di halaman Control */
 const camFs = makeFullscreen(els.camStage, {
   onToggle: (fs) => {
     els.camFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
     els.btnCamFull.setAttribute("aria-pressed", String(fs));
+    pilotMirror(fs);
   },
 });
 els.btnCamFull.onclick = () => camFs.toggle();

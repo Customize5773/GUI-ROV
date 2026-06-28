@@ -89,7 +89,7 @@ html, body {
 
 .sidebar__logo-img {
   width: 100px;
-  height: 56px;
+  height: 78px;
   object-fit: contain;
   filter: drop-shadow(0 0 12px rgba(20, 216, 255, .2));
 }
@@ -830,7 +830,16 @@ body.pseudo-fs-lock { overflow: hidden; }
   z-index: 20;
   box-shadow: 0 10px 34px rgba(0, 0, 0, .55), 0 0 22px rgba(20, 216, 255, .18);
 }
-.pip img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pip img, .pip canvas { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* pegangan resize di sudut-dalam (kiri-atas) mini display */
+.pip__resize {
+  position: absolute; top: 0; left: 0; width: 16px; height: 16px;
+  cursor: nwse-resize; z-index: 22;
+  background:
+    linear-gradient(135deg, var(--sonar) 0 2px, transparent 2px 4px, var(--sonar) 4px 6px, transparent 6px) no-repeat;
+  opacity: .8;
+}
+.pip__resize:hover { opacity: 1; }
 .pip__label {
   position: absolute; top: 6px; left: 8px;
   font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 1px;
@@ -848,7 +857,11 @@ body.pseudo-fs-lock { overflow: hidden; }
 .panel--attitude:fullscreen #pilotPip,
 .panel--attitude.pseudo-fs #pilotPip,
 .campage__viewport:fullscreen #camPip,
-.campage__viewport.pseudo-fs #camPip { display: block; }
+.campage__viewport.pseudo-fs #camPip,
+.cam:fullscreen #ctrlCamPip,
+.cam.pseudo-fs #ctrlCamPip { display: block; }
+/* PiP pilot di kamera Control: kiri-bawah */
+#ctrlCamPip { left: 18px; right: auto; }
 
 /* depth tape */
 .tape { flex: 1; position: relative; overflow: hidden; }
