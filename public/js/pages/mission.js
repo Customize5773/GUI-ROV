@@ -93,7 +93,7 @@ export const missionPage = {
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.maxPolarAngle = Math.PI * 0.49;
+    // tanpa batas sudut: bebas memutar pandangan termasuk di bawah horizon
 
     scene.add(new THREE.HemisphereLight(0x9fdfff, 0x06121a, 1.0));
     const key = new THREE.DirectionalLight(0xffffff, 0.9);

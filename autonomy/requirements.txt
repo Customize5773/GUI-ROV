@@ -1,0 +1,4 @@
+pymavlink>=2.4.40
+# OpenCV & pyzbar menyusul saat tahap visi (point a/b berikutnya):
+# opencv-contrib-python
+# pyzbar

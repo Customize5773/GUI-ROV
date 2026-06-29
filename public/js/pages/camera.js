@@ -68,18 +68,34 @@ export const cameraPage = {
             <div class="hud__rp"><span id="camDepth${i}">D —m</span> <span id="camAlt${i}">ALT —m</span></div>
           </div>
           <div class="cam__nosignal" id="camNo${i}"><span>${(c.role || c.id)} NOT CONNECTED</span></div>
+
+          <!-- PiP kamera lain (tampil saat sel ini fullscreen) -->
+          <div class="pip campip" id="camPip${i}" aria-hidden="true">
+            <div class="pip__resize" title="Tarik untuk ubah ukuran"></div>
+            <img class="campip__img" alt="kamera lain" />
+            <div class="pip__nosignal">NO CAM</div>
+            <span class="pip__label"></span>
+          </div>
         </div>`;
       grid.appendChild(cell);
       const img = cell.querySelector(`#camImg${i}`);
       const no = cell.querySelector(`#camNo${i}`);
       img.onload = () => { no.style.display = "none"; };
       img.onerror = () => { no.style.display = "flex"; img.removeAttribute("src"); };
-      // fullscreen per sel
       const view = cell.querySelector(`#camView${i}`);
-      const fs = makeFullscreen(view);
+      const pip = cell.querySelector(`#camPip${i}`);
+      const pipImg = pip.querySelector(".campip__img");
+      const pipNo = pip.querySelector(".pip__nosignal");
+      const pipLabel = pip.querySelector(".pip__label");
+      pipImg.onerror = () => { pipImg.style.display = "none"; pipNo.style.display = "flex"; };
+      pipImg.onload = () => { pipImg.style.display = ""; pipNo.style.display = "none"; };
+      // fullscreen per sel → tampilkan kamera lain di PiP
+      const fs = makeFullscreen(view, { onToggle: (on) => this._onCellFs(i, on) });
       cell.querySelector(`[data-full="${i}"]`).onclick = () => fs.toggle();
-      return { cell, img, no };
+      return { cell, view, img, no, pip, pipImg, pipNo, pipLabel, fs, fsOn: false };
     });
+    // interaksi PiP (klik tukar, geser, resize) untuk tiap sel
+    this.els.cells.forEach((cellObj, i) => this._setupCellPip(cellObj, i));
 
     // config URL per kamera
     const cfg = root.querySelector("#camCfg");
@@ -127,6 +143,83 @@ export const cameraPage = {
       set(`camDepth${i}`, "D " + num(d.depth, 2) + "m");
       set(`camAlt${i}`, "ALT " + num(alt, 2) + "m");
     });
+  },
+
+  /* saat sel i fullscreen, PiP menampilkan kamera lain */
+  _onCellFs(i, on) {
+    const cams = CONFIG.CAMERAS || [];
+    const cell = this.els.cells[i];
+    cell.fsOn = on;
+    const other = (i + 1) % cams.length;
+    if (on && cams.length >= 2) {
+      cell.pipLabel.textContent = `${cams[other].id} ${cams[other].role || ""}`.trim();
+      if (this.streaming && cams[other].url) {
+        cell.pipImg.crossOrigin = "anonymous";
+        cell.pipImg.src = cams[other].url;
+      } else {
+        cell.pipImg.removeAttribute("src");
+        cell.pipImg.style.display = "none";
+        cell.pipNo.style.display = "flex";
+      }
+    } else {
+      cell.pipImg.removeAttribute("src");
+    }
+  },
+
+  /* PiP interaktif: klik=tukar fullscreen ke kamera lain · geser=pindah · tarik sudut=resize */
+  _setupCellPip(cell, i) {
+    const cams = CONFIG.CAMERAS || [];
+    const pip = cell.pip, vp = cell.view;
+    let dragging = false, moved = false, sx = 0, sy = 0, ox = 0, oy = 0;
+    pip.style.cursor = "grab";
+    pip.style.touchAction = "none";
+
+    pip.addEventListener("pointerdown", (e) => {
+      if (e.target.classList.contains("pip__resize")) return; // tangani di handler resize
+      dragging = true; moved = false; sx = e.clientX; sy = e.clientY;
+      const r = pip.getBoundingClientRect(), vr = vp.getBoundingClientRect();
+      ox = r.left - vr.left; oy = r.top - vr.top;
+      pip.style.left = ox + "px"; pip.style.top = oy + "px"; pip.style.right = "auto"; pip.style.bottom = "auto";
+      pip.style.cursor = "grabbing";
+      try { pip.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    pip.addEventListener("pointermove", (e) => {
+      if (!dragging) return;
+      if (Math.abs(e.clientX - sx) > 3 || Math.abs(e.clientY - sy) > 3) moved = true;
+      const vr = vp.getBoundingClientRect();
+      pip.style.left = Math.max(0, Math.min(ox + (e.clientX - sx), vr.width - pip.offsetWidth)) + "px";
+      pip.style.top = Math.max(0, Math.min(oy + (e.clientY - sy), vr.height - pip.offsetHeight)) + "px";
+    });
+    const end = (e) => {
+      if (!dragging) return;
+      dragging = false; pip.style.cursor = "grab";
+      try { pip.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (!moved && cams.length >= 2) {            // klik → tukar fullscreen ke kamera lain
+        const other = (i + 1) % cams.length;
+        cell.fs.toggle();
+        this.els.cells[other].fs.toggle();
+      }
+    };
+    pip.addEventListener("pointerup", end);
+    pip.addEventListener("pointercancel", end);
+
+    const handle = pip.querySelector(".pip__resize");
+    let rz = false, rsx = 0, rw = 0;
+    handle.addEventListener("pointerdown", (e) => {
+      rz = true; rsx = e.clientX; rw = pip.offsetWidth;
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault(); e.stopPropagation();
+    });
+    handle.addEventListener("pointermove", (e) => {
+      if (!rz) return;
+      const vr = vp.getBoundingClientRect();
+      pip.style.width = Math.max(140, Math.min(rw + (rsx - e.clientX), vr.width * 0.85)) + "px";
+      e.stopPropagation();
+    });
+    const rend = (e) => { if (!rz) return; rz = false; try { handle.releasePointerCapture(e.pointerId); } catch (_) {} };
+    handle.addEventListener("pointerup", rend);
+    handle.addEventListener("pointercancel", rend);
   },
 
   _toggleStream() {

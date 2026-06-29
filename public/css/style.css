@@ -883,7 +883,9 @@ body.pseudo-fs-lock { overflow: hidden; }
 .campage__viewport:fullscreen #camPip,
 .campage__viewport.pseudo-fs #camPip,
 .cam:fullscreen #ctrlCamPip,
-.cam.pseudo-fs #ctrlCamPip { display: block; }
+.cam.pseudo-fs #ctrlCamPip,
+.camcell__view:fullscreen .campip,
+.camcell__view.pseudo-fs .campip { display: block; }
 /* PiP pilot di kamera Control: kiri-bawah */
 #ctrlCamPip { left: 18px; right: auto; }
 
