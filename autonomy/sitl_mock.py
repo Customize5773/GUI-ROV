@@ -30,6 +30,13 @@ def main():
     m = mavutil.mavlink_connection(args.mavlink, source_system=1, source_component=1)
     print(f"[MOCK] mengirim sebagai vehicle ke {args.mavlink}")
 
+    # Windows: socket udpout baru bisa recv setelah paket pertama dikirim.
+    # Kirim heartbeat awal agar socket tersambung (hindari WinError 10022).
+    m.mav.heartbeat_send(mavutil.mavlink.MAV_TYPE_SUBMARINE,
+                         mavutil.mavlink.MAV_AUTOPILOT_ARDUPILOTMEGA,
+                         mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED, 0,
+                         mavutil.mavlink.MAV_STATE_ACTIVE)
+
     armed = False
     custom_mode = 0          # 0 = MANUAL (ArduSub)
     heading = 90.0           # deg
@@ -43,7 +50,11 @@ def main():
 
         # ── terima perintah dari rov_link ──
         while True:
-            msg = m.recv_match(blocking=False)
+            try:
+                msg = m.recv_match(blocking=False)
+            except OSError:
+                # Windows: belum ada pengirim di sisi lain (10022/10054) — abaikan
+                msg = None
             if msg is None:
                 break
             t = msg.get_type()
