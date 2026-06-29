@@ -50,7 +50,6 @@ export const setupPage = {
           <div class="card">
             <span class="panel__eyebrow">TEAM IDENTITY</span>
             <h3 class="card__title">Tim &amp; Perguruan Tinggi</h3>
-            <p class="card__desc">Tampil di header GUI (syarat KKI 2026).</p>
             <label class="field"><span>Nama Tim</span><input id="suTeam" type="text" value="${CONFIG.TEAM_NAME || ""}" /></label>
             <label class="field"><span>Perguruan Tinggi</span><input id="suUni" type="text" value="${CONFIG.UNIVERSITY || ""}" /></label>
             <button class="btn-wide" id="suApplyIdent">Apply</button>
