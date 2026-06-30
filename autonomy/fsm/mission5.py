@@ -39,7 +39,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vision.aruco_qr import VisionPipeline
-from control.visual_servo import VisualServo
+from control.visual_servo import VisualServo, PoseServo
 
 log = logging.getLogger(__name__)
 
@@ -67,7 +67,10 @@ WALL_HEADING = {'A': 270, 'B': 90, 'C': 0, 'D': 180}
 
 # Visual servo (closed-loop approach hook) — Misi 5
 HOOK_ARUCO_ID      = '7'      # ID marker ArUco di hook (sesuaikan saat lomba)
-SERVO_TARGET_AREA  = 3000.0   # luas marker (px^2) saat jarak engage ideal
+SERVO_TARGET_AREA  = 3000.0   # IBVS: luas marker (px^2) saat jarak engage (tanpa kalibrasi)
+SERVO_TARGET_DIST  = 0.50     # PBVS: jarak engage (m) ke marker (pakai kalibrasi+solvePnP)
+MARKER_LENGTH_M    = 0.10     # sisi marker ArUco fisik (m) — utk solvePnP
+CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
 TIMEOUT_APPROACH   = 25.0     # detik max approach visual sebelum degradasi ke timed
 
 
@@ -179,7 +182,8 @@ class Mission5FSM:
         self.cmd    = cmd
         self.telem  = telem
         self.vision = vision
-        self.servo  = VisualServo(target_area=SERVO_TARGET_AREA)
+        self.servo      = VisualServo(target_area=SERVO_TARGET_AREA)          # IBVS (piksel)
+        self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST)            # PBVS (meter)
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
@@ -416,6 +420,7 @@ class Mission5FSM:
             log.info("[FSM] ✓ Misi 4 selesai (+15 poin) — docking di sisi wall %s",
                      self._target_wall)
             self.servo.reset()
+            self.pose_servo.reset()
             self._transition(State.APPROACH_HOOK)
 
     def _state_approach_hook(self, telem):
@@ -436,13 +441,20 @@ class Mission5FSM:
             log.debug("[FSM] APPROACH_HOOK mencari marker hook id=%s", HOOK_ARUCO_ID)
             return
 
-        cx, cy = det['center']
-        out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+        pose = det.get('pose')
+        if pose is not None:                      # PBVS — pakai pose 3D (m) bila terkalibrasi
+            out = self.pose_servo.step(pose['x'], pose['y'], pose['z'], pose['yaw_deg'], dt=0.1)
+            log.debug("[FSM] APPROACH(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
+                      pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
+        else:                                      # IBVS — fallback error piksel
+            cx, cy = det['center']
+            out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+            log.debug("[FSM] APPROACH(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
+                      out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
         self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert)
-        log.debug("[FSM] APPROACH ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
-                  out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
         if out.aligned:
-            log.info("[FSM] ✓ Hook ALIGNED via visual servo — ambil payload")
+            log.info("[FSM] ✓ Hook ALIGNED (%s) — ambil payload",
+                     "PBVS" if pose is not None else "IBVS")
             self.cmd.stop_all()
             self._transition(State.AUTO_RELEASE)
 
@@ -537,6 +549,10 @@ def main():
     ap.add_argument('--device', type=int, default=0, help='Index USB webcam')
     ap.add_argument('--rtsp', default='rtsp://192.168.1.10:8554/cam',
                     help='URL RTSP jika --vision=rtsp')
+    ap.add_argument('--calib', default=CALIB_FILE,
+                    help='path .npz kalibrasi kamera → aktifkan PBVS (solvePnP). Tanpa ini = IBVS')
+    ap.add_argument('--marker-length', type=float, default=MARKER_LENGTH_M,
+                    help='sisi marker ArUco fisik (m) utk solvePnP')
     ap.add_argument('--start-state', default='DIVE',
                     choices=['DIVE', 'APPROACH_HOOK', 'AUTO_RELEASE'],
                     help='DIVE=full misi 1-5; APPROACH_HOOK=uji visual servo saja; '
@@ -555,7 +571,9 @@ def main():
     cmd   = CommandSender(host=args.server, port=args.cmd_port)
     telem = TelemetryReceiver(port=args.telem_port)
     cam   = VisionPipeline(source=args.vision, device=args.device,
-                           rtsp_url=args.rtsp)
+                           rtsp_url=args.rtsp,
+                           calib_file=args.calib, marker_length=args.marker_length)
+    log.info("[main] Mode visi: %s", "PBVS (solvePnP)" if args.calib else "IBVS (piksel)")
 
     telem.start()
     cam.start()
