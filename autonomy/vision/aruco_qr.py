@@ -26,6 +26,7 @@ Instalasi dependensi:
 """
 
 import time
+import math
 import threading
 import logging
 from typing import Callable, Optional
@@ -76,6 +77,8 @@ class VisionPipeline:
         callback: Optional[Callable] = None,
         fps: int = 10,
         aruco_dict: str = 'DICT_4X4_50',
+        calib_file: Optional[str] = None,
+        marker_length: float = 0.10,
     ):
         """
         Parameters
@@ -97,6 +100,18 @@ class VisionPipeline:
         self._cap = None
         self._last_result: Optional[dict] = None
         self._last_aruco: Optional[dict] = None   # deteksi ArUco terakhir (utk visual servo)
+
+        # Kalibrasi kamera utk PBVS (solvePnP). Bila tak ada → pose=None (fallback IBVS).
+        self.marker_length = marker_length
+        self._K = None
+        self._dist = None
+        if calib_file and CV2_OK:
+            try:
+                data = np.load(calib_file)
+                self._K, self._dist = data['K'], data['dist']
+                log.info("[vision] Kalibrasi dimuat: %s — PBVS (solvePnP) AKTIF", calib_file)
+            except Exception as e:
+                log.warning("[vision] gagal muat kalibrasi %s: %s — fallback IBVS", calib_file, e)
 
         # Setup ArUco detector
         self._aruco_detector = None
@@ -207,6 +222,7 @@ class VisionPipeline:
                         data = str(aid)
                         frame = self._annotate(frame, 'aruco', data, center, pts)
                         result = self._build_result('aruco', data, center, area, frame)
+                        result['pose'] = self._estimate_pose(corner)
                         self._dispatch(result)
 
             elapsed = time.time() - t_start
@@ -227,6 +243,7 @@ class VisionPipeline:
             'frame': frame,
             'frame_w': w,
             'frame_h': h,
+            'pose': None,        # diisi {x,y,z,dist,yaw_deg} bila kalibrasi tersedia (PBVS)
             'timestamp': time.time(),
         }
         self._last_result = result
@@ -242,6 +259,26 @@ class VisionPipeline:
         if marker_id is not None and str(r['data']) != str(marker_id):
             return None
         return r
+
+    def _estimate_pose(self, corner) -> Optional[dict]:
+        """Pose marker via solvePnP (butuh kalibrasi). Camera frame: +x kanan,+y bawah,+z depan.
+        Mengembalikan {x,y,z (m), dist (m), yaw_deg}. None bila tak terkalibrasi."""
+        if self._K is None or not CV2_OK:
+            return None
+        L = self.marker_length
+        objp = np.array([[-L / 2, L / 2, 0], [L / 2, L / 2, 0],
+                         [L / 2, -L / 2, 0], [-L / 2, -L / 2, 0]], dtype=np.float32)
+        img = corner.reshape(4, 2).astype(np.float32)
+        flags = getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', cv2.SOLVEPNP_ITERATIVE)
+        ok, rvec, tvec = cv2.solvePnP(objp, img, self._K, self._dist, flags=flags)
+        if not ok:
+            return None
+        x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
+        R, _ = cv2.Rodrigues(rvec)
+        # yaw = skew marker thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.
+        yaw_deg = math.degrees(math.atan2(R[0, 2], R[2, 2]))
+        return {'x': x, 'y': y, 'z': z, 'dist': math.sqrt(x * x + y * y + z * z),
+                'yaw_deg': yaw_deg}
 
     def _dispatch(self, result: dict):
         log.info("[vision] Deteksi %s data=%s wall=%s center=%s",

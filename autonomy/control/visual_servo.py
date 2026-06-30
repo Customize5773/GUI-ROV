@@ -119,3 +119,68 @@ class VisualServo:
 
         return ServoOutput(surge=surge, sway=sway, yaw=yaw, vert=vert,
                            aligned=aligned, ex=ex, ey=ey, ea=ea)
+
+
+@dataclass
+class PoseServoOutput:
+    surge: float
+    sway: float
+    yaw: float
+    vert: float
+    aligned: bool
+    x: float
+    y: float
+    z: float
+
+
+class PoseServo:
+    """
+    PBVS — pakai pose 3D marker dari solvePnP (meter + derajat), bukan piksel.
+    Lebih presisi dari IBVS karena tahu jarak/sudut sebenarnya (butuh kalibrasi kamera).
+
+    Konvensi camera-frame OpenCV: +x KANAN, +y BAWAH, +z KE DEPAN (menjauh dari kamera).
+    Target: x→0 (lurus), y→0 (setinggi marker), z→target_dist (jarak engage), yaw→0 (tegak lurus).
+    """
+
+    def __init__(
+        self,
+        target_dist=0.50,       # m — jarak engage ideal ke marker
+        tol_xy=0.05,            # m — toleransi lateral & vertikal
+        tol_dist=0.05,          # m — toleransi jarak
+        tol_yaw=8.0,            # derajat
+        kp_sway=140.0, kp_surge=140.0, kp_vert=110.0, kp_yaw=0.0,
+        ki=0.0, kd=0.0,
+        max_speed=35.0,
+        invert_sway=False, invert_vert=False, invert_yaw=False,
+    ):
+        self.target_dist = target_dist
+        self.tol_xy, self.tol_dist, self.tol_yaw = tol_xy, tol_dist, tol_yaw
+        self.s_sway = -1 if invert_sway else 1
+        self.s_vert = -1 if invert_vert else 1
+        self.s_yaw = -1 if invert_yaw else 1
+        self.use_yaw = kp_yaw != 0.0
+        self._pid_sway = PID(kp_sway, ki, kd, max_speed)
+        self._pid_surge = PID(kp_surge, ki, kd, max_speed)
+        self._pid_vert = PID(kp_vert, ki, kd, max_speed)
+        self._pid_yaw = PID(kp_yaw, ki, kd, max_speed)
+        self._hits = 0
+
+    def reset(self):
+        for p in (self._pid_sway, self._pid_surge, self._pid_vert, self._pid_yaw):
+            p.reset()
+        self._hits = 0
+
+    def step(self, x, y, z, yaw_deg=0.0, dt=0.1) -> PoseServoOutput:
+        ez = z - self.target_dist          # + = terlalu jauh → maju
+        sway = self.s_sway * self._pid_sway.step(x, dt)     # marker kanan (x>0) → geser kanan
+        surge = self._pid_surge.step(ez, dt)
+        vert = self.s_vert * self._pid_vert.step(-y, dt)    # marker bawah (y>0) → turun
+        yaw = self.s_yaw * self._pid_yaw.step(yaw_deg, dt) if self.use_yaw else 0.0
+
+        in_tol = (abs(x) < self.tol_xy and abs(y) < self.tol_xy and abs(ez) < self.tol_dist
+                  and (not self.use_yaw or abs(yaw_deg) < self.tol_yaw))
+        self._hits = self._hits + 1 if in_tol else 0
+        aligned = self._hits >= 5
+
+        return PoseServoOutput(surge=surge, sway=sway, yaw=yaw, vert=vert,
+                               aligned=aligned, x=x, y=y, z=z)
