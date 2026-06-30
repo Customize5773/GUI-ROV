@@ -127,16 +127,31 @@ class CommandSender:
         self._port = port
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
-    def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
-        cmd = {'surge': surge, 'sway': sway, 'yaw': yaw, 'vert': vert}
-        if gripper is not None:
-            cmd['gripper'] = gripper
-        raw = json.dumps(cmd).encode()
+    def _emit(self, name, value):
+        """Kirim SATU command {name,value} — format yang dipahami rov_link/server.js."""
+        raw = json.dumps({'name': name, 'value': value}).encode()
         self._sock.sendto(raw, (self._host, self._port))
-        log.debug("[cmd] %s", cmd)
+        log.debug("[cmd] %s=%s", name, value)
+
+    def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
+        self._emit('surge', surge)
+        self._emit('sway', sway)
+        self._emit('yaw', yaw)
+        self._emit('vert', vert)
+        if gripper is not None:
+            # gripper truthy = tutup (jepit), falsy = buka
+            self._emit('gripper', 'close' if gripper else 'open')
+
+    def arm(self, on=True):
+        self._emit('arm', bool(on))
 
     def stop_all(self):
+        """Netralkan axis TAPI tetap armed (dipakai antar-state)."""
         self.send(surge=0, sway=0, yaw=0, vert=0)
+
+    def emergency_stop(self):
+        """Failsafe rov_link: netral + DISARM (hanya untuk abort)."""
+        self._emit('stop', True)
 
     def close(self):
         self._sock.close()
@@ -166,19 +181,25 @@ class Mission5FSM:
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def start(self):
-        """Mulai eksekusi misi."""
-        log.info("[FSM] ===== MISI 5 ROV KKI 2026 DIMULAI =====")
+    def start(self, start_state: State = State.DIVE):
+        """Mulai eksekusi misi dari state tertentu (default DIVE = full misi 1-5).
+
+        Untuk strategi 'misi 1-4 manual, hanya misi 5 autonomous':
+        jalankan operator manual via GUI sampai docking, lalu start_state=AUTO_RELEASE.
+        """
+        log.info("[FSM] ===== MISI ROV KKI 2026 DIMULAI (start=%s) =====", start_state.name)
         self._running = True
-        self._transition(State.DIVE)
+        self.cmd.arm(True)          # WAJIB: arm dulu sebelum thruster merespons
+        time.sleep(0.5)
+        self._transition(start_state)
         self._loop()
 
     def abort(self):
-        """Hentikan semua gerak dan masuk ABORT."""
+        """Hentikan semua gerak dan masuk ABORT (failsafe + disarm)."""
         self._running = False
-        self.cmd.stop_all()
+        self.cmd.emergency_stop()
         self._state = State.ABORT
-        log.warning("[FSM] ABORT — semua thruster dimatikan")
+        log.warning("[FSM] ABORT — failsafe, thruster netral + disarm")
 
     def score(self) -> dict:
         total = sum(self._score.values())
@@ -477,6 +498,10 @@ def main():
     ap.add_argument('--device', type=int, default=0, help='Index USB webcam')
     ap.add_argument('--rtsp', default='rtsp://192.168.1.10:8554/cam',
                     help='URL RTSP jika --vision=rtsp')
+    ap.add_argument('--start-state', default='DIVE',
+                    choices=['DIVE', 'AUTO_RELEASE'],
+                    help='DIVE=full misi 1-5 autonomous; AUTO_RELEASE=hanya misi 5 '
+                         '(jalankan misi 1-4 manual via GUI dulu)')
     ap.add_argument('--loglevel', default='INFO')
     args = ap.parse_args()
 
@@ -501,7 +526,7 @@ def main():
 
     fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam)
     try:
-        fsm.start()
+        fsm.start(start_state=State[args.start_state])
     except KeyboardInterrupt:
         fsm.abort()
     finally:

@@ -94,6 +94,15 @@ class RovLink:
         self.rx = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)   # command masuk
         self.rx.bind(("0.0.0.0", args.json_rx_port))
 
+        # tujuan telemetri tambahan (mis. FSM autonomy di port lain) — agar GUI & FSM
+        # bisa terima telemetri bersamaan tanpa rebut port 14551
+        self.extra_dests = []
+        for item in (getattr(args, "telem_extra", "") or "").split(","):
+            item = item.strip()
+            if item:
+                host, port = item.rsplit(":", 1)
+                self.extra_dests.append((host, int(port)))
+
     # ───────────────────────── MAVLink helpers ─────────────────────────
     def _request_streams(self):
         self.master.mav.request_data_stream_send(
@@ -218,7 +227,10 @@ class RovLink:
                 self.telem["mode"] = self.control_mode
             out = dict(self.telem)
             out["ts"] = time.time()
-            self.tx.sendto(json.dumps(out).encode(), (self.args.server, self.args.telem_port))
+            payload = json.dumps(out).encode()
+            self.tx.sendto(payload, (self.args.server, self.args.telem_port))
+            for host, port in self.extra_dests:
+                self.tx.sendto(payload, (host, port))
             time.sleep(0.1)    # 10 Hz
 
     def loop_gcs_hb(self):
@@ -242,6 +254,7 @@ def main():
     ap = argparse.ArgumentParser(description="Jembatan JSON/UDP GUI <-> MAVLink ArduSub")
     ap.add_argument("--server", default="127.0.0.1", help="IP komputer yang menjalankan server.js (telemetri dikirim ke sini)")
     ap.add_argument("--telem-port", type=int, default=14551, help="port telemetri di server.js")
+    ap.add_argument("--telem-extra", default="", help="tujuan telemetri tambahan, csv host:port (mis. 127.0.0.1:14552 untuk FSM autonomy)")
     ap.add_argument("--json-rx-port", type=int, default=14550, help="port command JSON dari server.js")
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14555", help="endpoint MAVLink ke vehicle/SITL/mock")
     ap.add_argument("--baud", type=int, default=115200, help="baud (jika serial, mis. /dev/ttyACM0)")
