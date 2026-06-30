@@ -39,6 +39,7 @@ import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from vision.aruco_qr import VisionPipeline
+from control.visual_servo import VisualServo
 
 log = logging.getLogger(__name__)
 
@@ -64,6 +65,11 @@ TIMEOUT_RELEASE       = 10.0   # detik max lepas payload autonomous
 # Heading target tiap sisi kolam (sesuai orientasi kolam, kalibrasi di lokasi)
 WALL_HEADING = {'A': 270, 'B': 90, 'C': 0, 'D': 180}
 
+# Visual servo (closed-loop approach hook) — Misi 5
+HOOK_ARUCO_ID      = '7'      # ID marker ArUco di hook (sesuaikan saat lomba)
+SERVO_TARGET_AREA  = 3000.0   # luas marker (px^2) saat jarak engage ideal
+TIMEOUT_APPROACH   = 25.0     # detik max approach visual sebelum degradasi ke timed
+
 
 # ── State machine states ───────────────────────────────────────────────────────
 class State(Enum):
@@ -75,7 +81,8 @@ class State(Enum):
     HANG          = auto()   # Misi 3: gantung payload
     SURFACE       = auto()   # Misi 4: naik ke permukaan
     DOCK          = auto()   # Misi 4: docking di sisi dinding
-    AUTO_RELEASE  = auto()   # Misi 5: lepas payload autonomous
+    APPROACH_HOOK = auto()   # Misi 5: approach hook closed-loop (visual servo ArUco)
+    AUTO_RELEASE  = auto()   # Misi 5: ambil payload dari hook + naik
     DONE          = auto()
     ABORT         = auto()
 
@@ -172,6 +179,7 @@ class Mission5FSM:
         self.cmd    = cmd
         self.telem  = telem
         self.vision = vision
+        self.servo  = VisualServo(target_area=SERVO_TARGET_AREA)
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
@@ -226,6 +234,8 @@ class Mission5FSM:
                 self._state_surface(telem)
             elif self._state == State.DOCK:
                 self._state_dock(telem)
+            elif self._state == State.APPROACH_HOOK:
+                self._state_approach_hook(telem)
             elif self._state == State.AUTO_RELEASE:
                 self._state_auto_release(telem)
 
@@ -405,6 +415,35 @@ class Mission5FSM:
             self._score['m4'] = 15
             log.info("[FSM] ✓ Misi 4 selesai (+15 poin) — docking di sisi wall %s",
                      self._target_wall)
+            self.servo.reset()
+            self._transition(State.APPROACH_HOOK)
+
+    def _state_approach_hook(self, telem):
+        """Misi 5a: approach hook secara closed-loop pakai marker ArUco (visual servo).
+
+        Pusatkan marker hook di frame & capai jarak engage; bila marker hilang,
+        cari dengan yaw pelan; bila timeout, degradasi ke AUTO_RELEASE (timed)."""
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_APPROACH:
+            log.warning("[FSM] APPROACH_HOOK timeout — degradasi ke AUTO_RELEASE timed")
+            self.cmd.stop_all()
+            self._transition(State.AUTO_RELEASE)
+            return
+
+        det = self.vision.latest_aruco(max_age=0.5, marker_id=HOOK_ARUCO_ID)
+        if det is None:
+            self.cmd.send(yaw=YAW_SPEED)   # marker hilang → sapu cari
+            log.debug("[FSM] APPROACH_HOOK mencari marker hook id=%s", HOOK_ARUCO_ID)
+            return
+
+        cx, cy = det['center']
+        out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+        self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert)
+        log.debug("[FSM] APPROACH ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
+                  out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
+        if out.aligned:
+            log.info("[FSM] ✓ Hook ALIGNED via visual servo — ambil payload")
+            self.cmd.stop_all()
             self._transition(State.AUTO_RELEASE)
 
     def _state_auto_release(self, telem):

@@ -1,4 +1,5 @@
 pymavlink>=2.4.40
-# OpenCV & pyzbar menyusul saat tahap visi (point a/b berikutnya):
-# opencv-contrib-python
-# pyzbar
+numpy>=1.24
+# Visi (closed-loop ArUco/QR):
+opencv-contrib-python>=4.8   # cv2.aruco ada di contrib
+pyzbar>=0.1.9                # QR — butuh libzbar0 di Linux

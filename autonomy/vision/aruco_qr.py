@@ -96,6 +96,7 @@ class VisionPipeline:
         self._thread: Optional[threading.Thread] = None
         self._cap = None
         self._last_result: Optional[dict] = None
+        self._last_aruco: Optional[dict] = None   # deteksi ArUco terakhir (utk visual servo)
 
         # Setup ArUco detector
         self._aruco_detector = None
@@ -216,6 +217,7 @@ class VisionPipeline:
 
     def _build_result(self, det_type, data, center, area, frame) -> dict:
         wall = WALL_MAP.get(data) if det_type == 'qr' else None
+        h, w = (frame.shape[0], frame.shape[1]) if frame is not None else (480, 640)
         result = {
             'type': det_type,
             'data': data,
@@ -223,10 +225,23 @@ class VisionPipeline:
             'center': center,
             'area': area,
             'frame': frame,
+            'frame_w': w,
+            'frame_h': h,
             'timestamp': time.time(),
         }
         self._last_result = result
+        if det_type == 'aruco':
+            self._last_aruco = result
         return result
+
+    def latest_aruco(self, max_age=0.5, marker_id=None) -> Optional[dict]:
+        """Deteksi ArUco terakhir bila masih segar (utk closed-loop servo)."""
+        r = self._last_aruco
+        if not r or (time.time() - r['timestamp']) > max_age:
+            return None
+        if marker_id is not None and str(r['data']) != str(marker_id):
+            return None
+        return r
 
     def _dispatch(self, result: dict):
         log.info("[vision] Deteksi %s data=%s wall=%s center=%s",
