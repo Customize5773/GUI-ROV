@@ -68,6 +68,7 @@ class RovLink:
         self.light_on = False
         self.control_mode = "manual"
         self.surface_hpa = SURFACE_HPA_DEFAULT
+        self.last_press_abs = SURFACE_HPA_DEFAULT   # tekanan absolut terbaru (utk set_surface)
         self.lock = threading.Lock()
 
         # telemetri terbaru hasil parsing MAVLink
@@ -164,8 +165,9 @@ class RovLink:
                     for k in self.sp:
                         self.sp[k] = 0.0         # hold; FSM autonomy akan ambil alih nanti
         elif name == "set_surface":
-            # tangkap tekanan saat ini sebagai depth=0 (butuh telemetri pressure terbaru)
-            print("[CMD] set_surface (lihat catatan: kalibrasi surface dari pressure terbaru)")
+            # tangkap tekanan absolut terbaru sebagai referensi depth = 0
+            self.surface_hpa = self.last_press_abs
+            print(f"[CMD] set_surface — surface_hpa = {self.surface_hpa:.2f}")
         else:
             # mode/controller/thruster_config/pid/pool_depth/viewer_access → urusan GUI
             print(f"[CMD] (diabaikan di link) {name} = {value}")
@@ -192,6 +194,7 @@ class RovLink:
                 self.telem["pitch"] = round(math.degrees(msg.pitch), 1)
                 self.telem["heading"] = round((math.degrees(msg.yaw) + 360) % 360, 1)
             elif t == "SCALED_PRESSURE2":
+                self.last_press_abs = msg.press_abs
                 depth = (msg.press_abs - self.surface_hpa) * 100.0 / (WATER_RHO * G)
                 self.telem["depth"] = round(max(0.0, depth), 2)
                 self.telem["temp"] = round(msg.temperature / 100.0, 1)

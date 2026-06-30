@@ -30,6 +30,7 @@ const els = {
   pilotPipImg: $("pilotPipImg"), pilotPipNo: $("pilotPipNo"),
   ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
   axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axVert: $("axVert"),
+  btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -529,6 +530,15 @@ $("btnSetSurface").onclick = () => {
   sendCmd("set_surface", true);
   log("Surface level diset — Depth = 0", "ok");
 };
+
+/* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
+els.btnGripOpen.onclick = () => { sendCmd("gripper", "open"); log("Gripper: OPEN", "ok"); };
+els.btnGripClose.onclick = () => { sendCmd("gripper", "close"); log("Gripper: CLOSE", "ok"); };
+window.addEventListener("keydown", (e) => {
+  if (activeController !== "Keyboard" || e.target !== document.body) return;
+  if (e.code === "KeyH") { e.preventDefault(); els.btnGripOpen.click(); }
+  else if (e.code === "KeyG") { e.preventDefault(); els.btnGripClose.click(); }
+});
 
 /* viewport toggles: Follow ROV | Preview AIR | Echo */
 function toggleChip(id, onLabel) {
