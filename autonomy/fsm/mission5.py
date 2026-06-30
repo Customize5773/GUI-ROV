@@ -538,9 +538,9 @@ def main():
     ap.add_argument('--rtsp', default='rtsp://192.168.1.10:8554/cam',
                     help='URL RTSP jika --vision=rtsp')
     ap.add_argument('--start-state', default='DIVE',
-                    choices=['DIVE', 'AUTO_RELEASE'],
-                    help='DIVE=full misi 1-5 autonomous; AUTO_RELEASE=hanya misi 5 '
-                         '(jalankan misi 1-4 manual via GUI dulu)')
+                    choices=['DIVE', 'APPROACH_HOOK', 'AUTO_RELEASE'],
+                    help='DIVE=full misi 1-5; APPROACH_HOOK=uji visual servo saja; '
+                         'AUTO_RELEASE=misi 5 (1-4 manual via GUI dulu)')
     ap.add_argument('--loglevel', default='INFO')
     args = ap.parse_args()
 
