@@ -13,19 +13,42 @@ Node.js di tengah, dan UDP ke Raspberry Pi (ROV).
 ## Struktur
 
 ```
-hydroship/
-├─ public/                 # dashboard (dibuka di browser)
+GUI-ROV/
+├─ public/                     # dashboard (dibuka di browser)
 │  ├─ index.html
 │  ├─ css/style.css
+│  ├─ images/                  # Logo1.png, Logo2.png
+│  ├─ models/                  # rov.fbx (model 3D ROV)
+│  ├─ vendor/                  # jsqr.min.js
 │  └─ js/
-│     ├─ config.js         # << atur IP kamera / model 3D di sini
-│     ├─ app.js            # WebSocket, telemetri, kontrol, simulator
-│     └─ scene.js          # three.js: ROV 3D + cincin kompas
-│  └─ models/              # taruh rov.glb / rov.fbx di sini (opsional)
+│     ├─ config.js             # << atur IP kamera / model 3D di sini
+│     ├─ core.js                # state bersama, WebSocket, util inti
+│     ├─ app.js                 # bootstrap, routing antar halaman
+│     ├─ model.js                # loader & kontrol model 3D (three.js)
+│     ├─ scene.js               # three.js: ROV 3D + cincin kompas
+│     └─ pages/                 # satu modul per halaman dashboard
+│        ├─ telemetry.js         # telemetri real-time, attitude 3D
+│        ├─ camera.js            # umpan kamera + deteksi QR (jsQR)
+│        ├─ mission.js           # perencanaan/kontrol misi
+│        └─ setup.js             # konfigurasi & pengaturan koneksi
 ├─ server/
-│  ├─ server.js            # jembatan WebSocket <-> UDP + static server
-│  └─ package.json
-└─ raspi_rov_example.py    # contoh format UDP di sisi ROV
+│  ├─ server.js                # jembatan WebSocket <-> UDP + static server
+│  ├─ package.json
+│  └─ package-lock.json
+├─ autonomy/                   # otonomi ROV: visual servo, ArduSub SITL, ArUco
+│  ├─ control/visual_servo.py   # PBVS (position-based visual servo)
+│  ├─ fsm/mission5.py            # finite-state machine misi
+│  ├─ vision/aruco_qr.py         # deteksi ArUco/QR
+│  ├─ tools/                    # kalibrasi kamera, generator marker/checkerboard, tes SITL
+│  ├─ rov_link.py               # link komunikasi ke ROV
+│  ├─ sitl_mock.py              # mock SITL untuk pengujian tanpa hardware
+│  ├─ SITL_SETUP.md              # panduan setup ArduSub SITL (WSL2)
+│  ├─ README_SETUP_C.md
+│  └─ VERIFIKASI_ARDUSUB.md
+├─ image logo/                 # aset logo sumber (Logo1.png, Logo2.png)
+├─ raspi_rov_example (notfinish).py   # contoh format UDP di sisi ROV
+├─ Rencana.md
+└─ README-WORK.md
 ```
 
 ## Menjalankan (uji cepat, tanpa hardware)
