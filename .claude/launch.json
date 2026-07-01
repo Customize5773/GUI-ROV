@@ -8,6 +8,14 @@
       "cwd": "server",
       "port": 8080,
       "autoPort": false
+    },
+    {
+      "name": "hydroship-live",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["server.js"],
+      "cwd": "server",
+      "port": 8080,
+      "autoPort": false
     }
   ]
 }

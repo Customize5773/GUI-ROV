@@ -131,7 +131,8 @@ const state = { light: false, armed: false, hud: true, recording: false };
 function setLink(mode) {
   els.link.dataset.state = mode;
   els.linkLabel.textContent =
-    mode === "on" ? "ONLINE" : mode === "demo" ? "SIMULASI" : "OFFLINE";
+    mode === "on" ? "ONLINE" : mode === "demo" ? "SIMULASI"
+    : mode === "stale" ? "SINYAL HILANG" : "OFFLINE";
 }
 
 function setTheme(name) {
@@ -182,6 +183,11 @@ function applyTelemetry(d) {
     setLink("on");
     log("Telemetri nyata diterima — hentikan simulasi", "ok");
   }
+  // pulih dari kondisi "stale" (telemetri sempat berhenti lalu masuk lagi)
+  if (linkStale) {
+    linkStale = false;
+    if (!isDemo && !demo) { setLink("on"); log("Telemetri pulih", "ok"); }
+  }
   lastTelemetry = performance.now();
   els.heading.textContent = num(d.heading, 0);
   els.depth.textContent = num(d.depth, 2);
@@ -224,8 +230,8 @@ function applyTelemetry(d) {
     autoCap.rows.push([Date.now(), num(d.heading, 0), num(d.depth, 3), num(alt, 3), num(d.roll, 2), num(d.pitch, 2)].join(","));
   }
 
-  if (typeof d.armed === "boolean") reflectArm(d.armed);
-  if (typeof d.light === "boolean") reflectLight(d.light);
+  if (typeof d.armed === "boolean") confirmArm(d.armed);
+  if (typeof d.light === "boolean") confirmLight(d.light);
 
   // teruskan sampel ke modul halaman yang sudah di-init (buffering murah;
   // render sebenarnya digerbang oleh onShow/onHide)
@@ -247,17 +253,60 @@ function reflectLight(on) {
   els.btnLight.setAttribute("aria-pressed", String(on));
 }
 
+/* ARM/LIGHT: UI dibalik optimistik saat diklik lalu ditandai "pending" sampai
+   telemetri ROV mengonfirmasi. Jika ROV menolak (nilai beda) atau tak pernah
+   meng-echo status dalam 2 dtk, operator diberi tahu agar tidak salah baca. */
+const pending = {
+  arm:   { active: false, expected: false, since: 0, btn: els.btnArm,   label: "ARM" },
+  light: { active: false, expected: false, since: 0, btn: els.btnLight, label: "LIGHT" },
+};
+function markPending(key, expected) {
+  const p = pending[key];
+  p.active = true; p.expected = expected; p.since = performance.now();
+  p.btn.classList.add("ctrl--pending");
+}
+function clearPending(key) {
+  const p = pending[key];
+  p.active = false; p.btn.classList.remove("ctrl--pending");
+}
+function confirmArm(on) {
+  if (pending.arm.active) {
+    if (on !== pending.arm.expected) log("ROV menolak/override ARM — sinkron ke status ROV", "warn");
+    clearPending("arm");
+  }
+  reflectArm(on);
+}
+function confirmLight(on) {
+  if (pending.light.active) {
+    if (on !== pending.light.expected) log("ROV menolak/override LIGHT — sinkron ke status ROV", "warn");
+    clearPending("light");
+  }
+  reflectLight(on);
+}
+// watchdog: bila konfirmasi tak datang, hentikan indikator pending + peringatkan
+setInterval(() => {
+  const now = performance.now();
+  for (const key of ["arm", "light"]) {
+    const p = pending[key];
+    if (p.active && now - p.since > 2000) {
+      clearPending(key);
+      log(`Status ${p.label} belum dikonfirmasi ROV`, "warn");
+    }
+  }
+}, 500);
+
 /*  WebSocket  */
-let ws = null, demo = null, pingT = 0;
+let ws = null, demo = null, pingT = 0, linkStale = false;
 function connect() {
   try { ws = new WebSocket(CONFIG.WS_URL); }
   catch (e) { log("WS gagal dibuat", "err"); return scheduleReconnect(); }
 
   ws.onopen = () => {
+    linkStale = false;
     setLink("on"); log("Terhubung ke server", "ok"); stopDemo();
     sendPing();
   };
-  ws.onclose = () => { setLink("off"); scheduleReconnect(); maybeDemo(); };
+  ws.onclose = () => { linkStale = false; setLink("off"); scheduleReconnect(); maybeDemo(); };
   ws.onerror = () => { log("Error koneksi WS", "err"); };
   ws.onmessage = (ev) => {
     let msg; try { msg = JSON.parse(ev.data); } catch { return; }
@@ -287,9 +336,14 @@ function setLatency(ms) { els.lat.textContent = Math.round(ms); }
 setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) sendPing(); }, 1000);
 function sendPing() { pingT = performance.now(); send({ type: "ping", t: pingT }); }
 
-// deteksi link mati (telemetri berhenti) walau WS masih open
+// deteksi link mati (telemetri berhenti) walau WS masih open.
+// edge-triggered: hanya sekali saat transisi ke "stale" (tak spam tiap detik).
 setInterval(() => {
-  if (els.link.dataset.state === "on" && performance.now() - lastTelemetry > 2500) {
+  const online = ws && ws.readyState === WebSocket.OPEN;
+  const stalled = performance.now() - lastTelemetry > 2500;
+  if (online && stalled && !linkStale && !demo) {
+    linkStale = true;
+    setLink("stale");
     log("Telemetri terputus (timeout)", "warn");
     if (CONFIG.DEMO_ON_START && !demo) startDemo();
   }
@@ -323,28 +377,42 @@ function stopDemo() {
 function maybeDemo() { if (CONFIG.DEMO_ON_START && !demo) startDemo(); }
 
 /*  kamera  */
-function initCamera() {
-  if (!CONFIG.CAMERA_URL) { els.camNoSignal.style.display = "flex"; return; }
-  els.camImg.src = CONFIG.CAMERA_URL;
-  els.camImg.onload = () => {
-    els.camNoSignal.style.display = "none";
-    // show resolution
-    try {
-      const w = els.camImg.naturalWidth || els.camImg.width;
-      const h = els.camImg.naturalHeight || els.camImg.height;
-      if (els.camRes) els.camRes.textContent = `${w}×${h}`;
-    } catch (e) {}
-  };
-  els.camImg.onerror = () => (els.camNoSignal.style.display = "flex");
+// crossOrigin wajib agar snapshot/record (canvas) tidak ter-taint oleh stream
+// MJPEG lintas-asal dari Raspi; onload/onerror dipasang sekali di sini.
+els.camImg.crossOrigin = "anonymous";
+els.camImg.onload = () => {
+  els.camNoSignal.style.display = "none";
   els.camTag.textContent = "LIVE";
+  try {
+    const w = els.camImg.naturalWidth || els.camImg.width;
+    const h = els.camImg.naturalHeight || els.camImg.height;
+    if (els.camRes) els.camRes.textContent = `${w}×${h}`;
+  } catch (e) {}
+};
+els.camImg.onerror = () => { els.camNoSignal.style.display = "flex"; els.camTag.textContent = "RTSP / MJPEG"; };
+
+// (re)arahkan feed kamera Control ke CONFIG.CAMERA_URL saat ini. Dipanggil di
+// awal dan setiap URL diubah (Setup/Camera) via event 'hydroship:camera-url'.
+function applyControlCamera() {
+  const url = CONFIG.CAMERA_URL;
+  if (!url) {
+    els.camImg.removeAttribute("src");
+    els.camNoSignal.style.display = "flex";
+    els.camTag.textContent = "RTSP / MJPEG";
+    if (els.camRes) els.camRes.textContent = "—";
+    return;
+  }
+  // bust cache agar re-apply URL sama tetap memicu load ulang
+  els.camImg.src = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
 }
-initCamera();
+applyControlCamera();
+window.addEventListener("hydroship:camera-url", applyControlCamera);
 
 /*  kontrol UI  */
-els.btnLight.onclick = () => { reflectLight(!state.light); sendCmd("light", state.light); };
-els.btnArm.onclick = () => { reflectArm(!state.armed); sendCmd("arm", state.armed); };
+els.btnLight.onclick = () => { const v = !state.light; reflectLight(v); markPending("light", v); sendCmd("light", v); };
+els.btnArm.onclick = () => { const v = !state.armed; reflectArm(v); markPending("arm", v); sendCmd("arm", v); };
 els.btnStop.onclick = () => {
-  sendCmd("stop", true); reflectArm(false);
+  sendCmd("stop", true); reflectArm(false); markPending("arm", false);
   ["surge", "sway", "yaw", "vert"].forEach((a) => setAxis(a, 0));
   log("⏹ STOP — semua thruster netral", "err");
 };

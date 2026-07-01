@@ -398,9 +398,19 @@ body[data-theme="light"] .theme__icon::after {
   border-color: rgba(245, 165, 36, .4);
   background: rgba(245, 165, 36, .08);
 }
-.link[data-state="demo"] .link__dot { 
-  background: var(--amber); 
+.link[data-state="demo"] .link__dot {
+  background: var(--amber);
   box-shadow: 0 0 12px var(--amber);
+}
+.link[data-state="stale"] {
+  color: var(--alert);
+  border-color: rgba(255, 76, 76, .4);
+  background: rgba(255, 76, 76, .08);
+}
+.link[data-state="stale"] .link__dot {
+  background: var(--alert);
+  box-shadow: 0 0 12px rgba(255, 76, 76, .6);
+  animation: danger-blink 1s steps(2) infinite;
 }
 
 /* buttons */
@@ -449,10 +459,14 @@ body[data-theme="light"] .theme__icon::after {
   background: rgba(245, 165, 36, .1);
   box-shadow: 0 0 18px rgba(245, 165, 36, .2);
 }
-.ctrl--arm[aria-pressed="true"] .ctrl__led { 
-  background: var(--amber); 
-  box-shadow: 0 0 12px rgba(245, 165, 36, .6); 
+.ctrl--arm[aria-pressed="true"] .ctrl__led {
+  background: var(--amber);
+  box-shadow: 0 0 12px rgba(245, 165, 36, .6);
 }
+/* menunggu konfirmasi status dari telemetri ROV (arm/light) */
+.ctrl--pending { animation: pending-blink 1s ease-in-out infinite; }
+.ctrl--pending .ctrl__led { animation: pending-blink .6s ease-in-out infinite; }
+@keyframes pending-blink { 0%,100% { opacity: 1; } 50% { opacity: .45; } }
 .ctrl--demo[aria-pressed="true"] { 
   color: var(--amber); 
   border-color: rgba(245, 165, 36, .5);

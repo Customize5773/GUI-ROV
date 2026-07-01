@@ -13,18 +13,25 @@ export function sendCmd(name, value) { _sendCmd(name, value); }
 /* unduh frame <img> saat ini sebagai PNG. return false jika tak ada frame. */
 export function snapshotImage(img, prefix = "hydroship_snapshot") {
   if (!img || !img.naturalWidth) return false;
-  const c = document.createElement("canvas");
-  c.width = img.naturalWidth;
-  c.height = img.naturalHeight;
-  c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
-  c.toBlob((b) => {
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(b);
-    a.download = `${prefix}_${Date.now()}.png`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-  }, "image/png");
-  return true;
+  try {
+    const c = document.createElement("canvas");
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+    // toBlob melempar SecurityError bila canvas ter-taint (stream tanpa CORS)
+    c.toBlob((b) => {
+      if (!b) { _log("Snapshot gagal — feed lintas-asal tanpa CORS", "warn"); return; }
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(b);
+      a.download = `${prefix}_${Date.now()}.png`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }, "image/png");
+    return true;
+  } catch (e) {
+    _log("Snapshot gagal — feed lintas-asal tanpa CORS (aktifkan Access-Control-Allow-Origin)", "warn");
+    return false;
+  }
 }
 
 /* perekam: salin frame <img> ke canvas lalu rekam ke WebM via MediaRecorder. */
@@ -41,10 +48,22 @@ export function createRecorder(img, prefix = "hydroship_record") {
       if (img.naturalWidth) ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
       raf = requestAnimationFrame(loop);
     })();
-    const stream = canvas.captureStream(25);
+    let stream;
+    try { stream = canvas.captureStream(25); }
+    catch (e) {
+      if (raf) { cancelAnimationFrame(raf); raf = null; }
+      canvas = null; ctx = null;
+      _log("Rekam gagal — feed lintas-asal tanpa CORS", "warn");
+      return false;
+    }
     chunks = [];
     try { mediaRecorder = new MediaRecorder(stream, { mimeType: "video/webm;codecs=vp8" }); }
-    catch (e) { mediaRecorder = new MediaRecorder(stream); }
+    catch (e) { try { mediaRecorder = new MediaRecorder(stream); } catch (e2) {
+      if (raf) { cancelAnimationFrame(raf); raf = null; }
+      canvas = null; ctx = null;
+      _log("Rekam gagal — MediaRecorder tidak tersedia", "warn");
+      return false;
+    } }
     mediaRecorder.ondataavailable = (ev) => { if (ev.data && ev.data.size) chunks.push(ev.data); };
     mediaRecorder.onstop = () => {
       const blob = new Blob(chunks, { type: "video/webm" });

@@ -111,7 +111,7 @@ export const cameraPage = {
       wrap.querySelector(`[data-apply="${i}"]`).onclick = () => {
         const url = wrap.querySelector(`#camUrl${i}`).value.trim();
         c.url = url;
-        if (i === 0) CONFIG.CAMERA_URL = url;
+        if (i === 0) { CONFIG.CAMERA_URL = url; window.dispatchEvent(new Event("hydroship:camera-url")); }
         this.els.cells[i].img.crossOrigin = "anonymous"; // izinkan getImageData utk QR (perlu CORS server)
         if (this.streaming && url) this.els.cells[i].img.src = url;
         log(`URL ${c.id} (${c.role}) diset`, "ok");

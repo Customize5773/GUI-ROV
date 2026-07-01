@@ -158,6 +158,8 @@ export const setupPage = {
         if (i === 0) CONFIG.CAMERA_URL = url;
       });
       saveSetup();
+      // beri tahu halaman Control untuk mengarahkan ulang feed kamera-nya
+      window.dispatchEvent(new Event("hydroship:camera-url"));
       log("URL kamera disimpan", "ok");
     };
     root.querySelector("#suOpenCam").onclick = () => document.querySelector('.sidebar__link[data-page="camera"]')?.click();
