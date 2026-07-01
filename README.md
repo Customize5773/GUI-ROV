@@ -147,4 +147,47 @@ tetap terbaca.
 
 - **Spasi** = STOP (failsafe) kapan saja.
 - Klik & drag pada panel ATTITUDE untuk memutar pandangan 3D.
+
+## Autonomy (Python, opsional)
+
+Folder `autonomy/` berisi jalur MAVLink + visi komputer untuk misi otonom
+(mis. Misi 5: APPROACH_HOOK), terpisah dari dashboard di atas.
+
+```
+Browser ──WS:8080── server.js ──cmd JSON :14550──► rov_link.py ──MANUAL_CONTROL──► mock / SITL / Pixhawk
+  (3D)             (LIVE)      ◄─telem JSON :14551─             ◄─ATTITUDE/PRESSURE─   (MAVLink :14555)
+```
+
+```
+autonomy/
+├─ rov_link.py              # jembatan server.js (UDP JSON) <-> vehicle (MAVLink)
+├─ sitl_mock.py             # vehicle MAVLink palsu, buat uji tanpa ArduSub
+├─ vision/aruco_qr.py       # deteksi ArUco + QR, estimasi pose solvePnP (PBVS)
+├─ control/visual_servo.py  # VisualServo (IBVS, piksel) & PoseServo (PBVS, meter)
+├─ fsm/mission5.py          # state machine APPROACH_HOOK (PBVS bila --calib, else IBVS)
+├─ tools/
+│  ├─ calibrate_camera.py     # kalibrasi kamera via checkerboard -> intrinsics .npz
+│  ├─ make_checkerboard.py    # cetak papan kalibrasi
+│  ├─ make_marker.py          # generator marker ArUco (hook_marker_id7.png)
+│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo dgn webcam
+│  ├─ servo_webcam_test.py    # tes APPROACH_HOOK (IBVS/PBVS) dgn webcam
+│  └─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
+├─ hook_marker_id7.png      # marker ArUco target hook
+├─ requirements.txt
+├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
+├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
+└─ VERIFIKASI_ARDUSUB.md    # checklist yang wajib dicek saat naik ke ArduSub asli
+```
+
+Setup singkat (Python 3.12 + venv):
+```powershell
+cd autonomy
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
+Uji end-to-end tanpa hardware: jalankan `sitl_mock.py`, lalu `rov_link.py`, lalu
+GUI mode LIVE (`RPI_ADDR=127.0.0.1 npm start`) — lihat langkah lengkap & kriteria
+sukses di `autonomy/README_SETUP_C.md`. Untuk naik ke fisika nyata (ArduSub SITL
+di WSL2), ikuti `autonomy/SITL_SETUP.md`.
 ```
