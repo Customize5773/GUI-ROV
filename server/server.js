@@ -78,7 +78,19 @@ wss.on("connection", (ws, req) => {
 /* ----------------------- UDP (telemetry masuk) ----------------------- */
 const udp = dgram.createSocket("udp4");
 udp.on("message", (buf, rinfo) => {
-  let data; try { data = JSON.parse(buf.toString()); } catch { return; }
+  let data;
+  try {
+    data = JSON.parse(buf.toString());
+  } catch {
+    return;
+  }
+
+  console.log(
+    `[TELEM] from ${rinfo.address}:${rinfo.port} | ` +
+    `heading=${data.heading} roll=${data.roll} pitch=${data.pitch} ` +
+    `volt=${data.voltage} armed=${data.armed} mode=${data.mode}`
+  );
+
   broadcast({ type: "telemetry", data, recv: Date.now() });
 });
 udp.on("error", (e) => console.error("[UDP] error:", e.message));
