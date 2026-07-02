@@ -323,9 +323,9 @@ function scheduleReconnect() {
 function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
-function sendCmd(name, value) {
+function sendCmd(name, value, quiet = false) {
   send({ type: "cmd", name, value });
-  log(`CMD ${name} = ${value}`);
+  if (!quiet) log(`CMD ${name} = ${value}`);
 }
 
 // sediakan log & sendCmd untuk modul halaman
@@ -548,11 +548,9 @@ document.querySelectorAll(".ctab").forEach((btn) => {
     log(`Controller: ${activeController}`, "");
 
     // saat keluar dari Gamepad, netralkan axis agar thruster tak "nyangkut"
-    // di nilai defleksi joystick terakhir (pola sama seperti tombol STOP)
-    if (prev === "Gamepad" && activeController !== "Gamepad") {
-      ["surge", "sway", "yaw", "vert"].forEach((a) => { setAxis(a, 0); sendCmd(a, 0); });
-    }
-    // saat masuk Gamepad, laporkan apakah ada pad tersambung
+    // di nilai defleksi joystick terakhir
+    if (prev === "Gamepad" && activeController !== "Gamepad") neutralizeGamepadAxes();
+    // saat masuk Gamepad, laporkan status pad + indikator badge
     if (activeController === "Gamepad") logGamepadStatus();
   };
 });
@@ -605,26 +603,34 @@ window.addEventListener("keyup", (e) => {
 /* ====================== GAMEPAD PILOTING ======================
    aktif hanya saat controller = Gamepad. Layout standar (Xbox-style):
    stik kiri → surge/sway, stik kanan → yaw/vert, bumper → gripper,
-   Start → STOP. Axis diskala ke −100..100 dan hanya dikirim saat berubah. */
+   Start → STOP. Axis diskala ke −100..100 dan hanya dikirim saat nilai
+   integer-nya berubah; perintah axis dikirim "quiet" (tanpa spam console)
+   karena bersifat kontinu. */
 const GP_DEADZONE = 0.12;
 function firstGamepad() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of pads) if (p && p.connected) return p;
   return null;
 }
+function setGamepadBadge(connected) {
+  if (activeController !== "Gamepad") return;
+  els.ctrlBadge.textContent = connected ? "Active: Gamepad ●" : "Active: Gamepad";
+}
 function logGamepadStatus() {
   const p = firstGamepad();
+  setGamepadBadge(!!p);
   if (p) log(`Gamepad aktif: ${p.id}`, "ok");
   else log("Gamepad dipilih — sambungkan & tekan tombol untuk mengaktifkan", "warn");
 }
-// skala satu sumbu joystick (−1..1) → −100..100 dgn deadzone, sudah dibulatkan
-function gpAxis(v, invert = false) {
-  if (v == null || Math.abs(v) < GP_DEADZONE) return 0;
-  // remap agar tepat di batas deadzone mulai dari 0 (gerak halus)
-  const s = (Math.abs(v) - GP_DEADZONE) / (1 - GP_DEADZONE);
-  let out = Math.sign(v) * s * 100;
-  if (invert) out = -out;
-  return Math.round(Math.max(-100, Math.min(100, out)));
+// scaled radial deadzone: petakan satu stik (x,y ∈ −1..1) ke −100..100,
+// gerak mulai halus dari tepi deadzone dan arah diagonal tetap terjaga.
+function stickToAxes(x, y) {
+  x = x || 0; y = y || 0;
+  const mag = Math.hypot(x, y);
+  if (mag < GP_DEADZONE) return [0, 0];
+  const f = ((mag - GP_DEADZONE) / (1 - GP_DEADZONE)) / mag * 100;
+  const clamp = (n) => Math.round(Math.max(-100, Math.min(100, n)));
+  return [clamp(x * f), clamp(y * f)];
 }
 const gpLast = { surge: 0, sway: 0, yaw: 0, vert: 0 };
 const gpBtnPrev = {}; // deteksi tepi tombol
@@ -635,42 +641,43 @@ function gpPressed(pad, idx) {
   gpBtnPrev[idx] = now;
   return now && !was; // rising edge
 }
+function neutralizeGamepadAxes() {
+  for (const a of ["surge", "sway", "yaw", "vert"]) {
+    gpLast[a] = 0; setAxis(a, 0); sendCmd(a, 0, true);
+  }
+}
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
   if (activeController !== "Gamepad") return;
   const pad = firstGamepad();
   if (!pad) return;
 
-  // axis stik: kiri (0=X,1=Y) → sway/surge · kanan (2=X,3=Y) → yaw/vert
-  const next = {
-    surge: gpAxis(pad.axes[1], true),  // stik kiri atas = maju
-    sway:  gpAxis(pad.axes[0]),
-    yaw:   gpAxis(pad.axes[2]),
-    vert:  gpAxis(pad.axes[3], true),  // stik kanan atas = naik
-  };
+  // stik kiri (0=X,1=Y) → sway/surge · stik kanan (2=X,3=Y) → yaw/vert.
+  // sumbu Y gamepad negatif ke atas → dibalik agar "atas" = maju / naik.
+  const [sway, ly] = stickToAxes(pad.axes[0], pad.axes[1]);
+  const [yaw, ry] = stickToAxes(pad.axes[2], pad.axes[3]);
+  const next = { surge: -ly, sway, yaw, vert: -ry };
   for (const a of ["surge", "sway", "yaw", "vert"]) {
     if (next[a] !== gpLast[a]) {
       gpLast[a] = next[a];
       setAxis(a, next[a], true);
-      sendCmd(a, next[a]);
+      sendCmd(a, next[a], true); // quiet: jangan banjiri console log
     }
   }
 
-  // tombol: LB(4)=gripper open · RB(5)=gripper close · Start(9)=STOP
+  // tombol (deteksi tepi): LB(4)=gripper open · RB(5)=gripper close · Start(9)=STOP
   if (gpPressed(pad, 4)) els.btnGripOpen.click();
   if (gpPressed(pad, 5)) els.btnGripClose.click();
   if (gpPressed(pad, 9)) els.btnStop.click();
 }
 window.addEventListener("gamepadconnected", (e) => {
   log(`Gamepad tersambung: ${e.gamepad.id}`, "ok");
-  if (activeController === "Gamepad") els.ctrlBadge.textContent = "Active: Gamepad ●";
+  setGamepadBadge(true);
 });
 window.addEventListener("gamepaddisconnected", (e) => {
   log(`Gamepad terputus: ${e.gamepad.id}`, "warn");
-  if (activeController === "Gamepad") {
-    els.ctrlBadge.textContent = "Active: Gamepad";
-    ["surge", "sway", "yaw", "vert"].forEach((a) => { setAxis(a, 0); sendCmd(a, 0); });
-  }
+  setGamepadBadge(false);
+  if (activeController === "Gamepad") neutralizeGamepadAxes();
 });
 requestAnimationFrame(pollGamepad);
 
