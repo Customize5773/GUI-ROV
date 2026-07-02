@@ -530,10 +530,11 @@ document.querySelectorAll("#modeBar .mode").forEach((btn) => {
   };
 });
 
-/* controller tabs: Keyboard | Gamepad | Meta Quest */
+/* controller tabs: Keyboard | Gamepad */
 let activeController = "Keyboard";
 document.querySelectorAll(".ctab").forEach((btn) => {
   btn.onclick = () => {
+    const prev = activeController;
     document.querySelectorAll(".ctab").forEach((b) => {
       b.classList.remove("ctab--active");
       b.removeAttribute("aria-selected");
@@ -545,6 +546,14 @@ document.querySelectorAll(".ctab").forEach((btn) => {
     els.ctrlBadge.textContent = "Active: " + activeController;
     sendCmd("controller", activeController);
     log(`Controller: ${activeController}`, "");
+
+    // saat keluar dari Gamepad, netralkan axis agar thruster tak "nyangkut"
+    // di nilai defleksi joystick terakhir (pola sama seperti tombol STOP)
+    if (prev === "Gamepad" && activeController !== "Gamepad") {
+      ["surge", "sway", "yaw", "vert"].forEach((a) => { setAxis(a, 0); sendCmd(a, 0); });
+    }
+    // saat masuk Gamepad, laporkan apakah ada pad tersambung
+    if (activeController === "Gamepad") logGamepadStatus();
   };
 });
 
@@ -592,6 +601,78 @@ window.addEventListener("keyup", (e) => {
   setAxis(axis, 0);
   sendCmd(axis, 0);
 });
+
+/* ====================== GAMEPAD PILOTING ======================
+   aktif hanya saat controller = Gamepad. Layout standar (Xbox-style):
+   stik kiri → surge/sway, stik kanan → yaw/vert, bumper → gripper,
+   Start → STOP. Axis diskala ke −100..100 dan hanya dikirim saat berubah. */
+const GP_DEADZONE = 0.12;
+function firstGamepad() {
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) if (p && p.connected) return p;
+  return null;
+}
+function logGamepadStatus() {
+  const p = firstGamepad();
+  if (p) log(`Gamepad aktif: ${p.id}`, "ok");
+  else log("Gamepad dipilih — sambungkan & tekan tombol untuk mengaktifkan", "warn");
+}
+// skala satu sumbu joystick (−1..1) → −100..100 dgn deadzone, sudah dibulatkan
+function gpAxis(v, invert = false) {
+  if (v == null || Math.abs(v) < GP_DEADZONE) return 0;
+  // remap agar tepat di batas deadzone mulai dari 0 (gerak halus)
+  const s = (Math.abs(v) - GP_DEADZONE) / (1 - GP_DEADZONE);
+  let out = Math.sign(v) * s * 100;
+  if (invert) out = -out;
+  return Math.round(Math.max(-100, Math.min(100, out)));
+}
+const gpLast = { surge: 0, sway: 0, yaw: 0, vert: 0 };
+const gpBtnPrev = {}; // deteksi tepi tombol
+function gpPressed(pad, idx) {
+  const b = pad.buttons[idx];
+  const now = !!(b && (b.pressed || b.value > 0.5));
+  const was = !!gpBtnPrev[idx];
+  gpBtnPrev[idx] = now;
+  return now && !was; // rising edge
+}
+function pollGamepad() {
+  requestAnimationFrame(pollGamepad);
+  if (activeController !== "Gamepad") return;
+  const pad = firstGamepad();
+  if (!pad) return;
+
+  // axis stik: kiri (0=X,1=Y) → sway/surge · kanan (2=X,3=Y) → yaw/vert
+  const next = {
+    surge: gpAxis(pad.axes[1], true),  // stik kiri atas = maju
+    sway:  gpAxis(pad.axes[0]),
+    yaw:   gpAxis(pad.axes[2]),
+    vert:  gpAxis(pad.axes[3], true),  // stik kanan atas = naik
+  };
+  for (const a of ["surge", "sway", "yaw", "vert"]) {
+    if (next[a] !== gpLast[a]) {
+      gpLast[a] = next[a];
+      setAxis(a, next[a], true);
+      sendCmd(a, next[a]);
+    }
+  }
+
+  // tombol: LB(4)=gripper open · RB(5)=gripper close · Start(9)=STOP
+  if (gpPressed(pad, 4)) els.btnGripOpen.click();
+  if (gpPressed(pad, 5)) els.btnGripClose.click();
+  if (gpPressed(pad, 9)) els.btnStop.click();
+}
+window.addEventListener("gamepadconnected", (e) => {
+  log(`Gamepad tersambung: ${e.gamepad.id}`, "ok");
+  if (activeController === "Gamepad") els.ctrlBadge.textContent = "Active: Gamepad ●";
+});
+window.addEventListener("gamepaddisconnected", (e) => {
+  log(`Gamepad terputus: ${e.gamepad.id}`, "warn");
+  if (activeController === "Gamepad") {
+    els.ctrlBadge.textContent = "Active: Gamepad";
+    ["surge", "sway", "yaw", "vert"].forEach((a) => { setAxis(a, 0); sendCmd(a, 0); });
+  }
+});
+requestAnimationFrame(pollGamepad);
 
 /* set surface level */
 $("btnSetSurface").onclick = () => {
