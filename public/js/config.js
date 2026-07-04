@@ -23,8 +23,8 @@ export const CONFIG = {
   POOL_DEPTH: 0.9,
 
   // ambang kedalaman berbahaya (meter) untuk alarm audio
-  // Kolam dangkal 0.9 m: beri margin ~0.15 m dari dasar sebelum alarm.
-  DANGER_DEPTH: 0.75,
+  // Kolam dangkal 0.9 m: alarm hanya saat sangat dekat dasar (margin ~0.05 m).
+  DANGER_DEPTH: 0.85,
 
   // konfigurasi thruster (ArduSub mixer) — KKI 2026 maksimal 6 thruster
   THRUSTER: {

@@ -49,6 +49,7 @@ export const missionPage = {
             <button class="chip" id="msReset">Reset</button>
             <button class="chip" id="msCruise" aria-pressed="true">Auto-cruise</button>
             <button class="chip" id="msFollow" aria-pressed="false">Follow</button>
+            <button class="chip" id="msSave">Save PNG</button>
           </div>
           <div class="mission__hint" id="msHint">Tekan <b>Start</b> untuk mulai merekam lintasan</div>
         </div>
@@ -73,6 +74,7 @@ export const missionPage = {
       this.follow = !this.follow;
       followBtn.setAttribute("aria-pressed", String(this.follow));
     };
+    root.querySelector("#msSave").onclick = () => this._savePng();
 
     this._buildScene(root.querySelector("#missionStage"));
     this.clock = new THREE.Clock();
@@ -86,7 +88,7 @@ export const missionPage = {
     const camera = new THREE.PerspectiveCamera(50, w / h, 0.1, 500);
     camera.position.set(8, 9, 12);
 
-    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(w, h);
     container.appendChild(renderer.domElement);
@@ -287,6 +289,17 @@ export const missionPage = {
   _pause() {
     this.recording = false;
     log("Mission: lintasan dijeda", "warn");
+  },
+  /* ekspor peta trajectory ke PNG (dokumentasi lintasan awal→akhir untuk KKI) */
+  _savePng() {
+    if (!this.three) return;
+    const t = this.three;
+    t.renderer.render(t.scene, t.camera); // pastikan frame terbaru sebelum capture
+    const a = document.createElement("a");
+    a.href = t.renderer.domElement.toDataURL("image/png");
+    a.download = `hydroship_trajectory_${Date.now()}.png`;
+    a.click();
+    log("Mission: trajectory disimpan (PNG)", "ok");
   },
   _reset() {
     this.recording = false;

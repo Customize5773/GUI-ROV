@@ -59,7 +59,10 @@ export const cameraPage = {
       cell.innerHTML = `
         <div class="camcell__bar">
           <span class="camcell__name">${c.id} <b>${c.role || ""}</b></span>
-          <button class="chip chip--ghost" data-full="${i}">⛶</button>
+          <div class="camcell__actions">
+            <button class="chip chip--ghost" data-snap="${i}" title="Snapshot frame ini">⤓</button>
+            <button class="chip chip--ghost" data-full="${i}">⛶</button>
+          </div>
         </div>
         <div class="camcell__view" id="camView${i}">
           <img id="camImg${i}" alt="${c.id}" />
@@ -92,6 +95,11 @@ export const cameraPage = {
       // fullscreen per sel → tampilkan kamera lain di PiP
       const fs = makeFullscreen(view, { onToggle: (on) => this._onCellFs(i, on) });
       cell.querySelector(`[data-full="${i}"]`).onclick = () => fs.toggle();
+      cell.querySelector(`[data-snap="${i}"]`).onclick = () => {
+        const tag = `hydroship_${(c.role || c.id).toLowerCase()}`;
+        if (snapshotImage(img, tag)) log(`Snapshot ${c.id} (${c.role || ""})`, "ok");
+        else log(`Tidak ada frame ${c.id} untuk snapshot`, "warn");
+      };
       return { cell, view, img, no, pip, pipImg, pipNo, pipLabel, fs, fsOn: false };
     });
     // interaksi PiP (klik tukar, geser, resize) untuk tiap sel

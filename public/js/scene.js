@@ -10,6 +10,13 @@ export class RovScene {
     this.target = { roll: 0, pitch: 0, yaw: 0 }; // derajat
     this.current = { roll: 0, pitch: 0, yaw: 0 };
 
+    // status chip viewport (Follow ROV / Preview AIR / Echo)
+    this.follow = false;
+    this.echo = false;
+    this._echoT = 0;
+    this._camGoal = null;   // target lerp posisi kamera (Preview AIR)
+    this._homePos = null;   // posisi kamera default untuk kembali dari Preview AIR
+
     this.scene = new THREE.Scene();
     this.scene.fog = new THREE.FogExp2(0x05121a, 0.16);
 
@@ -66,6 +73,16 @@ export class RovScene {
     ring.rotation.x = Math.PI / 2;
     ring.position.y = -0.45;
     this.scene.add(ring);
+
+    // cincin "echo" sonar (chip Echo) — ping yang mengembang, tersembunyi sampai aktif
+    this.echoRing = new THREE.Mesh(
+      new THREE.RingGeometry(0.98, 1.0, 64),
+      new THREE.MeshBasicMaterial({ color: SONAR, transparent: true, opacity: 0, side: THREE.DoubleSide })
+    );
+    this.echoRing.rotation.x = -Math.PI / 2;
+    this.echoRing.position.y = -0.44;
+    this.echoRing.visible = false;
+    this.scene.add(this.echoRing);
 
     // mata angin N/E/S/W
     const dirs = [["N", 0], ["E", 90], ["S", 180], ["W", 270]];
@@ -178,6 +195,28 @@ export class RovScene {
     this.target.yaw = yaw || 0;
   }
 
+  /* chip "Follow ROV": kunci azimut kamera ke heading ROV (chase-cam). Polar &
+     zoom tetap bisa diatur pengguna; hanya arah horizontal yang mengikuti. */
+  setFollow(on) { this.follow = !!on; }
+
+  /* chip "Preview AIR": pindahkan kamera ke pandangan atas-air (bird's-eye) lalu
+     kembali ke posisi semula saat dimatikan. Transisi mulus via lerp di _animate. */
+  setPreviewAir(on) {
+    if (on) {
+      if (!this._homePos) this._homePos = this.camera.position.clone();
+      this._camGoal = new THREE.Vector3(0.01, 4.2, 0.01); // hampir tepat di atas ROV
+    } else {
+      this._camGoal = (this._homePos || new THREE.Vector3(1.6, 1.15, 1.9)).clone();
+    }
+  }
+
+  /* chip "Echo": ping sonar mengembang berulang di bidang kompas. */
+  setEcho(on) {
+    this.echo = !!on;
+    this._echoT = 0;
+    if (this.echoRing) this.echoRing.visible = !!on;
+  }
+
   _resize() {
     const w = this.container.clientWidth;
     const h = this.container.clientHeight;
@@ -200,6 +239,34 @@ export class RovScene {
       this.rov.rotation.x = THREE.MathUtils.degToRad(this.current.pitch);
       this.rov.rotation.z = THREE.MathUtils.degToRad(-this.current.roll);
     }
+
+    // chase-cam (Follow ROV): geser azimut kamera menuju heading ROV secara halus
+    if (this.follow && !this._camGoal) {
+      const desired = Math.PI - THREE.MathUtils.degToRad(this.current.yaw);
+      let d = desired - this.controls.getAzimuthalAngle();
+      while (d > Math.PI) d -= 2 * Math.PI;
+      while (d < -Math.PI) d += 2 * Math.PI;
+      this.controls.setAzimuthalAngle(this.controls.getAzimuthalAngle() + d * 0.1);
+    }
+
+    // Preview AIR: transisi posisi kamera ke target lalu serahkan lagi ke kontrol
+    if (this._camGoal) {
+      this.camera.position.lerp(this._camGoal, 0.08);
+      if (this.camera.position.distanceTo(this._camGoal) < 0.02) {
+        this.camera.position.copy(this._camGoal);
+        this._camGoal = null;
+      }
+    }
+
+    // Echo: ping sonar mengembang & memudar, berulang
+    if (this.echo && this.echoRing) {
+      this._echoT += 0.016;
+      const p = (this._echoT % 1.4) / 1.4;
+      const s = 0.15 + p * 1.4;
+      this.echoRing.scale.set(s, s, s);
+      this.echoRing.material.opacity = 0.6 * (1 - p);
+    }
+
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
   }
