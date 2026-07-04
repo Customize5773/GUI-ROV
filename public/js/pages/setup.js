@@ -213,6 +213,8 @@ export const setupPage = {
       if (Number.isFinite(danger) && danger > 0) CONFIG.DANGER_DEPTH = danger;
       this.els.poolInfo.textContent = `Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m`;
       saveSetup();
+      // beri tahu Control agar depth-tape di-skala ulang mengikuti pool depth baru
+      window.dispatchEvent(new Event("hydroship:pool-depth"));
       sendCmd("pool_depth", CONFIG.POOL_DEPTH);
       log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m`, "ok");
     };

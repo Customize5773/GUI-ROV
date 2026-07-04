@@ -151,13 +151,16 @@ function num(v, d = 1) {
 
 /*  depth tape — skala mengikuti kedalaman kolam (CONFIG.POOL_DEPTH) supaya
     berguna baik di kolam dangkal KKI (~0.9 m) maupun kolam uji yang lebih dalam. */
-const TAPE = (() => {
+let TAPE;
+function computeTape() {
   const d = CONFIG.POOL_DEPTH || 3;
   if (d <= 2) return { min: -0.2, max: d + 0.3, minor: 0.1, major: 0.5, px: 200 };
   if (d <= 5) return { min: -0.5, max: d + 0.5, minor: 0.5, major: 1,   px: 90 };
   return { min: -1, max: d + 1, minor: 1, major: 2, px: 48 };
-})();
+}
 function buildTape() {
+  TAPE = computeTape();
+  els.tapeScale.innerHTML = "";   // rebuild bersih (dipanggil ulang saat pool depth diubah)
   const frag = document.createDocumentFragment();
   const steps = Math.round((TAPE.max - TAPE.min) / TAPE.minor);
   for (let i = 0; i <= steps; i++) {
@@ -172,6 +175,8 @@ function buildTape() {
   els.tapeScale.appendChild(frag);
 }
 buildTape();
+// rescale saat pool depth diubah di halaman Setup
+window.addEventListener("hydroship:pool-depth", buildTape);
 function updateTape(depth) {
   const h = els.tapeScale.parentElement.clientHeight;
   els.tapeScale.querySelectorAll(".tape__mark").forEach((el) => {
