@@ -2,7 +2,7 @@
 // (CAM 1 = BOTTOM, CAM 2 = WALL) + deteksi QR Code di feed BOTTOM.
 // QR menentukan sisi dinding (A/B/C/D) tempat payload digantung.
 import { CONFIG } from "../config.js";
-import { log, num, snapshotImage, makeFullscreen } from "../core.js";
+import { log, num, snapshotImage, makeFullscreen, camProxy } from "../core.js";
 
 export const cameraPage = {
   streaming: false,
@@ -112,8 +112,7 @@ export const cameraPage = {
         const url = wrap.querySelector(`#camUrl${i}`).value.trim();
         c.url = url;
         if (i === 0) { CONFIG.CAMERA_URL = url; window.dispatchEvent(new Event("hydroship:camera-url")); }
-        this.els.cells[i].img.crossOrigin = "anonymous"; // izinkan getImageData utk QR (perlu CORS server)
-        if (this.streaming && url) this.els.cells[i].img.src = url;
+        if (this.streaming && url) this.els.cells[i].img.src = camProxy(url);
         log(`URL ${c.id} (${c.role}) diset`, "ok");
       };
     });
@@ -154,8 +153,7 @@ export const cameraPage = {
     if (on && cams.length >= 2) {
       cell.pipLabel.textContent = `${cams[other].id} ${cams[other].role || ""}`.trim();
       if (this.streaming && cams[other].url) {
-        cell.pipImg.crossOrigin = "anonymous";
-        cell.pipImg.src = cams[other].url;
+        cell.pipImg.src = camProxy(cams[other].url);
       } else {
         cell.pipImg.removeAttribute("src");
         cell.pipImg.style.display = "none";
@@ -228,7 +226,7 @@ export const cameraPage = {
     this.els.state.classList.toggle("badge--active", this.streaming);
     (CONFIG.CAMERAS || []).forEach((c, i) => {
       const cell = this.els.cells[i];
-      if (this.streaming && c.url) { cell.img.crossOrigin = "anonymous"; cell.img.src = c.url; }
+      if (this.streaming && c.url) { cell.img.src = camProxy(c.url); }
       else { cell.img.removeAttribute("src"); cell.no.style.display = "flex"; }
     });
     log(this.streaming ? "Stream kamera dimulai" : "Stream kamera dihentikan", this.streaming ? "ok" : "warn");
@@ -250,17 +248,26 @@ export const cameraPage = {
   },
 
   _decode(source, w, h) {
+    const sw = w || source.naturalWidth || source.width;
+    const sh = h || source.naturalHeight || source.height;
+    if (!sw || !sh) return null;
+    // Perkecil ke maks 800 px sisi terpanjang: jsQR tetap akurat, tapi getImageData
+    // jauh lebih ringan (penting saat scan feed 1080p ~6x/detik di laptop venue).
+    const scale = Math.min(1, 800 / Math.max(sw, sh));
+    const cw = Math.max(1, Math.round(sw * scale));
+    const ch = Math.max(1, Math.round(sh * scale));
     const cv = this.scanCanvas;
-    cv.width = w || source.naturalWidth || source.width;
-    cv.height = h || source.naturalHeight || source.height;
+    cv.width = cw;
+    cv.height = ch;
     const ctx = cv.getContext("2d", { willReadFrequently: true });
     try {
-      ctx.drawImage(source, 0, 0, cv.width, cv.height);
-      const data = ctx.getImageData(0, 0, cv.width, cv.height);
-      return window.jsQR(data.data, cv.width, cv.height);
+      ctx.drawImage(source, 0, 0, cw, ch);
+      const data = ctx.getImageData(0, 0, cw, ch);
+      return window.jsQR(data.data, cw, ch);
     } catch (e) {
-      // CORS taint → getImageData diblokir
-      this.els.qrStatus.textContent = "Feed cross-origin: aktifkan CORS di server kamera, atau pakai 'Scan dari gambar'";
+      // Canvas ter-taint → getImageData diblokir. Normalnya tak terjadi karena feed
+      // diambil same-origin lewat proxy /cam; jaring pengaman bila feed dimuat langsung.
+      this.els.qrStatus.textContent = "Feed tidak same-origin: pastikan lewat proxy /cam, atau pakai 'Scan dari gambar'";
       return null;
     }
   },
@@ -268,12 +275,15 @@ export const cameraPage = {
   _scanFile(file) {
     if (!file || !window.jsQR) return;
     const im = new Image();
+    const url = URL.createObjectURL(file);
     im.onload = () => {
       const code = this._decode(im, im.naturalWidth, im.naturalHeight);
       if (code) this._setQR(code.data, "QR dari gambar");
       else this._setQR(null, "Tidak ada QR pada gambar");
+      URL.revokeObjectURL(url); // bebaskan memori setelah decode
     };
-    im.src = URL.createObjectURL(file);
+    im.onerror = () => { URL.revokeObjectURL(url); this._setQR(null, "Gagal memuat gambar"); };
+    im.src = url;
   },
 
   /* tampilkan hasil QR + sisi A/B/C/D */
@@ -288,8 +298,9 @@ export const cameraPage = {
       return;
     }
     this.els.qrData.textContent = data;
-    // ambil huruf A-D yang berdiri sendiri (tidak diapit huruf lain), mis. "A", "SIDE_B", "WALL-C"
-    const m = String(data).toUpperCase().match(/(?<![A-Z])([ABCD])(?![A-Z])/);
+    // ambil huruf A-D yang berdiri sendiri (tidak diapit huruf lain), mis. "A", "SIDE_B", "WALL-C".
+    // Tanpa lookbehind (?<!) agar kompatibel di semua browser (mis. Safari lama).
+    const m = String(data).toUpperCase().match(/(?:^|[^A-Z])([ABCD])(?![A-Z])/);
     const side = m ? m[1] : "?";
     this.els.qrSide.textContent = side;
     this.els.qrSide.className = "qr__side qr__side--" + (side === "?" ? "unknown" : "ok");

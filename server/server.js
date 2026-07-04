@@ -12,6 +12,7 @@
 //   RPI_ADDR=192.168.2.2 WS_PORT=8080 UDP_IN=14551 UDP_OUT=14550 node server.js
 
 const http = require("http");
+const https = require("https");
 const dgram = require("dgram");
 const fs = require("fs");
 const path = require("path");
@@ -31,8 +32,44 @@ const MIME = {
   ".json": "application/json", ".glb": "model/gltf-binary",
   ".fbx": "application/octet-stream", ".png": "image/png", ".svg": "image/svg+xml",
 };
+// Host tujuan yang boleh di-proxy (umbilical LAN). Cegah open-proxy ke internet.
+// Set CAM_ALLOW_ANY=1 untuk menonaktifkan pembatasan (mis. uji lab).
+function isAllowedCamHost(host) {
+  if (process.env.CAM_ALLOW_ANY === "1") return true;
+  if (!host) return false;
+  if (host === "localhost" || host.endsWith(".local")) return true;
+  // IPv4 privat: 127/8, 10/8, 192.168/16, 172.16–31/12
+  const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
+  if (!m) return false;
+  const [a, b] = [Number(m[1]), Number(m[2])];
+  return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
+}
+
 const httpServer = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split("?")[0]);
+
+  // Proxy stream kamera → dashboard mengambilnya SAME-ORIGIN, jadi tak perlu CORS
+  // di server kamera dan getImageData (deteksi QR) tidak ter-taint.
+  if (urlPath === "/cam") {
+    const target = new URL(req.url, `http://localhost:${WS_PORT}`).searchParams.get("url");
+    if (!target) { res.writeHead(400); return res.end("param 'url' wajib"); }
+    let t;
+    try { t = new URL(target); } catch { res.writeHead(400); return res.end("url tidak valid"); }
+    if (t.protocol !== "http:" && t.protocol !== "https:") { res.writeHead(400); return res.end("protokol tidak didukung"); }
+    if (!isAllowedCamHost(t.hostname)) { res.writeHead(403); return res.end("host kamera tidak diizinkan"); }
+    const mod = t.protocol === "https:" ? https : http;
+    const up = mod.get(target, (upRes) => {
+      res.writeHead(upRes.statusCode || 502, upRes.headers);
+      upRes.pipe(res);
+    });
+    up.on("error", (e) => {
+      if (!res.headersSent) res.writeHead(502);
+      res.end("kamera upstream error: " + e.message);
+    });
+    req.on("close", () => up.destroy());
+    return;
+  }
+
   if (urlPath === "/") urlPath = "/index.html";
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
   if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); return res.end("Forbidden"); }
@@ -117,7 +154,8 @@ if (SIM) {
       type: "telemetry",
       data: {
         heading: (90 + 45 * Math.sin(t * 0.2) + 360) % 360,
-        depth: 3 + 1.8 * Math.sin(t * 0.13),
+        // Kolam KKI 2026 dangkal (~0.9 m) → depth ~0.1–0.8 m agar ALT & alarm realistis.
+        depth: 0.45 + 0.35 * Math.sin(t * 0.13),
         roll: 10 * Math.sin(t * 0.6),
         pitch: 7 * Math.sin(t * 0.4 + 1),
         temp: 26.5 + Math.sin(t * 0.05),

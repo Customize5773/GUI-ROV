@@ -2,8 +2,8 @@ export const CONFIG = {
   WS_URL: `ws://${location.hostname || "localhost"}:8080`,
 
   // identitas tim (tampil di header) — isi sesuai tim & kampus
-  TEAM_NAME: "Nama Tim",
-  UNIVERSITY: "Perguruan Tinggi",
+  TEAM_NAME: "HYDROSHIP MRC",
+  UNIVERSITY: "Politeknik Perkapalan Negeri Surabaya",
 
   //http://192.168.2.2:8080/?action=stream
   CAMERA_URL: "",
@@ -19,10 +19,12 @@ export const CONFIG = {
   MODEL_URL: "models/rov.fbx",
 
   // kedalaman kolam uji (meter) — dipakai halaman Setup & altitude
-  POOL_DEPTH: 3.0,
+  // Arena KKI 2026: kedalaman air 0.7–0.9 m (pakai 0.9 m).
+  POOL_DEPTH: 0.9,
 
   // ambang kedalaman berbahaya (meter) untuk alarm audio
-  DANGER_DEPTH: 2.8,
+  // Kolam dangkal 0.9 m: beri margin ~0.15 m dari dasar sebelum alarm.
+  DANGER_DEPTH: 0.75,
 
   // konfigurasi thruster (ArduSub mixer) — KKI 2026 maksimal 6 thruster
   THRUSTER: {

@@ -1,6 +1,6 @@
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
-import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen } from "./core.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
@@ -377,9 +377,8 @@ function stopDemo() {
 function maybeDemo() { if (CONFIG.DEMO_ON_START && !demo) startDemo(); }
 
 /*  kamera  */
-// crossOrigin wajib agar snapshot/record (canvas) tidak ter-taint oleh stream
-// MJPEG lintas-asal dari Raspi; onload/onerror dipasang sekali di sini.
-els.camImg.crossOrigin = "anonymous";
+// Feed diambil lewat proxy same-origin (camProxy), jadi snapshot/record (canvas)
+// tidak ter-taint tanpa perlu crossOrigin. onload/onerror dipasang sekali di sini.
 els.camImg.onload = () => {
   els.camNoSignal.style.display = "none";
   els.camTag.textContent = "LIVE";
@@ -402,8 +401,9 @@ function applyControlCamera() {
     if (els.camRes) els.camRes.textContent = "—";
     return;
   }
-  // bust cache agar re-apply URL sama tetap memicu load ulang
-  els.camImg.src = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
+  // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
+  const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
+  els.camImg.src = camProxy(bust);
 }
 applyControlCamera();
 window.addEventListener("hydroship:camera-url", applyControlCamera);
