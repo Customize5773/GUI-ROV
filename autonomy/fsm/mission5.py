@@ -47,6 +47,7 @@ log = logging.getLogger(__name__)
 DEPTH_TARGET_BOTTOM   = 0.70   # m — target depth ke dasar (0.7-0.9m pool)
 DEPTH_TARGET_SURFACE  = 0.05   # m — threshold "di permukaan"
 DEPTH_TOLERANCE       = 0.05   # m — toleransi depth
+HOOK_DEPTH            = 0.45   # m — kedalaman hook dari dasar (lihat gambar arena KKI)
 
 DIVE_SPEED            = 30     # % thruster vertikal saat menyelam
 ASCEND_SPEED          = 30     # % thruster vertikal saat naik
@@ -94,7 +95,7 @@ class State(Enum):
 class TelemetryReceiver:
     """Dengarkan telemetri JSON dari rov_link.py di port 14551."""
 
-    def __init__(self, host='0.0.0.0', port=14551):
+    def __init__(self, host='0.0.0.0', port=14552):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.bind((host, port))
         self._sock.settimeout(0.5)
@@ -222,12 +223,12 @@ class Mission5FSM:
     def _loop(self):
         while self._running and self._state not in (State.DONE, State.ABORT):
             telem = self.telem.get()
-            vis   = self.vision.last_result()
 
             if self._state == State.DIVE:
                 self._state_dive(telem)
             elif self._state == State.SCAN_QR:
-                self._state_scan_qr(telem, vis)
+                # pakai deteksi QR yang MASIH SEGAR agar tak transisi dari hasil basi
+                self._state_scan_qr(telem, self.vision.latest_qr(max_age=1.0))
             elif self._state == State.GRAB:
                 self._state_grab(telem)
             elif self._state == State.NAV_WALL:
@@ -479,7 +480,7 @@ class Mission5FSM:
 
         # Phase 1: selam kembali ke level hook (0-8s)
         if elapsed < 8.0:
-            if depth < 0.45:  # hook ada di kedalaman 0.45m (lihat panduan)
+            if depth < HOOK_DEPTH:  # hook di kedalaman HOOK_DEPTH dari dasar (lihat panduan)
                 self.cmd.send(vert=-DIVE_SPEED)
                 log.debug("[FSM] AUTO_RELEASE selam ke hook depth=%.2f", depth)
             else:
@@ -543,7 +544,9 @@ def main():
     ap = argparse.ArgumentParser(description='Mission 5 FSM — KKI 2026 ROV')
     ap.add_argument('--server', default='127.0.0.1', help='IP rov_link')
     ap.add_argument('--cmd-port', type=int, default=14550, help='Port command ke rov_link')
-    ap.add_argument('--telem-port', type=int, default=14551, help='Port telemetri dari rov_link')
+    ap.add_argument('--telem-port', type=int, default=14552,
+                    help='Port telemetri dari rov_link (14552 = fan-out FSM via '
+                         'rov_link --telem-extra; 14551 dipakai server.js/GUI)')
     ap.add_argument('--vision', default='mock', choices=['mock', 'usb', 'rtsp'],
                     help='Sumber kamera')
     ap.add_argument('--device', type=int, default=0, help='Index USB webcam')

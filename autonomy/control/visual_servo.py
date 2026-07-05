@@ -82,14 +82,16 @@ class VisualServo:
         kp_sway=45.0, kp_surge=40.0, kp_vert=35.0, kp_yaw=0.0,
         ki=0.0, kd=0.0,
         max_speed=35.0,         # batas command (%) — pelan utk presisi
-        invert_sway=False, invert_vert=False, invert_yaw=False,
+        invert_sway=False, invert_vert=False, invert_yaw=False, invert_surge=False,
         aligned_frames=5,       # butuh N step beruntun "in-tolerance" agar aligned
     ):
         self.tol_norm, self.tol_area = tol_norm, tol_area
         self.max_speed = max_speed
+        self.aligned_frames = aligned_frames
         self.s_sway = -1 if invert_sway else 1
         self.s_vert = -1 if invert_vert else 1
         self.s_yaw = -1 if invert_yaw else 1
+        self.s_surge = -1 if invert_surge else 1
         self.use_yaw = kp_yaw != 0.0
         self.target_area = target_area
         self._pid_sway = PID(kp_sway, ki, kd, max_speed)
@@ -110,12 +112,12 @@ class VisualServo:
 
         sway = self.s_sway * self._pid_sway.step(ex, dt)
         vert = self.s_vert * self._pid_vert.step(-ey, dt)
-        surge = self._pid_surge.step(ea, dt)
+        surge = self.s_surge * self._pid_surge.step(ea, dt)
         yaw = self.s_yaw * self._pid_yaw.step(ex, dt) if self.use_yaw else 0.0
 
         in_tol = abs(ex) < self.tol_norm and abs(ey) < self.tol_norm and abs(ea) < self.tol_area
         self._hits = self._hits + 1 if in_tol else 0
-        aligned = self._hits >= 5
+        aligned = self._hits >= self.aligned_frames
 
         return ServoOutput(surge=surge, sway=sway, yaw=yaw, vert=vert,
                            aligned=aligned, ex=ex, ey=ey, ea=ea)
@@ -151,13 +153,16 @@ class PoseServo:
         kp_sway=140.0, kp_surge=140.0, kp_vert=110.0, kp_yaw=0.0,
         ki=0.0, kd=0.0,
         max_speed=35.0,
-        invert_sway=False, invert_vert=False, invert_yaw=False,
+        invert_sway=False, invert_vert=False, invert_yaw=False, invert_surge=False,
+        aligned_frames=5,       # butuh N step beruntun "in-tolerance" agar aligned
     ):
         self.target_dist = target_dist
         self.tol_xy, self.tol_dist, self.tol_yaw = tol_xy, tol_dist, tol_yaw
+        self.aligned_frames = aligned_frames
         self.s_sway = -1 if invert_sway else 1
         self.s_vert = -1 if invert_vert else 1
         self.s_yaw = -1 if invert_yaw else 1
+        self.s_surge = -1 if invert_surge else 1
         self.use_yaw = kp_yaw != 0.0
         self._pid_sway = PID(kp_sway, ki, kd, max_speed)
         self._pid_surge = PID(kp_surge, ki, kd, max_speed)
@@ -173,14 +178,14 @@ class PoseServo:
     def step(self, x, y, z, yaw_deg=0.0, dt=0.1) -> PoseServoOutput:
         ez = z - self.target_dist          # + = terlalu jauh → maju
         sway = self.s_sway * self._pid_sway.step(x, dt)     # marker kanan (x>0) → geser kanan
-        surge = self._pid_surge.step(ez, dt)
+        surge = self.s_surge * self._pid_surge.step(ez, dt)
         vert = self.s_vert * self._pid_vert.step(-y, dt)    # marker bawah (y>0) → turun
         yaw = self.s_yaw * self._pid_yaw.step(yaw_deg, dt) if self.use_yaw else 0.0
 
         in_tol = (abs(x) < self.tol_xy and abs(y) < self.tol_xy and abs(ez) < self.tol_dist
                   and (not self.use_yaw or abs(yaw_deg) < self.tol_yaw))
         self._hits = self._hits + 1 if in_tol else 0
-        aligned = self._hits >= 5
+        aligned = self._hits >= self.aligned_frames
 
         return PoseServoOutput(surge=surge, sway=sway, yaw=yaw, vert=vert,
                                aligned=aligned, x=x, y=y, z=z)
