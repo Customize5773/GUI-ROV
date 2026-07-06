@@ -89,16 +89,19 @@ class VisionPipeline:
         aruco_dict: str = 'DICT_4X4_50',
         calib_file: Optional[str] = None,
         marker_length: float = 0.10,
+        qr_length: float = 0.04,
     ):
         """
         Parameters
         ----------
-        source      : 'mock' | 'usb' | 'rtsp'
-        device      : index USB webcam (default 0)
-        rtsp_url    : URL RTSP/HTTP jika source='rtsp'
-        callback    : fungsi dipanggil tiap deteksi
-        fps         : target frame-rate capture
-        aruco_dict  : nama kamus ArUco (cv2.aruco.DICT_*)
+        source        : 'mock' | 'usb' | 'rtsp'
+        device        : index USB webcam (default 0)
+        rtsp_url      : URL RTSP/HTTP jika source='rtsp'
+        callback      : fungsi dipanggil tiap deteksi
+        fps           : target frame-rate capture
+        aruco_dict    : nama kamus ArUco (cv2.aruco.DICT_*)
+        marker_length : sisi fisik marker ArUco (m) utk solvePnP
+        qr_length     : sisi fisik QR payload (m) utk solvePnP — KKI 2026 = 0.04 (4×4 cm)
         """
         self.source = source
         self.device = device
@@ -114,6 +117,7 @@ class VisionPipeline:
 
         # Kalibrasi kamera utk PBVS (solvePnP). Bila tak ada → pose=None (fallback IBVS).
         self.marker_length = marker_length
+        self.qr_length = qr_length
         self._K = None
         self._dist = None
         if calib_file and CV2_OK:
@@ -170,25 +174,44 @@ class VisionPipeline:
         else:
             log.error("[vision] opencv tidak tersedia dan source bukan mock")
 
+    # Parameter mock docking (mensimulasikan QR payload yang makin center & dekat)
+    MOCK_QR_DATA        = 'HYDROSHIP-M5-C'   # data QR payload (wall C) — sama format print PDF
+    MOCK_FAR_SEC        = 3.0                 # detik "jauh & off-center" sebelum konvergen
+    MOCK_CONVERGE_SEC   = 3.0                 # durasi ramp jauh → aligned
+    MOCK_TARGET_AREA    = 3000.0             # px² saat engage (samakan dgn SERVO_TARGET_AREA FSM)
+    MOCK_TARGET_DIST    = 0.30              # m saat engage (samakan dgn SERVO_TARGET_DIST FSM)
+
     def _run_mock(self):
-        """Simulasi deteksi: kirim QR 'A' setelah 2 detik, lalu 'B', dst."""
-        log.info("[vision] Mock mode aktif — simulasi deteksi QR")
-        sequence = [
-            (2.0,  'qr',    'A', (320, 240)),
-            (8.0,  'qr',    'C', (300, 260)),
-            (15.0, 'aruco', '7', (310, 250)),
-        ]
+        """Simulasi deteksi payload QR untuk uji closed-loop misi 5 tanpa kamera.
+
+        QR dipancarkan terus-menerus (dipakai SCAN_QR di misi 1 & docking di misi 5).
+        Error (center & pose) meluruh dari 'jauh/off-center' → 'aligned' dalam
+        MOCK_FAR_SEC + MOCK_CONVERGE_SEC detik, sehingga PoseServo/VisualServo mencapai
+        aligned dan FSM berjalan sampai selesai. Pose hanya dipancarkan bila kalibrasi
+        dimuat (self._K) — meniru perilaku kamera nyata (kalib → PBVS, tanpa → IBVS)."""
+        log.info("[vision] Mock mode aktif — simulasi payload QR (%s)", self.MOCK_QR_DATA)
         t0 = time.time()
-        idx = 0
         while self._running:
-            now = time.time() - t0
-            if idx < len(sequence):
-                delay, det_type, data, center = sequence[idx]
-                if now >= delay:
-                    frame = self._mock_frame(det_type, data, center)
-                    result = self._build_result(det_type, data, center, 2500.0, frame)
-                    self._dispatch(result)
-                    idx += 1
+            t = time.time() - t0
+            if t < self.MOCK_FAR_SEC:
+                err = 1.0
+            elif t < self.MOCK_FAR_SEC + self.MOCK_CONVERGE_SEC:
+                err = 1.0 - (t - self.MOCK_FAR_SEC) / self.MOCK_CONVERGE_SEC
+            else:
+                err = 0.0
+
+            # center meluruh ke tengah frame (320,240); area membesar ke target
+            cx = int(320 + 140 * err)
+            cy = int(240 + 90 * err)
+            area = self.MOCK_TARGET_AREA * (1.0 - 0.6 * err)
+            frame = self._mock_frame('qr', self.MOCK_QR_DATA, (cx, cy))
+            result = self._build_result('qr', self.MOCK_QR_DATA, (cx, cy), area, frame)
+
+            if self._K is not None:   # kalibrasi ada → sediakan pose (PBVS), spt kamera nyata
+                z = self.MOCK_TARGET_DIST + 0.5 * err
+                result['pose'] = {'x': 0.18 * err, 'y': 0.12 * err, 'z': z,
+                                  'dist': z, 'yaw_deg': 10.0 * err}
+            self._dispatch(result)
             time.sleep(1.0 / self.fps)
 
     def _run_camera(self):
@@ -219,6 +242,10 @@ class VisionPipeline:
                     area = float(cv2.contourArea(pts.reshape(-1, 1, 2)))
                     frame = self._annotate(frame, 'qr', data, center, pts)
                     result = self._build_result('qr', data, center, area, frame)
+                    # PBVS: pose 3D QR via solvePnP (butuh kalibrasi + 4 sudut terurut)
+                    if self._K is not None and len(pts) >= 4:
+                        ordered = self._order_corners(pts)
+                        result['pose'] = self._estimate_pose_pts(ordered, self.qr_length)
                     self._dispatch(result)
 
             # Deteksi ArUco
@@ -280,29 +307,49 @@ class VisionPipeline:
             return None
         return r
 
-    def _estimate_pose(self, corner) -> Optional[dict]:
-        """Pose marker via solvePnP (butuh kalibrasi). Camera frame: +x kanan,+y bawah,+z depan.
-        Mengembalikan {x,y,z (m), dist (m), yaw_deg}. None bila tak terkalibrasi."""
+    @staticmethod
+    def _order_corners(pts):
+        """Urutkan 4 sudut → TL, TR, BR, BL (searah jarum jam dari kiri-atas).
+
+        pyzbar `obj.polygon` tak menjamin urutan; SOLVEPNP_IPPE_SQUARE butuh winding
+        tetap yang cocok dengan objek. Metode sum/diff standar."""
+        pts = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+        s = pts.sum(axis=1)
+        d = (pts[:, 1] - pts[:, 0])         # y - x
+        tl = pts[np.argmin(s)]              # x+y terkecil
+        br = pts[np.argmax(s)]              # x+y terbesar
+        tr = pts[np.argmin(d)]              # y-x terkecil (x besar, y kecil)
+        bl = pts[np.argmax(d)]              # y-x terbesar
+        return np.array([tl, tr, br, bl], dtype=np.float32)
+
+    def _estimate_pose_pts(self, img_pts, side) -> Optional[dict]:
+        """Pose fiducial persegi via solvePnP dari 4 sudut TERURUT (TL,TR,BR,BL) + sisi (m).
+        Camera frame OpenCV: +x kanan, +y bawah, +z depan. → {x,y,z,dist (m), yaw_deg}."""
         if self._K is None or not CV2_OK:
             return None
-        L = self.marker_length
+        L = side
         objp = np.array([[-L / 2, L / 2, 0], [L / 2, L / 2, 0],
                          [L / 2, -L / 2, 0], [-L / 2, -L / 2, 0]], dtype=np.float32)
-        img = corner.reshape(4, 2).astype(np.float32)
+        img = np.asarray(img_pts, dtype=np.float32).reshape(4, 2)
         flags = getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', cv2.SOLVEPNP_ITERATIVE)
         ok, rvec, tvec = cv2.solvePnP(objp, img, self._K, self._dist, flags=flags)
         if not ok:
             return None
         x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
         R, _ = cv2.Rodrigues(rvec)
-        # yaw = skew marker thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.
+        # yaw = skew fiducial thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.
         yaw_deg = math.degrees(math.atan2(R[0, 2], R[2, 2]))
         return {'x': x, 'y': y, 'z': z, 'dist': math.sqrt(x * x + y * y + z * z),
                 'yaw_deg': yaw_deg}
 
+    def _estimate_pose(self, corner) -> Optional[dict]:
+        """Pose marker ArUco via solvePnP (butuh kalibrasi). corner shape (1,4,2) atau (4,2)."""
+        return self._estimate_pose_pts(corner.reshape(4, 2), self.marker_length)
+
     def _dispatch(self, result: dict):
-        log.info("[vision] Deteksi %s data=%s wall=%s center=%s",
-                 result['type'], result['data'], result['wall'], result['center'])
+        # debug: deteksi terjadi tiap frame saat objek di FOV → hindari banjir log INFO
+        log.debug("[vision] Deteksi %s data=%s wall=%s center=%s",
+                  result['type'], result['data'], result['wall'], result['center'])
         if self.callback:
             try:
                 self.callback(result)

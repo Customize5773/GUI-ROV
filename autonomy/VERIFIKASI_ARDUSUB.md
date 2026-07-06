@@ -27,3 +27,36 @@ print(m.mode_mapping())
 
 Saat ArduSub SITL siap, jalankan checklist ini lalu sesuaikan konstanta. Setelah
 semua ✓, point (c) lengkap "nilai-fisik".
+
+---
+
+# Checklist VERIFIKASI Misi 5 — Docking QR & Lepas Payload (di KOLAM)
+
+Konstanta di `fsm/mission5.py` (blok "Misi 5"). Servo di `control/visual_servo.py`.
+Uji BERTAHAP, dari sederhana → kompleks. **Selalu siapkan STOP/Spasi** (failsafe) tiap uji.
+
+| # | Item | Cara verifikasi | Bila salah → ubah |
+|---|------|-----------------|-------------------|
+| M1 | **Arah sumbu servo** (paling kritis) | Mode M5_DOCK, taruh QR agak KANAN frame → ROV harus geser mendekat & error MENGECIL. Ulangi utk atas/bawah (vert) & jauh/dekat (surge). | `SERVO_INVERT` di `mission5.py` — balik flag axis yang errornya MEMBESAR. |
+| M2 | **Jarak engage** | Amati jarak ROV↔payload saat status ALIGNED. Gripper harus tepat menjangkau lubang/badan payload. | `SERVO_TARGET_DIST` (PBVS, m) / `SERVO_TARGET_AREA` (IBVS, px²). |
+| M3 | **Ukuran QR & PBVS** | `--calib <npz>` + `--qr-size 0.04`. Cek pose x,y,z log wajar (z≈jarak nyata). QR 4 cm terbaca sampai jarak engage? | Kalau QR 4 cm tak terbaca di air keruh → pakai IBVS (tanpa `--calib`) atau fiducial lebih besar. |
+| M4 | **Kedalaman hook** | M5_REDIVE berhenti selam di depth payload (tip hook 0.45 m dari dasar; kolam 0.9 m ⇒ ~0.45 m dari permukaan). | `HOOK_DEPTH` (m dari permukaan). |
+| M5 | **Gerak lepas-hook (UNHOOK)** | Setelah grab: fase ANGKAT lalu TARIK harus melepas lubang payload dari candy-cane, bukan menyangkut. | `M5_UNHOOK_VERT` (angkat), `M5_UNHOOK_SURGE` (tarik, negatif=mundur), `UNHOOK_LIFT_T`, `UNHOOK_PULL_T`. |
+| M6 | **Merayap grab (ENGAGE)** | Payload masuk gripper mulus tanpa mendorong lepas dari hook sebelum tercengkeram. | `M5_ENGAGE_SURGE` + timing fase di `_state_m5_engage`. |
+| M7 | **Yaw squaring (opsional)** | Default `SERVO_KP_YAW=0.0` (NONAKTIF). Yaw dari 1 QR planar AMBIGU (dua solusi IPPE) → JANGAN aktifkan sebelum diverifikasi solid; bila perlu tegak-lurus, andalkan heading-hold ArduSub. | `SERVO_KP_YAW` — biarkan 0 kecuali sudah terbukti stabil. |
+| M8 | **Handoff GUI → autonomous** | 1-4 manual, lalu toggle header → AUTONOMOUS. FSM (sudah jalan, `--start-state M5_REDIVE`) harus mulai. Toggle balik ke MANUAL → FSM abort. | pastikan telem `mode` mengalir (rov_link `loop_telem_tx`). |
+
+## Alur uji lomba (rekomendasi)
+```
+# di Raspberry Pi, SEBELUM run:
+python fsm/mission5.py --server 127.0.0.1 --vision usb --device 0 \
+    --calib kalib.npz --qr-size 0.04 --start-state M5_REDIVE
+# → FSM menunggu. Operator kemudikan misi 1-4 via GUI (MANUAL).
+# → Setelah docking permukaan, tekan toggle header GUI: MANUAL → AUTONOMOUS.
+# → FSM otomatis jalankan misi 5 (selam ulang → dock QR → grab → lepas → naik).
+```
+
+## Status
+- [x] Jalur data + rantai state M5 (mock+SITL: M5_REDIVE→…→DONE, m5=40, PBVS & IBVS)
+- [x] Handoff mode=autonomous (uji: FSM menunggu lalu jalan saat toggle)
+- [ ] M1–M8 di atas — **butuh kolam/hardware** (arah sumbu, jarak, geometri unhook)

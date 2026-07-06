@@ -12,8 +12,9 @@ Mengeksekusi 5 misi ROV sub-kategori KKI 2026 secara autonomous:
 Cara kerja:
   - Kirim command JSON ke rov_link.py via UDP (:14550) persis seperti joystick manual
   - Terima telemetri (depth, heading, attitude) dari rov_link
-  - State machine: IDLE → DIVE → SCAN_QR → GRAB → NAV_WALL → HANG →
-                   SURFACE → DOCK → AUTO_RELEASE → DONE
+  - State machine: IDLE → DIVE → SCAN_QR → GRAB → NAV_WALL → HANG → SURFACE → DOCK →
+                   [Misi 5] M5_REDIVE → M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
+                   (Misi 5 = docking closed-loop ke QR payload; M5_FALLBACK = jalur timed degraded)
 
 Command JSON format (sama dengan server.js):
   {"surge": 0-100, "sway": 0-100, "yaw": 0-100, "vert": 0-100, "gripper": 0|1}
@@ -47,7 +48,7 @@ log = logging.getLogger(__name__)
 DEPTH_TARGET_BOTTOM   = 0.70   # m — target depth ke dasar (0.7-0.9m pool)
 DEPTH_TARGET_SURFACE  = 0.05   # m — threshold "di permukaan"
 DEPTH_TOLERANCE       = 0.05   # m — toleransi depth
-HOOK_DEPTH            = 0.45   # m — kedalaman hook dari dasar (lihat gambar arena KKI)
+HOOK_DEPTH            = 0.45   # m — kedalaman hook DARI PERMUKAAN (tip 0.45m dari dasar, kolam 0.9m; Panduan hal.52)
 
 DIVE_SPEED            = 30     # % thruster vertikal saat menyelam
 ASCEND_SPEED          = 30     # % thruster vertikal saat naik
@@ -60,19 +61,36 @@ TIMEOUT_GRAB          = 10.0   # detik max untuk ambil payload
 TIMEOUT_NAV           = 30.0   # detik max navigasi ke dinding
 TIMEOUT_HANG          = 15.0   # detik max gantung payload
 TIMEOUT_SURFACE       = 15.0   # detik max naik ke permukaan
-TIMEOUT_DOCK          = 15.0   # detik max docking
-TIMEOUT_RELEASE       = 10.0   # detik max lepas payload autonomous
+TIMEOUT_DOCK          = 15.0   # detik max docking (misi 4 surface dock)
 
 # Heading target tiap sisi kolam (sesuai orientasi kolam, kalibrasi di lokasi)
 WALL_HEADING = {'A': 270, 'B': 90, 'C': 0, 'D': 180}
 
-# Visual servo (closed-loop approach hook) — Misi 5
-HOOK_ARUCO_ID      = '7'      # ID marker ArUco di hook (sesuaikan saat lomba)
-SERVO_TARGET_AREA  = 3000.0   # IBVS: luas marker (px^2) saat jarak engage (tanpa kalibrasi)
-SERVO_TARGET_DIST  = 0.50     # PBVS: jarak engage (m) ke marker (pakai kalibrasi+solvePnP)
-MARKER_LENGTH_M    = 0.10     # sisi marker ArUco fisik (m) — utk solvePnP
+# ── Misi 5: docking closed-loop ke QR payload ("nembak x & y") ────────────────
+# Target visual = QR CODE di payload (4×4 cm), BUKAN ArUco. PBVS bila kamera terkalibrasi.
+QR_SIDE_M          = 0.04     # sisi fisik QR payload (m) — KKI 2026 = 4 cm (utk solvePnP)
+SERVO_TARGET_AREA  = 3000.0   # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
+SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payload (TUNE di kolam)
+SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
+MARKER_LENGTH_M    = 0.10     # sisi marker ArUco fisik (m) — solvePnP (dipakai bila ada ArUco)
 CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
-TIMEOUT_APPROACH   = 25.0     # detik max approach visual sebelum degradasi ke timed
+
+# Arah sumbu servo — VERIFIKASI di kolam (lihat VERIFIKASI_ARDUSUB.md). Balik bila error MEMBESAR.
+SERVO_INVERT = dict(invert_sway=False, invert_vert=False, invert_surge=False, invert_yaw=False)
+
+# Gerak mekanis lepas-hook (semua TUNE + verifikasi arah di kolam)
+M5_ENGAGE_SURGE    = 15       # % surge merayap seat payload ke gripper
+M5_UNHOOK_VERT     = 30       # % vert angkat lubang payload lepas dari ujung hook
+M5_UNHOOK_SURGE    = -20      # % surge tarik mundur agar lubang bebas dari candy-cane
+UNHOOK_LIFT_T      = 3.0      # detik fase angkat
+UNHOOK_PULL_T      = 2.0      # detik fase tarik mundur
+
+TIMEOUT_REDIVE     = 15.0     # detik max selam ulang + akuisisi QR
+TIMEOUT_M5_DOCK    = 25.0     # detik max dock visual sebelum degradasi ke fallback
+TIMEOUT_M5_ENGAGE  = 12.0     # detik max grab payload
+TIMEOUT_UNHOOK     = 10.0     # detik max lepas-hook
+TIMEOUT_M5_ASCEND  = 20.0     # detik max naik ke permukaan bawa payload
+TIMEOUT_FALLBACK   = 30.0     # detik max jalur timed (degraded, tanpa visual)
 
 
 # ── State machine states ───────────────────────────────────────────────────────
@@ -85,8 +103,13 @@ class State(Enum):
     HANG          = auto()   # Misi 3: gantung payload
     SURFACE       = auto()   # Misi 4: naik ke permukaan
     DOCK          = auto()   # Misi 4: docking di sisi dinding
-    APPROACH_HOOK = auto()   # Misi 5: approach hook closed-loop (visual servo ArUco)
-    AUTO_RELEASE  = auto()   # Misi 5: ambil payload dari hook + naik
+    # ── Misi 5 (40 poin) — rantai autonomous closed-loop lepas payload ──
+    M5_REDIVE     = auto()   # Misi 5a: selam ulang dari permukaan + akuisisi QR payload
+    M5_DOCK       = auto()   # Misi 5b: docking closed-loop ke QR (PBVS/IBVS) — "nembak x & y"
+    M5_ENGAGE     = auto()   # Misi 5c: grab payload (tetap hold x/y via pose)
+    M5_UNHOOK     = auto()   # Misi 5d: angkat lubang payload lepas dari hook
+    M5_ASCEND     = auto()   # Misi 5e: naik ke permukaan bawa payload
+    M5_FALLBACK   = auto()   # Misi 5*: jalur timed (degraded) bila visual gagal
     DONE          = auto()
     ABORT         = auto()
 
@@ -183,29 +206,54 @@ class Mission5FSM:
         self.cmd    = cmd
         self.telem  = telem
         self.vision = vision
-        self.servo      = VisualServo(target_area=SERVO_TARGET_AREA)          # IBVS (piksel)
-        self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST)            # PBVS (meter)
+        # Servo docking ke QR payload (IBVS piksel / PBVS meter). Arah sumbu = SERVO_INVERT.
+        self.servo      = VisualServo(target_area=SERVO_TARGET_AREA,
+                                      kp_yaw=SERVO_KP_YAW, **SERVO_INVERT)     # IBVS (piksel)
+        self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST,
+                                    kp_yaw=SERVO_KP_YAW, **SERVO_INVERT)       # PBVS (meter)
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
         self._target_wall: Optional[str] = None
         self._score   = {'m1': 0, 'm2': 0, 'm3': 0, 'm4': 0, 'm5': 0}
         self._running = False
+        self._require_auto = True      # bila True, abort saat mode balik ke MANUAL
 
     # ── Public API ────────────────────────────────────────────────────────────
 
-    def start(self, start_state: State = State.DIVE):
+    def start(self, start_state: State = State.DIVE, wait_mode: bool = True):
         """Mulai eksekusi misi dari state tertentu (default DIVE = full misi 1-5).
 
-        Untuk strategi 'misi 1-4 manual, hanya misi 5 autonomous':
-        jalankan operator manual via GUI sampai docking, lalu start_state=AUTO_RELEASE.
+        Strategi lomba (direkomendasikan): 'misi 1-4 manual, hanya misi 5 autonomous'.
+        Operator kemudikan 1-4 via GUI, lalu tekan toggle header → AUTONOMOUS. FSM ini
+        (sudah berjalan di Pi) MENUNGGU mode=autonomous lalu menjalankan rantai misi 5.
+
+        wait_mode : True → tunggu telemetri mode=='autonomous' sebelum eksekusi (handoff GUI).
+                    False → langsung jalan (untuk uji SITL/mock tanpa GUI).
         """
         log.info("[FSM] ===== MISI ROV KKI 2026 DIMULAI (start=%s) =====", start_state.name)
         self._running = True
+        self._require_auto = wait_mode
+        if wait_mode and not self._wait_for_autonomous():
+            log.warning("[FSM] Batal: tidak masuk mode AUTONOMOUS")
+            return
         self.cmd.arm(True)          # WAJIB: arm dulu sebelum thruster merespons
         time.sleep(0.5)
         self._transition(start_state)
         self._loop()
+
+    def _wait_for_autonomous(self, timeout: Optional[float] = None) -> bool:
+        """Blok sampai operator menekan toggle GUI → mode 'autonomous' (via rov_link telem)."""
+        log.info("[FSM] Menunggu mode AUTONOMOUS dari GUI (toggle header)... Ctrl+C batal")
+        t0 = time.time()
+        while self._running:
+            if self.telem.get().get('mode') == 'autonomous':
+                log.info("[FSM] Mode AUTONOMOUS terdeteksi — mulai eksekusi misi 5")
+                return True
+            if timeout and (time.time() - t0) > timeout:
+                return False
+            time.sleep(0.2)
+        return False
 
     def abort(self):
         """Hentikan semua gerak dan masuk ABORT (failsafe + disarm)."""
@@ -224,6 +272,12 @@ class Mission5FSM:
         while self._running and self._state not in (State.DONE, State.ABORT):
             telem = self.telem.get()
 
+            # Handoff GUI: bila operator kembalikan ke MANUAL saat autonomous → abort.
+            if self._require_auto and telem.get('mode') == 'manual':
+                log.warning("[FSM] Mode kembali ke MANUAL — abort autonomous")
+                self.abort()
+                break
+
             if self._state == State.DIVE:
                 self._state_dive(telem)
             elif self._state == State.SCAN_QR:
@@ -239,10 +293,18 @@ class Mission5FSM:
                 self._state_surface(telem)
             elif self._state == State.DOCK:
                 self._state_dock(telem)
-            elif self._state == State.APPROACH_HOOK:
-                self._state_approach_hook(telem)
-            elif self._state == State.AUTO_RELEASE:
-                self._state_auto_release(telem)
+            elif self._state == State.M5_REDIVE:
+                self._state_m5_redive(telem)
+            elif self._state == State.M5_DOCK:
+                self._state_m5_dock(telem)
+            elif self._state == State.M5_ENGAGE:
+                self._state_m5_engage(telem)
+            elif self._state == State.M5_UNHOOK:
+                self._state_m5_unhook(telem)
+            elif self._state == State.M5_ASCEND:
+                self._state_m5_ascend(telem)
+            elif self._state == State.M5_FALLBACK:
+                self._state_m5_fallback(telem)
 
             time.sleep(0.1)
 
@@ -422,94 +484,177 @@ class Mission5FSM:
                      self._target_wall)
             self.servo.reset()
             self.pose_servo.reset()
-            self._transition(State.APPROACH_HOOK)
+            self._transition(State.M5_REDIVE)
 
-    def _state_approach_hook(self, telem):
-        """Misi 5a: approach hook secara closed-loop pakai marker ArUco (visual servo).
-
-        Pusatkan marker hook di frame & capai jarak engage; bila marker hilang,
-        cari dengan yaw pelan; bila timeout, degradasi ke AUTO_RELEASE (timed)."""
-        elapsed = self._elapsed()
-        if elapsed > TIMEOUT_APPROACH:
-            log.warning("[FSM] APPROACH_HOOK timeout — degradasi ke AUTO_RELEASE timed")
-            self.cmd.stop_all()
-            self._transition(State.AUTO_RELEASE)
-            return
-
-        det = self.vision.latest_aruco(max_age=0.5, marker_id=HOOK_ARUCO_ID)
-        if det is None:
-            self.cmd.send(yaw=YAW_SPEED)   # marker hilang → sapu cari
-            log.debug("[FSM] APPROACH_HOOK mencari marker hook id=%s", HOOK_ARUCO_ID)
-            return
-
+    def _servo_step(self, det):
+        """Satu langkah visual servo dari deteksi QR. PBVS (pose 3D) bila ada, IBVS bila tidak.
+        Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Dipakai M5_DOCK & M5_ENGAGE (hold x/y)."""
         pose = det.get('pose')
-        if pose is not None:                      # PBVS — pakai pose 3D (m) bila terkalibrasi
-            out = self.pose_servo.step(pose['x'], pose['y'], pose['z'], pose['yaw_deg'], dt=0.1)
-            log.debug("[FSM] APPROACH(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
+        if pose is not None:                       # PBVS — pose 3D (m) bila terkalibrasi
+            out = self.pose_servo.step(pose['x'], pose['y'], pose['z'],
+                                       pose.get('yaw_deg', 0.0), dt=0.1)
+            log.debug("[FSM] servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
                       pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
-        else:                                      # IBVS — fallback error piksel
-            cx, cy = det['center']
-            out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
-            log.debug("[FSM] APPROACH(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
-                      out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
+            return out, 'PBVS'
+        cx, cy = det['center']                     # IBVS — fallback error piksel
+        out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+        log.debug("[FSM] servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
+                  out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
+        return out, 'IBVS'
+
+    def _state_m5_redive(self, telem):
+        """Misi 5a: dari permukaan, selam ulang ke kedalaman hook sambil akuisisi QR payload."""
+        depth   = telem.get('depth', 0.0)
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_REDIVE:
+            log.warning("[FSM] M5_REDIVE timeout — QR tak diperoleh, degradasi ke fallback timed")
+            self.cmd.stop_all()
+            self._transition(State.M5_FALLBACK)
+            return
+
+        qr   = self.vision.latest_qr(max_age=0.5)
+        near = depth >= HOOK_DEPTH - DEPTH_TOLERANCE
+
+        if qr is not None and near:
+            log.info("[FSM] QR payload diperoleh @depth=%.2f (%s) — mulai docking",
+                     depth, qr.get('data'))
+            self.cmd.stop_all()
+            self.servo.reset()
+            self.pose_servo.reset()
+            self._transition(State.M5_DOCK)
+        elif not near:
+            # Turun ke level hook; sapu pelan bila QR belum terlihat
+            yaw = 0 if qr is not None else int(YAW_SPEED * 0.6)
+            self.cmd.send(vert=-DIVE_SPEED, yaw=yaw)
+            log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=%s", depth, HOOK_DEPTH, bool(qr))
+        else:
+            self.cmd.send(yaw=YAW_SPEED)   # sudah di level hook tapi QR belum terlihat → sapu
+            log.debug("[FSM] M5_REDIVE sapu cari QR @depth=%.2f", depth)
+
+    def _state_m5_dock(self, telem):
+        """Misi 5b: docking closed-loop ke QR payload ("nembak x & y"). PBVS bila terkalibrasi.
+
+        Pusatkan x (sway→0) & y (vert→0), capai jarak engage z; QR hilang → sapu yaw;
+        timeout → degradasi ke fallback timed."""
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_M5_DOCK:
+            log.warning("[FSM] M5_DOCK timeout — degradasi ke fallback timed")
+            self.cmd.stop_all()
+            self._transition(State.M5_FALLBACK)
+            return
+
+        det = self.vision.latest_qr(max_age=0.5)
+        if det is None:
+            self.cmd.send(yaw=YAW_SPEED)   # QR hilang → sapu cari
+            log.debug("[FSM] M5_DOCK QR hilang — sapu cari")
+            return
+
+        out, mode = self._servo_step(det)
         self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert)
         if out.aligned:
-            log.info("[FSM] ✓ Hook ALIGNED (%s) — ambil payload",
-                     "PBVS" if pose is not None else "IBVS")
+            log.info("[FSM] ✓ QR payload ALIGNED (%s) — engage gripper", mode)
             self.cmd.stop_all()
-            self._transition(State.AUTO_RELEASE)
+            self._transition(State.M5_ENGAGE)
 
-    def _state_auto_release(self, telem):
-        """
-        Misi 5 (40 poin): lepas payload secara AUTONOMOUS.
-        Ini adalah misi bernilai tertinggi di KKI 2026.
+    def _state_m5_engage(self, telem):
+        """Misi 5c: grab payload — buka gripper → merayap → tutup — sambil HOLD x/y dari pose.
 
-        Urutan:
-          1. Selam kembali ke posisi hook
-          2. Ambil payload dari hook (buka gripper → tutup → tarik)
-          3. Bawa ke permukaan
-        """
+        Koreksi lateral/vertikal tetap dijalankan agar payload tetap center saat merayap
+        (rubrik menilai 'steady positioning attached to QR')."""
         elapsed = self._elapsed()
-        if elapsed > TIMEOUT_RELEASE + 20:
-            log.error("[FSM] AUTO_RELEASE timeout!")
-            self._score['m5'] = 10  # partial credit: remotely
+        if elapsed > TIMEOUT_M5_ENGAGE:
+            log.warning("[FSM] M5_ENGAGE timeout — degradasi ke fallback timed")
+            self._transition(State.M5_FALLBACK)
+            return
+
+        # Hold x/y dari deteksi QR terbaru (surge dikendalikan fase, bukan servo)
+        sway = vert = 0.0
+        det = self.vision.latest_qr(max_age=0.5)
+        if det is not None:
+            out, _ = self._servo_step(det)
+            sway, vert = out.sway, out.vert
+
+        if elapsed < 1.5:                          # buka gripper
+            self.cmd.send(surge=0, sway=sway, vert=vert, gripper=0)
+            log.debug("[FSM] M5_ENGAGE buka gripper")
+        elif elapsed < 4.5:                        # merayap seat payload ke gripper
+            self.cmd.send(surge=M5_ENGAGE_SURGE, sway=sway, vert=vert, gripper=0)
+            log.debug("[FSM] M5_ENGAGE merayap ke payload")
+        elif elapsed < 6.5:                        # tutup gripper
+            self.cmd.send(surge=0, sway=sway, vert=vert, gripper=1)
+            log.debug("[FSM] M5_ENGAGE tutup gripper — payload dicengkeram")
+        else:
+            self.cmd.stop_all()
+            self._transition(State.M5_UNHOOK)
+
+    def _state_m5_unhook(self, telem):
+        """Misi 5d: angkat lubang payload lepas dari ujung hook, lalu tarik bebas candy-cane.
+        ARAH & tinggi angkat WAJIB diverifikasi di kolam (lihat VERIFIKASI_ARDUSUB.md)."""
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_UNHOOK:
+            log.warning("[FSM] M5_UNHOOK timeout — lanjut naik dengan payload")
+            self._transition(State.M5_ASCEND)
+            return
+
+        if elapsed < UNHOOK_LIFT_T:                        # angkat lepas dari hook
+            self.cmd.send(vert=M5_UNHOOK_VERT, gripper=1)
+            log.debug("[FSM] M5_UNHOOK angkat lubang lepas hook")
+        elif elapsed < UNHOOK_LIFT_T + UNHOOK_PULL_T:      # tarik mundur bebas candy-cane
+            self.cmd.send(surge=M5_UNHOOK_SURGE, gripper=1)
+            log.debug("[FSM] M5_UNHOOK tarik mundur")
+        else:
+            self.cmd.stop_all()
+            log.info("[FSM] payload terlepas dari hook — naik ke permukaan")
+            self._transition(State.M5_ASCEND)
+
+    def _state_m5_ascend(self, telem):
+        """Misi 5e: naik ke permukaan membawa payload (gripper tetap tutup)."""
+        depth   = telem.get('depth', 0.0)
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_M5_ASCEND:
+            log.warning("[FSM] M5_ASCEND timeout depth=%.2f — kredit parsial", depth)
+            self.cmd.stop_all()
+            self._score['m5'] = 10
             self._transition(State.DONE)
             return
 
-        depth = telem.get('depth', 0.0)
-
-        # Phase 1: selam kembali ke level hook (0-8s)
-        if elapsed < 8.0:
-            if depth < HOOK_DEPTH:  # hook di kedalaman HOOK_DEPTH dari dasar (lihat panduan)
-                self.cmd.send(vert=-DIVE_SPEED)
-                log.debug("[FSM] AUTO_RELEASE selam ke hook depth=%.2f", depth)
-            else:
-                self.cmd.send(vert=0)
-        # Phase 2: maju ke hook & ambil (8-15s)
-        elif elapsed < 12.0:
-            self.cmd.send(surge=15, gripper=0)
-            log.debug("[FSM] AUTO_RELEASE mendekati hook")
-        elif elapsed < 15.0:
-            self.cmd.send(surge=0, gripper=1)
-            log.debug("[FSM] AUTO_RELEASE tutup gripper ambil payload")
-        # Phase 3: mundur dari dinding (15-18s)
-        elif elapsed < 18.0:
-            self.cmd.send(surge=-20, gripper=1)
-            log.debug("[FSM] AUTO_RELEASE mundur dari dinding")
-        # Phase 4: naik ke permukaan (18-26s)
-        elif elapsed < 26.0:
-            if depth > DEPTH_TARGET_SURFACE:
-                self.cmd.send(vert=ASCEND_SPEED, gripper=1)
-            else:
-                self.cmd.send(vert=0, gripper=1)
-            log.debug("[FSM] AUTO_RELEASE naik ke permukaan depth=%.2f", depth)
-        # Phase 5: buka gripper lepas payload & selesai
-        else:
-            self.cmd.send(gripper=0)
-            time.sleep(1.0)
+        if depth <= DEPTH_TARGET_SURFACE:
             self.cmd.stop_all()
             self._score['m5'] = 40
-            log.info("[FSM] ✓ Misi 5 AUTONOMOUS selesai (+40 poin)!")
+            log.info("[FSM] ✓ Misi 5 AUTONOMOUS selesai (+40 poin) — payload di permukaan!")
+            self._transition(State.DONE)
+            return
+        self.cmd.send(vert=ASCEND_SPEED, gripper=1)
+        log.debug("[FSM] M5_ASCEND naik depth=%.2f", depth)
+
+    def _state_m5_fallback(self, telem):
+        """Misi 5*: jalur DEGRADED timed (tanpa lock visual) — jaring pengaman bila QR gagal.
+        Tetap autonomous (tanpa kemudi manual), namun reliabilitas rendah."""
+        elapsed = self._elapsed()
+        depth   = telem.get('depth', 0.0)
+        if elapsed > TIMEOUT_FALLBACK:
+            log.error("[FSM] M5_FALLBACK timeout!")
+            self._score['m5'] = 10   # kredit parsial
+            self._transition(State.DONE)
+            return
+
+        # Fase timed: selam ke hook → grab → angkat → tarik → naik
+        if elapsed < 8.0:
+            self.cmd.send(vert=(-DIVE_SPEED if depth < HOOK_DEPTH else 0), gripper=0)
+        elif elapsed < 11.0:
+            self.cmd.send(surge=M5_ENGAGE_SURGE, gripper=0)
+        elif elapsed < 14.0:
+            self.cmd.send(surge=0, gripper=1)
+        elif elapsed < 14.0 + UNHOOK_LIFT_T:
+            self.cmd.send(vert=M5_UNHOOK_VERT, gripper=1)
+        elif elapsed < 14.0 + UNHOOK_LIFT_T + UNHOOK_PULL_T:
+            self.cmd.send(surge=M5_UNHOOK_SURGE, gripper=1)
+        elif depth > DEPTH_TARGET_SURFACE:
+            self.cmd.send(vert=ASCEND_SPEED, gripper=1)
+        else:
+            self.cmd.stop_all()
+            self._score['m5'] = 40
+            log.warning("[FSM] Misi 5 selesai via FALLBACK timed (degraded, tanpa lock visual)")
             self._transition(State.DONE)
 
     # ── Utility ────────────────────────────────────────────────────────────────
@@ -556,10 +701,14 @@ def main():
                     help='path .npz kalibrasi kamera → aktifkan PBVS (solvePnP). Tanpa ini = IBVS')
     ap.add_argument('--marker-length', type=float, default=MARKER_LENGTH_M,
                     help='sisi marker ArUco fisik (m) utk solvePnP')
+    ap.add_argument('--qr-size', type=float, default=QR_SIDE_M,
+                    help='sisi QR payload fisik (m) utk solvePnP PBVS (KKI 2026 = 0.04)')
     ap.add_argument('--start-state', default='DIVE',
-                    choices=['DIVE', 'APPROACH_HOOK', 'AUTO_RELEASE'],
-                    help='DIVE=full misi 1-5; APPROACH_HOOK=uji visual servo saja; '
-                         'AUTO_RELEASE=misi 5 (1-4 manual via GUI dulu)')
+                    choices=['DIVE', 'M5_REDIVE', 'M5_DOCK'],
+                    help='DIVE=full misi 1-5; M5_REDIVE=misi 5 autonomous (1-4 manual via GUI); '
+                         'M5_DOCK=uji docking QR saja (sudah di kedalaman hook)')
+    ap.add_argument('--no-wait-autonomous', action='store_true',
+                    help='langsung jalan tanpa menunggu toggle GUI mode=autonomous (uji SITL/mock)')
     ap.add_argument('--loglevel', default='INFO')
     args = ap.parse_args()
 
@@ -575,7 +724,8 @@ def main():
     telem = TelemetryReceiver(port=args.telem_port)
     cam   = VisionPipeline(source=args.vision, device=args.device,
                            rtsp_url=args.rtsp,
-                           calib_file=args.calib, marker_length=args.marker_length)
+                           calib_file=args.calib, marker_length=args.marker_length,
+                           qr_length=args.qr_size)
     log.info("[main] Mode visi: %s", "PBVS (solvePnP)" if args.calib else "IBVS (piksel)")
 
     telem.start()
@@ -586,7 +736,7 @@ def main():
 
     fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam)
     try:
-        fsm.start(start_state=State[args.start_state])
+        fsm.start(start_state=State[args.start_state], wait_mode=not args.no_wait_autonomous)
     except KeyboardInterrupt:
         fsm.abort()
     finally:
