@@ -1,6 +1,6 @@
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
-import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen } from "./core.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
@@ -153,25 +153,39 @@ function num(v, d = 1) {
   return (v === null || v === undefined || Number.isNaN(v)) ? "—" : v.toFixed(d);
 }
 
-/*  depth tape  */
+/*  depth tape — skala mengikuti kedalaman kolam (CONFIG.POOL_DEPTH) supaya
+    berguna baik di kolam dangkal KKI (~0.9 m) maupun kolam uji yang lebih dalam. */
+let TAPE;
+function computeTape() {
+  const d = CONFIG.POOL_DEPTH || 3;
+  if (d <= 2) return { min: -0.2, max: d + 0.3, minor: 0.1, major: 0.5, px: 200 };
+  if (d <= 5) return { min: -0.5, max: d + 0.5, minor: 0.5, major: 1,   px: 90 };
+  return { min: -1, max: d + 1, minor: 1, major: 2, px: 48 };
+}
 function buildTape() {
+  TAPE = computeTape();
+  els.tapeScale.innerHTML = "";   // rebuild bersih (dipanggil ulang saat pool depth diubah)
   const frag = document.createDocumentFragment();
-  for (let m = -1; m <= 12; m++) {
+  const steps = Math.round((TAPE.max - TAPE.min) / TAPE.minor);
+  for (let i = 0; i <= steps; i++) {
+    const m = Math.round((TAPE.min + i * TAPE.minor) * 1000) / 1000;
+    const isMajor = Math.abs(m / TAPE.major - Math.round(m / TAPE.major)) < 1e-6;
     const mark = document.createElement("div");
-    mark.className = "tape__mark" + (m % 1 === 0 ? " tape__mark--major" : "");
+    mark.className = "tape__mark" + (isMajor ? " tape__mark--major" : "");
     mark.dataset.m = m;
-    mark.textContent = m >= 0 ? m.toFixed(0) + " m" : "";
+    mark.textContent = (isMajor && m >= 0) ? m.toFixed(TAPE.minor < 1 ? 1 : 0) + " m" : "";
     frag.appendChild(mark);
   }
   els.tapeScale.appendChild(frag);
 }
 buildTape();
-const PX_PER_M = 48;
+// rescale saat pool depth diubah di halaman Setup
+window.addEventListener("hydroship:pool-depth", buildTape);
 function updateTape(depth) {
   const h = els.tapeScale.parentElement.clientHeight;
   els.tapeScale.querySelectorAll(".tape__mark").forEach((el) => {
     const m = parseFloat(el.dataset.m);
-    el.style.top = (h / 2 + (m - depth) * PX_PER_M) + "px";
+    el.style.top = (h / 2 + (m - depth) * TAPE.px) + "px";
   });
   els.tapeVal.textContent = num(depth, 2) + " m";
 }
@@ -359,11 +373,14 @@ function startDemo() {
   setLink("demo");
   log("Mode simulasi aktif", "warn");
   let t = 0;
+  // depth mengikuti kedalaman kolam agar ALT & alarm realistis (kolam KKI ~0.9 m)
+  const dmid = (CONFIG.POOL_DEPTH || 3) * 0.5;
+  const damp = (CONFIG.POOL_DEPTH || 3) * 0.4;
   demo = setInterval(() => {
     t += 0.05;
     applyTelemetry({
       heading: (90 + 40 * Math.sin(t * 0.2) + 360) % 360,
-      depth: 2.5 + 1.5 * Math.sin(t * 0.15),
+      depth: dmid + damp * Math.sin(t * 0.15),
       roll: 8 * Math.sin(t * 0.7),
       pitch: 6 * Math.sin(t * 0.5 + 1),
       temp: 26 + Math.sin(t * 0.05),
@@ -381,9 +398,8 @@ function stopDemo() {
 function maybeDemo() { if (CONFIG.DEMO_ON_START && !demo) startDemo(); }
 
 /*  kamera  */
-// crossOrigin wajib agar snapshot/record (canvas) tidak ter-taint oleh stream
-// MJPEG lintas-asal dari Raspi; onload/onerror dipasang sekali di sini.
-els.camImg.crossOrigin = "anonymous";
+// Feed diambil lewat proxy same-origin (camProxy), jadi snapshot/record (canvas)
+// tidak ter-taint tanpa perlu crossOrigin. onload/onerror dipasang sekali di sini.
 els.camImg.onload = () => {
   els.camNoSignal.style.display = "none";
   els.camTag.textContent = "LIVE";
@@ -406,8 +422,9 @@ function applyControlCamera() {
     if (els.camRes) els.camRes.textContent = "—";
     return;
   }
-  // bust cache agar re-apply URL sama tetap memicu load ulang
-  els.camImg.src = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
+  // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
+  const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
+  els.camImg.src = camProxy(bust);
 }
 applyControlCamera();
 window.addEventListener("hydroship:camera-url", applyControlCamera);
@@ -465,7 +482,7 @@ els.pilotPipImg.onerror = () => { els.pilotPipImg.style.display = "none"; els.pi
 els.pilotPipImg.onload = () => { els.pilotPipImg.style.display = ""; els.pilotPipNo.style.display = "none"; };
 function setPilotPip(on) {
   if (on && CONFIG.CAMERA_URL) {
-    els.pilotPipImg.src = CONFIG.CAMERA_URL;       // umpan kamera live
+    els.pilotPipImg.src = camProxy(CONFIG.CAMERA_URL); // umpan kamera live (via proxy same-origin)
   } else {
     els.pilotPipImg.removeAttribute("src");         // hentikan muat saat keluar / tanpa kamera
     els.pilotPipImg.style.display = "none";
@@ -570,7 +587,8 @@ function setAxis(name, value, live = false) {
 }
 Object.entries(axisEls).forEach(([name, el]) => {
   el.addEventListener("change", () => {
-    const v = Number(el.value) || 0;
+    // batasi entri manual ke rentang perintah valid −100..100
+    const v = Math.max(-100, Math.min(100, Math.round(Number(el.value) || 0)));
     el.value = String(v);
     if (name in pilotAxes) pilotAxes[name] = v;
     sendCmd(name, v);
@@ -736,18 +754,19 @@ window.addEventListener("keydown", (e) => {
   else if (e.code === "KeyG") { e.preventDefault(); els.btnGripClose.click(); }
 });
 
-/* viewport toggles: Follow ROV | Preview AIR | Echo */
-function toggleChip(id, onLabel) {
+/* viewport toggles: Follow ROV | Preview AIR | Echo → aksi nyata di scene 3D */
+function toggleChip(id, onLabel, onToggle) {
   const el = $(id);
   el.onclick = () => {
     const on = el.getAttribute("aria-pressed") !== "true";
     el.setAttribute("aria-pressed", String(on));
+    if (onToggle) { try { onToggle(on); } catch (e) {} }
     log(`${onLabel}: ${on ? "ON" : "OFF"}`);
   };
 }
-toggleChip("btnFollow", "Follow ROV");
-toggleChip("btnPreviewAir", "Preview AIR");
-toggleChip("btnEcho", "Echo");
+toggleChip("btnFollow", "Follow ROV", (on) => scene && scene.setFollow(on));
+toggleChip("btnPreviewAir", "Preview AIR", (on) => scene && scene.setPreviewAir(on));
+toggleChip("btnEcho", "Echo", (on) => scene && scene.setEcho(on));
 
 // keselamatan: tombol Spasi = STOP
 window.addEventListener("keydown", (e) => {
@@ -772,6 +791,8 @@ function depthAlarm(active) {
     if (alarm.on) return;
     try {
       alarm.ctx = alarm.ctx || new (window.AudioContext || window.webkitAudioContext)();
+      // browser memulai AudioContext "suspended" sampai ada interaksi → resume dulu
+      if (alarm.ctx.state === "suspended") alarm.ctx.resume();
       const o = alarm.ctx.createOscillator(), g = alarm.ctx.createGain();
       o.type = "square"; o.frequency.value = 880;
       g.gain.value = 0.05;

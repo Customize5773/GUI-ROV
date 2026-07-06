@@ -27,12 +27,24 @@ Instalasi dependensi:
 
 import time
 import math
+import re
 import threading
 import logging
 from typing import Callable, Optional
 import numpy as np
 
 log = logging.getLogger(__name__)
+
+# Ambil huruf sisi A/B/C/D yang berdiri sendiri dari isi QR (mis. "A", "SIDE_B",
+# "WALL-C", "A-01"); huruf yang diapit huruf lain (mis. "AREA") tidak dianggap.
+# Sama dengan logika jsQR di GUI (public/js/pages/camera.js).
+_WALL_RE = re.compile(r'(?:^|[^A-Z])([ABCD])(?![A-Z])')
+
+
+def wall_from_qr(data) -> Optional[str]:
+    """Petakan isi QR → sisi kolam 'A'|'B'|'C'|'D', atau None bila tak ada."""
+    m = _WALL_RE.search(str(data).upper())
+    return m.group(1) if m else None
 
 # ── Coba import cv2 dan pyzbar ────────────────────────────────────────────────
 try:
@@ -49,10 +61,8 @@ except ImportError:
     PYZBAR_OK = False
     log.warning("[vision] pyzbar tidak tersedia — QR detection dinonaktifkan")
 
-# ── Mapping QR data → sisi kolam ──────────────────────────────────────────────
-# QR code di payload berisi teks seperti 'A', 'B', 'C', atau 'D'
-# sesuai panduan KKI 2026 halaman 52
-WALL_MAP = {'A': 'A', 'B': 'B', 'C': 'C', 'D': 'D'}
+# Mapping QR → sisi kolam A/B/C/D dilakukan oleh wall_from_qr() di atas
+# (isi QR sesuai panduan KKI 2026 hal. 52; toleran terhadap prefiks/sufiks).
 
 
 class VisionPipeline:
@@ -100,6 +110,7 @@ class VisionPipeline:
         self._cap = None
         self._last_result: Optional[dict] = None
         self._last_aruco: Optional[dict] = None   # deteksi ArUco terakhir (utk visual servo)
+        self._last_qr: Optional[dict] = None      # deteksi QR terakhir (utk scan wall)
 
         # Kalibrasi kamera utk PBVS (solvePnP). Bila tak ada → pose=None (fallback IBVS).
         self.marker_length = marker_length
@@ -232,7 +243,7 @@ class VisionPipeline:
     # ── Helper ────────────────────────────────────────────────────────────────
 
     def _build_result(self, det_type, data, center, area, frame) -> dict:
-        wall = WALL_MAP.get(data) if det_type == 'qr' else None
+        wall = wall_from_qr(data) if det_type == 'qr' else None
         h, w = (frame.shape[0], frame.shape[1]) if frame is not None else (480, 640)
         result = {
             'type': det_type,
@@ -249,6 +260,8 @@ class VisionPipeline:
         self._last_result = result
         if det_type == 'aruco':
             self._last_aruco = result
+        elif det_type == 'qr':
+            self._last_qr = result
         return result
 
     def latest_aruco(self, max_age=0.5, marker_id=None) -> Optional[dict]:
@@ -257,6 +270,13 @@ class VisionPipeline:
         if not r or (time.time() - r['timestamp']) > max_age:
             return None
         if marker_id is not None and str(r['data']) != str(marker_id):
+            return None
+        return r
+
+    def latest_qr(self, max_age=1.0) -> Optional[dict]:
+        """Deteksi QR terakhir bila masih segar (hindari transisi dari deteksi basi)."""
+        r = self._last_qr
+        if not r or (time.time() - r['timestamp']) > max_age:
             return None
         return r
 

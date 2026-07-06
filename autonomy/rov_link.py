@@ -84,8 +84,12 @@ class RovLink:
             self.master = mavutil.mavlink_connection(args.mavlink, source_system=255, source_component=190)
         else:
             self.master = mavutil.mavlink_connection(args.mavlink, baud=args.baud, source_system=255, source_component=190)
-        print("[MAV] menunggu heartbeat dari vehicle…")
-        self.master.wait_heartbeat()
+        hb_timeout = getattr(args, "hb_timeout", 10)
+        print(f"[MAV] menunggu heartbeat dari vehicle… (timeout {hb_timeout}s)")
+        if self.master.wait_heartbeat(timeout=hb_timeout) is None:
+            raise RuntimeError(
+                f"[MAV] tidak ada heartbeat dari {args.mavlink} dalam {hb_timeout}s — "
+                "cek vehicle/SITL/mock hidup & endpoint benar")
         print(f"[MAV] terhubung: system={self.master.target_system} component={self.master.target_component}")
         self._request_streams()
 
@@ -258,6 +262,7 @@ def main():
     ap.add_argument("--json-rx-port", type=int, default=14550, help="port command JSON dari server.js")
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14555", help="endpoint MAVLink ke vehicle/SITL/mock")
     ap.add_argument("--baud", type=int, default=115200, help="baud (jika serial, mis. /dev/ttyACM0)")
+    ap.add_argument("--hb-timeout", type=int, default=10, help="detik menunggu heartbeat vehicle sebelum menyerah")
     args = ap.parse_args()
     RovLink(args).run()
 

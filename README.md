@@ -82,11 +82,17 @@ GUI memenuhi ketentuan Panduan KKI 2026 §4.7.3:
 
 ### Deteksi QR & CORS
 - `jsQR` di-vendor di `public/vendor/jsqr.min.js` agar jalan **offline** di venue.
-- Decode QR memakai `getImageData` pada canvas. Untuk stream MJPEG lintas-asal,
-  server kamera (mjpg-streamer/Pi) **harus mengirim header CORS**
-  (`Access-Control-Allow-Origin: *`) dan `<img>` memakai `crossOrigin="anonymous"`
-  (sudah diset). Jika CORS tidak tersedia, pakai tombol **"Scan dari gambar"** di
-  panel QR untuk men-decode dari berkas gambar.
+- Decode QR memakai `getImageData` pada canvas — ini butuh feed **same-origin**,
+  jika tidak canvas ter-*taint* dan decode gagal.
+- **Feed kamera diambil lewat proxy `server.js`**: dashboard memuat
+  `/cam?url=<url-kamera>` (bukan langsung ke IP kamera), sehingga selalu same-origin.
+  Hasilnya **video tampil tanpa perlu CORS di server kamera** dan QR bisa di-decode.
+  Tidak perlu lagi `crossOrigin="anonymous"` maupun konfigurasi CORS di mjpg-streamer.
+- Proxy membatasi tujuan ke host LAN privat (127/10/192.168/172.16–31, `*.local`,
+  `localhost`) untuk mencegah open-proxy. Override dengan env `CAM_ALLOW_ANY=1` bila perlu.
+- Untuk decode QR canvas diperkecil ke maks 800 px agar ringan pada feed 1080p.
+- Fallback tetap ada: tombol **"Scan dari gambar"** men-decode QR dari berkas gambar.
+- Catatan: proxy hanya aktif saat dijalankan via `server.js` (bukan penyaji statis lain).
 
 ### Telemetri terputus (timeout)?
 

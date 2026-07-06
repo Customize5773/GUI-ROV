@@ -95,6 +95,13 @@ export function num(v, d = 1) {
   return (v === null || v === undefined || Number.isNaN(v)) ? "—" : Number(v).toFixed(d);
 }
 
+/* URL feed kamera lewat proxy same-origin server.js (/cam?url=...), supaya video
+   tampil tanpa CORS di server kamera dan canvas (QR/snapshot/record) tidak ter-taint.
+   String kosong → kembalikan "" (pemanggil sebaiknya removeAttribute src). */
+export function camProxy(url) {
+  return url ? "/cam?url=" + encodeURIComponent(url) : "";
+}
+
 /* Fullscreen yang tahan banting:
    coba Fullscreen API (lintas-browser); jika tidak tersedia atau ditolak
    (mis. di dalam iframe/webview yang memblokirnya), jatuh ke "pseudo-fullscreen"

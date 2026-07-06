@@ -900,8 +900,9 @@ body.pseudo-fs-lock { overflow: hidden; }
 .cam.pseudo-fs #ctrlCamPip,
 .camcell__view:fullscreen .campip,
 .camcell__view.pseudo-fs .campip { display: block; }
-/* PiP pilot di kamera Control: kiri-bawah */
-#ctrlCamPip { left: 18px; right: auto; }
+/* PiP pilot di kamera Control: kiri-ATAS supaya tidak menutupi tombol
+   SNAPSHOT/REC/HUD (.cam__bar di kiri-bawah); overlay resolusi ada di kanan-atas. */
+#ctrlCamPip { left: 18px; top: 18px; right: auto; bottom: auto; }
 
 /* depth tape */
 .tape { flex: 1; position: relative; overflow: hidden; }
@@ -1108,6 +1109,7 @@ body.pseudo-fs-lock { overflow: hidden; }
 .camgrid { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; min-height: 0; }
 .camcell { display: flex; flex-direction: column; gap: 6px; min-height: 0; }
 .camcell__bar { display: flex; align-items: center; justify-content: space-between; }
+.camcell__actions { display: flex; gap: 6px; }
 .camcell__name { font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--ink-dim); letter-spacing: 1px; }
 .camcell__name b { color: var(--sonar); }
 .camcell__view { flex: 1; position: relative; min-height: 160px; background: #000; border: 1px solid rgba(20,216,255,.12); border-radius: var(--r); overflow: hidden; }

@@ -5,6 +5,7 @@ import Chart from "chart.js/auto";
 import { log, num } from "../core.js";
 
 const WINDOW = 120;
+const OVERCURRENT = 10;   // A — ambang status thruster "High"
 
 const C_REAL = "#14d8ff";
 const C_GRID = "rgba(160,186,209,.12)";
@@ -29,14 +30,13 @@ export const telemetryPage = {
   capturing: false,
   samples: 0,
   csvRows: [],
-  thrusterState: {},
+  thrusters: null,   // arus thruster nyata (A) dari telemetri; null = belum ada data
   raf: null,
   visible: false,
   els: {},
 
   init(root) {
     CHANNELS.forEach((c) => (this.buf[c.key] = []));
-    THRUSTERS.forEach((t) => (this.thrusterState[t.id] = { current: 0.6 }));
 
     root.innerHTML = `
       <div class="tele">
@@ -73,10 +73,10 @@ export const telemetryPage = {
       el.innerHTML = `
         <div class="thr-card__head">
           <span class="thr-card__name">${t.id} <small>${t.type}</small></span>
-          <span class="badge badge--ok" id="thr-st-${t.id}">Normal</span>
+          <span class="badge" id="thr-st-${t.id}">No data</span>
         </div>
         <div class="thr-card__stats">
-          <span>Current <b id="thr-c-${t.id}">0.6</b> A</span>
+          <span>Current <b id="thr-c-${t.id}">—</b> A</span>
         </div>`;
       tWrap.appendChild(el);
     });
@@ -135,6 +135,8 @@ export const telemetryPage = {
       b.push(real[c.key]);
       if (b.length > WINDOW) b.shift();
     }
+    // arus thruster nyata bila ROV mengirim (array A: [T1..T6]); jika tidak, biarkan null
+    if (Array.isArray(d.thrusters)) this.thrusters = d.thrusters;
     if (this.capturing) {
       this.samples++;
       this.csvRows.push([Date.now(), real.yaw.toFixed(2), real.depth.toFixed(3), real.pitch.toFixed(2), real.roll.toFixed(2)].join(","));
@@ -144,6 +146,10 @@ export const telemetryPage = {
   _loop() {
     this.raf = requestAnimationFrame(() => this._loop());
     if (!this.visible) return;
+    // throttle ~15 fps: 4 chart × 60 fps memberatkan laptop venue tanpa manfaat visual
+    const now = performance.now();
+    if (this._lastRender && now - this._lastRender < 66) return;
+    this._lastRender = now;
     this._renderCharts();
     this._renderThrusters();
     if (this.els.samplesBadge) this.els.samplesBadge.textContent = `${this.samples} sampel`;
@@ -162,11 +168,17 @@ export const telemetryPage = {
   },
 
   _renderThrusters() {
-    for (const t of THRUSTERS) {
-      const s = this.thrusterState[t.id];
-      s.current = 0.6 + Math.sin(Date.now() / 700 + t.id.charCodeAt(1)) * 0.08;
+    for (let i = 0; i < THRUSTERS.length; i++) {
+      const t = THRUSTERS[i];
+      const amp = this.thrusters && Number.isFinite(this.thrusters[i]) ? this.thrusters[i] : null;
       const c = document.getElementById(`thr-c-${t.id}`);
-      if (c) c.textContent = s.current.toFixed(2);
+      if (c) c.textContent = amp === null ? "—" : amp.toFixed(2);
+      const st = document.getElementById(`thr-st-${t.id}`);
+      if (st) {
+        const high = amp !== null && amp >= OVERCURRENT;
+        st.textContent = amp === null ? "No data" : (high ? "High" : "Normal");
+        st.className = "badge " + (amp === null ? "" : (high ? "badge--fault" : "badge--ok"));
+      }
     }
   },
 
@@ -194,11 +206,12 @@ export const telemetryPage = {
     if (!this.csvRows.length) { log("Tidak ada sampel untuk diekspor", "warn"); return; }
     const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg";
     const blob = new Blob([header + "\n" + this.csvRows.join("\n")], { type: "text/csv" });
+    const trial = parseInt(document.getElementById("teleTrial")?.value, 10) || 1;
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `hydroship_telemetry_trial${Date.now()}.csv`;
+    a.download = `hydroship_telemetry_trial${trial}_${Date.now()}.csv`;
     a.click();
     URL.revokeObjectURL(a.href);
-    log(`Ekspor ${this.csvRows.length} sampel ke CSV`, "ok");
+    log(`Ekspor ${this.csvRows.length} sampel (trial ${trial}) ke CSV`, "ok");
   },
 };
