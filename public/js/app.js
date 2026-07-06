@@ -5,6 +5,8 @@ import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
+import { joystickPage } from "./pages/joystick.js";
+import { joystickState, updateJoystickStateFromGamepad } from "./joystick-state.js";
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -29,7 +31,7 @@ const els = {
   pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
   pilotPipImg: $("pilotPipImg"), pilotPipNo: $("pilotPipNo"),
   ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
-  axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axVert: $("axVert"),
+  axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axHeave: $("axHeave"),
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
 };
 
@@ -40,6 +42,7 @@ const pages = {
   mission: $("page-mission"),
   telemetry: $("page-telemetry"),
   setup: $("page-setup"),
+  joystick: $("page-joystick"),
 };
 
 const navLinks = document.querySelectorAll(".sidebar__link");
@@ -50,6 +53,7 @@ const pageModules = {
   mission: missionPage,
   telemetry: telemetryPage,
   setup: setupPage,
+  joystick: joystickPage,
 };
 const initedModules = new Set();
 let activeModule = null;
@@ -413,7 +417,7 @@ els.btnLight.onclick = () => { const v = !state.light; reflectLight(v); markPend
 els.btnArm.onclick = () => { const v = !state.armed; reflectArm(v); markPending("arm", v); sendCmd("arm", v); };
 els.btnStop.onclick = () => {
   sendCmd("stop", true); reflectArm(false); markPending("arm", false);
-  ["surge", "sway", "yaw", "vert"].forEach((a) => setAxis(a, 0));
+  ["surge", "sway", "yaw", "heave"].forEach((a) => setAxis(a, 0));
   log("⏹ STOP — semua thruster netral", "err");
 };
 
@@ -556,7 +560,7 @@ document.querySelectorAll(".ctab").forEach((btn) => {
 });
 
 /* axis fields: Surge | Sway | Yaw | Vertical */
-const axisEls = { surge: els.axSurge, sway: els.axSway, yaw: els.axYaw, vert: els.axVert };
+const axisEls = { surge: els.axSurge, sway: els.axSway, yaw: els.axYaw, heave: els.axHeave };
 function setAxis(name, value, live = false) {
   const el = axisEls[name];
   if (!el) return;
@@ -579,7 +583,7 @@ const KEY_AXIS = {
   KeyW: ["surge", 50], KeyS: ["surge", -50],
   KeyD: ["sway", 50], KeyA: ["sway", -50],
   KeyE: ["yaw", 50], KeyQ: ["yaw", -50],
-  KeyR: ["vert", 50], KeyF: ["vert", -50],
+  KeyR: ["heave", 50], KeyF: ["heave", -50],
 };
 const heldKeys = new Set();
 function pilotKeyActive(e) {
@@ -607,6 +611,34 @@ window.addEventListener("keyup", (e) => {
    integer-nya berubah; perintah axis dikirim "quiet" (tanpa spam console)
    karena bersifat kontinu. */
 const GP_DEADZONE = 0.12;
+
+function clamp100(v) {
+  return Math.max(-100, Math.min(100, Math.round(v)));
+}
+
+function axisToPercent(v) {
+  const n = Number(v) || 0;
+  if (Math.abs(n) < GP_DEADZONE) return 0;
+
+  const sign = Math.sign(n);
+  const mag = Math.abs(n);
+
+  // remap setelah deadzone
+  const scaled = (mag - GP_DEADZONE) / (1 - GP_DEADZONE);
+  return clamp100(sign * scaled * 100);
+}
+
+function getMappedJoystickAxes() {
+  updateJoystickStateFromGamepad();
+
+  return {
+    surge: axisToPercent(joystickState.mapped.surge),
+    sway:  axisToPercent(joystickState.mapped.sway),
+    yaw:   axisToPercent(joystickState.mapped.yaw),
+    heave: axisToPercent(joystickState.mapped.heave),
+  };
+}
+
 function firstGamepad() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of pads) if (p && p.connected) return p;
@@ -632,8 +664,10 @@ function stickToAxes(x, y) {
   const clamp = (n) => Math.round(Math.max(-100, Math.min(100, n)));
   return [clamp(x * f), clamp(y * f)];
 }
-const gpLast = { surge: 0, sway: 0, yaw: 0, vert: 0 };
+
+const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
 const gpBtnPrev = {}; // deteksi tepi tombol
+
 function gpPressed(pad, idx) {
   const b = pad.buttons[idx];
   const now = !!(b && (b.pressed || b.value > 0.5));
@@ -642,34 +676,40 @@ function gpPressed(pad, idx) {
   return now && !was; // rising edge
 }
 function neutralizeGamepadAxes() {
-  for (const a of ["surge", "sway", "yaw", "vert"]) {
+  for (const a of ["surge", "sway", "yaw", "heave"]) {
     gpLast[a] = 0; setAxis(a, 0); sendCmd(a, 0, true);
   }
 }
+
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
+
   if (activeController !== "Gamepad") return;
+
   const pad = firstGamepad();
   if (!pad) return;
 
-  // stik kiri (0=X,1=Y) → sway/surge · stik kanan (2=X,3=Y) → yaw/vert.
-  // sumbu Y gamepad negatif ke atas → dibalik agar "atas" = maju / naik.
-  const [sway, ly] = stickToAxes(pad.axes[0], pad.axes[1]);
-  const [yaw, ry] = stickToAxes(pad.axes[2], pad.axes[3]);
-  const next = { surge: -ly, sway, yaw, vert: -ry };
-  for (const a of ["surge", "sway", "yaw", "vert"]) {
+  // ambil hasil mapping dari halaman joystick
+  const next = getMappedJoystickAxes();
+
+  // kirim ke axis panel + pilotAxes + websocket command
+  for (const a of ["surge", "sway", "yaw", "heave"]) {
     if (next[a] !== gpLast[a]) {
       gpLast[a] = next[a];
       setAxis(a, next[a], true);
-      sendCmd(a, next[a], true); // quiet: jangan banjiri console log
+      sendCmd(a, next[a], true);
     }
   }
 
-  // tombol (deteksi tepi): LB(4)=gripper open · RB(5)=gripper close · Start(9)=STOP
+  // tombol gamepad
+  // LB(4)=gripper open
+  // RB(5)=gripper close
+  // Start(9)=STOP
   if (gpPressed(pad, 4)) els.btnGripOpen.click();
   if (gpPressed(pad, 5)) els.btnGripClose.click();
   if (gpPressed(pad, 9)) els.btnStop.click();
 }
+
 window.addEventListener("gamepadconnected", (e) => {
   log(`Gamepad tersambung: ${e.gamepad.id}`, "ok");
   setGamepadBadge(true);

@@ -94,7 +94,9 @@ udp.on("message", (buf, rinfo) => {
   broadcast({ type: "telemetry", data, recv: Date.now() });
 });
 udp.on("error", (e) => console.error("[UDP] error:", e.message));
-udp.bind(UDP_IN, () => console.log(`[UDP] mendengar telemetri di :${UDP_IN}`));
+udp.bind(UDP_IN, "0.0.0.0", () => {
+  console.log(`[UDP] mendengar telemetri di 0.0.0.0:${UDP_IN}`);
+});
 
 /* ----------------------- simulator (opsional) ----------------------- */
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
