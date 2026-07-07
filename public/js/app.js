@@ -586,6 +586,7 @@ function setAxis(name, value, live = false) {
   if (name in pilotAxes) pilotAxes[name] = Number(value) || 0;
 }
 Object.entries(axisEls).forEach(([name, el]) => {
+  if (!el) return;
   el.addEventListener("change", () => {
     // batasi entri manual ke rentang perintah valid −100..100
     const v = Math.max(-100, Math.min(100, Math.round(Number(el.value) || 0)));

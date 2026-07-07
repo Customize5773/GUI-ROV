@@ -1,4 +1,4 @@
-export const pilotAxes = { surge: 0, sway: 0, yaw: 0, vert: 0 };
+export const pilotAxes = { surge: 0, sway: 0, yaw: 0, heave: 0 };
 
 /* layanan yang disuntik app.js */
 let _log = (m) => console.log("[log]", m);
