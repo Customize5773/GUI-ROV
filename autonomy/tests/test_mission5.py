@@ -181,6 +181,49 @@ def test_docking_survives_intermittent_dropout():
     assert rep['jalur']['used_fallback'] is False
 
 
+# ── Real decode: QR JSON via pyzbar + pose solvePnP (skip bila lib tak ada) ──
+def test_real_qr_json_decode_and_pose():
+    cv2 = pytest.importorskip("cv2")
+    segno = pytest.importorskip("segno")
+    pyz = pytest.importorskip("pyzbar.pyzbar")
+    import io, json
+    import numpy as np
+    from vision.qr_detect import VisionPipeline
+
+    cam = VisionPipeline(source='usb')
+    cam._K = np.array([[800, 0, 320], [0, 800, 240], [0, 0, 1]], float)
+    cam._dist = np.zeros(5)
+    payload = {"mission": 5, "team": "HYDROSHIP", "type": "payload", "id": "A"}
+    text = json.dumps(payload)
+
+    png = io.BytesIO()
+    segno.make(text, error='m').save(png, kind='png', scale=8, border=4)
+    png.seek(0)
+    qr = cv2.imdecode(np.frombuffer(png.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
+    frame = np.full((480, 640, 3), 255, np.uint8)
+    h, w = qr.shape
+    y0, x0 = (480 - h) // 2, (640 - w) // 2
+    frame[y0:y0 + h, x0:x0 + w] = cv2.cvtColor(qr, cv2.COLOR_GRAY2BGR)
+
+    objs = pyz.decode(frame)
+    assert objs, "QR tidak terdecode oleh pyzbar"
+    o = objs[0]
+    data = o.data.decode('utf-8').strip()            # persis jalur _run_camera (tanpa .upper())
+    pts = np.array([[p.x, p.y] for p in o.polygon])
+    center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
+    area = float(cv2.contourArea(pts.reshape(-1, 1, 2)))
+    res = cam._build_result(data, center, area, frame)
+
+    # JSON tak rusak (case-sensitive) → field langsung dipakai
+    assert res['data'] == text
+    assert res['payload'] == payload
+    assert res['payload']['id'] == 'A' and res['payload']['mission'] == 5
+    assert res['wall'] == 'A'
+    # PBVS solvePnP tidak crash di numpy 2.x & mengembalikan jarak positif
+    pose = cam._estimate_pose_pts(cam._order_corners(pts), 0.04)
+    assert pose is not None and pose['z'] > 0
+
+
 # ── Integrasi: skenario semua sisi kolam A/B/C/D ─────────────────────────────
 @pytest.mark.parametrize('wall', ['A', 'B', 'C', 'D'])
 def test_full_mission_each_wall(wall):

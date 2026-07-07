@@ -75,8 +75,8 @@ while True:
 
     found = False
     for obj in pyzbar.decode(frame):
-        qdata = obj.data.decode('utf-8', 'ignore').strip().upper()
-        if args.data and args.data.upper() not in qdata:
+        qdata = obj.data.decode('utf-8', 'ignore').strip()   # JSON payload: jangan .upper()
+        if args.data and args.data.upper() not in qdata.upper():
             continue
         pts = np.array([[p.x, p.y] for p in obj.polygon], dtype=np.float32)
         if len(pts) < 4:
@@ -92,6 +92,7 @@ while True:
                 flags=getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', cv2.SOLVEPNP_ITERATIVE))
             if not okp:
                 break
+            tvec = np.asarray(tvec, dtype=float).ravel()
             x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
             Rm, _ = cv2.Rodrigues(rvec)
             yaw = math.degrees(math.atan2(Rm[0, 2], Rm[2, 2]))
