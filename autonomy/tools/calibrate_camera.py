@@ -139,8 +139,12 @@ def capture(corners, raw):
     print(f"  + pose {len(obj_points)}/{args.need}")
 
 
+print("Tunjukkan PAPAN CATUR (checkerboard) ke kamera — BUKAN QR code.")
+print("  Belum punya papan? Cetak dulu: python tools/make_checkerboard.py --cols 9 --rows 6")
+print("  (Kalibrasi ini OPSIONAL — hanya utk PBVS/jarak meter. Tes deteksi QR + servo")
+print("   bisa langsung pakai tools/servo_webcam_test.py TANPA kalibrasi.)")
 if args.auto:
-    print(f"LIVE AUTO: pose diambil OTOMATIS tiap papan terdeteksi & digerakkan "
+    print(f"LIVE AUTO: pose diambil OTOMATIS tiap papan catur terdeteksi & digerakkan "
           f"(tiap ~{args.interval}s). Kalibrasi otomatis saat {args.need} pose. q=keluar.")
 else:
     print("LIVE: SPACE=ambil · c=kalibrasi · q=keluar")
@@ -170,7 +174,7 @@ while True:
 
     mode = "AUTO" if args.auto else "SPACE=ambil"
     cv2.putText(frame, f"pose: {len(obj_points)}/{args.need}  [{mode}]"
-                + ("  papan OK" if corners is not None else "  cari papan"),
+                + ("  papan catur OK" if corners is not None else "  cari PAPAN CATUR (bukan QR)"),
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (0, 255, 0) if corners is not None else (0, 0, 255), 2)
     cv2.imshow("Kalibrasi (SPACE/c/q)", frame)
