@@ -44,7 +44,8 @@ GUI-ROV/
 │  ├─ sitl_mock.py              # mock SITL untuk pengujian tanpa hardware
 │  ├─ SITL_SETUP.md              # panduan setup ArduSub SITL (WSL2)
 │  ├─ README_SETUP_C.md
-│  └─ VERIFIKASI_ARDUSUB.md
+│  ├─ VERIFIKASI_ARDUSUB.md
+│  └─ ROADMAP_MISI5.md           # peta jalan Fase 0-4: meja -> SITL -> hardware -> kolam -> lomba
 ├─ image logo/                 # aset logo sumber (Logo1.png, Logo2.png)
 ├─ raspi_rov_example (notfinish).py   # contoh format UDP di sisi ROV
 ├─ Rencana.md
@@ -209,7 +210,8 @@ autonomy/
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
 ├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
-└─ VERIFIKASI_ARDUSUB.md    # checklist yang wajib dicek saat naik ke ArduSub asli
+├─ VERIFIKASI_ARDUSUB.md    # checklist yang wajib dicek saat naik ke ArduSub asli
+└─ ROADMAP_MISI5.md         # peta jalan lengkap: meja -> SITL -> hardware -> kolam -> lomba
 ```
 
 Setup singkat (Python 3.12 + venv):
