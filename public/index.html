@@ -125,73 +125,12 @@
                 </div>
               </div>
 
-<<<<<<< HEAD
               <!-- mode tabs -->
               <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode">
                 <button class="mode" data-mode="standby" role="tab">Standby</button>
                 <button class="mode" data-mode="drycal" role="tab">Dry Cal</button>
                 <button class="mode mode--active" data-mode="manual" role="tab" aria-selected="true">Manual</button>
                 <button class="mode" data-mode="hold" role="tab">Hold</button>
-=======
-              <!-- viewport actions -->
-              <div class="vpbtns">
-                <button class="chip" id="btnFollow" aria-pressed="false">Follow ROV</button>
-                <button class="chip" id="btnPreviewAir" aria-pressed="false">Preview AIR</button>
-              </div>
-              <button class="chip vpbtns__echo" id="btnEcho" aria-pressed="false">Echo</button>
-
-              <!-- picture-in-picture kamera live (tampil saat fullscreen) -->
-              <div class="pip" id="pilotPip" aria-hidden="true">
-                <img id="pilotPipImg" alt="Live camera" />
-                <div class="pip__nosignal" id="pilotPipNo">NO CAM</div>
-                <span class="pip__label">LIVE CAM</span>
-              </div>
-            </div>
-
-            <!-- controller -->
-            <div class="controller">
-              <div class="controller__head">
-                <span class="panel__eyebrow">CONTROLLER</span>
-                <span class="controller__title" id="ctrlTitle">Keyboard</span>
-                <span class="badge badge--active" id="ctrlBadge">Active: Keyboard</span>
-              </div>
-              <div class="controller__tabs" role="tablist" aria-label="Controller">
-                <button class="ctab ctab--active" data-ctl="Keyboard" role="tab" aria-selected="true">Keyboard</button>
-                <button class="ctab" data-ctl="Gamepad" role="tab">Gamepad</button>
-              </div>
-              <div class="axes">
-                <label class="axis"><span class="axis__k">Surge</span><input class="axis__v" id="axSurge" type="number" value="0" step="1" /></label>
-                <label class="axis"><span class="axis__k">Sway</span><input class="axis__v" id="axSway" type="number" value="0" step="1" /></label>
-                <label class="axis"><span class="axis__k">Yaw</span><input class="axis__v" id="axYaw" type="number" value="0" step="1" /></label>
-                <label class="axis"><span class="axis__k">Vertical</span><input class="axis__v" id="axVert" type="number" value="0" step="1" /></label>
-              </div>
-              <div class="axes" role="group" aria-label="Gripper">
-                <span class="axis__k">Gripper</span>
-                <button class="ctrl" id="btnGripOpen" title="Buka gripper (H)"><span class="ctrl__led"></span> OPEN</button>
-                <button class="ctrl" id="btnGripClose" title="Tutup gripper (G)"><span class="ctrl__led"></span> CLOSE</button>
-              </div>
-              <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
-            </div>
-          </section>
-
-          <!-- LIVE CAMERA -->
-          <section class="panel panel--cam">
-            <div class="panel__head">
-              <span class="panel__title">LIVE CAMERA</span>
-              <div class="pilot__head-actions">
-                <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
-                <button class="chip chip--ghost" id="btnCamFull" title="Toggle fullscreen kamera">
-                  <span class="chip__ico">⛶</span><span id="camFullLabel">Full Screen</span>
-                </button>
-              </div>
-            </div>
-            <div class="cam" id="camStage">
-              <img id="camImg" alt="Umpan kamera ROV" />
-
-              <div class="cam__overlay" id="camOverlay">
-                <span id="camRes" class="cam__res">—</span>
-                <span id="camRecIndicator" class="cam__rec" aria-hidden="true" title="Recording"></span>
->>>>>>> 1f241e5fc856162a81a9b107362940e5abf9abc3
               </div>
 
               <div class="stage" id="stage">
@@ -213,7 +152,7 @@
 
                 <!-- viewport actions -->
                 <div class="vpbtns">
-                  <button class="chip" id="btnFollow" aria-pressed="true">Follow ROV</button>
+                  <button class="chip" id="btnFollow" aria-pressed="false">Follow ROV</button>
                   <button class="chip" id="btnPreviewAir" aria-pressed="false">Preview AIR</button>
                 </div>
                 <button class="chip vpbtns__echo" id="btnEcho" aria-pressed="false">Echo</button>
