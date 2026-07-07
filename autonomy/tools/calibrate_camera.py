@@ -20,8 +20,14 @@ PEMAKAIAN
   python tools/calibrate_camera.py --device 0 --cols 9 --rows 6 --square 25 \
          --out vision/calibration/dwe.npz
      SPACE = ambil frame (saat papan terdeteksi) · c = kalibrasi · q = keluar
+     Tombol tak berfungsi? KLIK dulu jendela video (fokus keyboard) — atau pakai --auto.
 
-  # Mode FOLDER (dari gambar tersimpan)
+  # Mode AUTO (tanpa tombol): pose diambil otomatis saat papan terdeteksi & digerakkan.
+  # Simpan juga frame-nya agar bisa dikalibrasi ulang tanpa kamera.
+  python tools/calibrate_camera.py --device 0 --auto --save-dir calib_imgs \
+         --cols 9 --rows 6 --square 25 --out vision/calibration/dwe.npz
+
+  # Mode FOLDER (dari gambar tersimpan — paling anti-gagal, tak butuh GUI/tombol)
   python tools/calibrate_camera.py --from-folder calib_imgs --cols 9 --rows 6 --square 25 \
          --out vision/calibration/dwe.npz
 """
@@ -29,6 +35,7 @@ import argparse
 import glob
 import os
 import sys
+import time
 
 import cv2
 import numpy as np
@@ -41,6 +48,16 @@ ap.add_argument("--rows", type=int, default=6, help="jumlah SUDUT-DALAM per kolo
 ap.add_argument("--square", type=float, default=25.0, help="ukuran kotak (mm) — tak memengaruhi K")
 ap.add_argument("--need", type=int, default=15, help="jumlah pose minimum (mode live)")
 ap.add_argument("--out", default="vision/calibration/dwe.npz")
+# ── Auto-capture: tak perlu tekan tombol (jaga-jaga bila SPACE/c tak tertangkap
+#    karena fokus keyboard bukan di jendela video, umum di macOS/WSL) ──
+ap.add_argument("--auto", action="store_true",
+                help="auto-capture pose otomatis saat papan terdeteksi (tanpa tombol)")
+ap.add_argument("--interval", type=float, default=1.5,
+                help="jeda detik antar auto-capture (mode --auto)")
+ap.add_argument("--move", type=float, default=25.0,
+                help="mode --auto: min pergeseran papan (px) dari capture terakhir agar variasi pose")
+ap.add_argument("--save-dir", default=None,
+                help="simpan frame tertangkap ke folder ini (bisa dikalibrasi ulang via --from-folder)")
 args = ap.parse_args()
 
 PAT = (args.cols, args.rows)
@@ -103,27 +120,69 @@ if args.from_folder:
 cap = cv2.VideoCapture(args.device)
 if not cap.isOpened():
     sys.exit(f"Tidak bisa membuka webcam index {args.device}")
-print("LIVE: SPACE=ambil (saat papan terdeteksi) · c=kalibrasi · q=keluar")
+
+last_cap_t = 0.0
+last_center = None
+
+
+def _centroid(corners):
+    return corners.reshape(-1, 2).mean(axis=0)
+
+
+def capture(corners, raw):
+    """Rekam satu pose (+ simpan frame mentah bila --save-dir)."""
+    obj_points.append(objp.copy())
+    img_points.append(corners)
+    if args.save_dir:
+        os.makedirs(args.save_dir, exist_ok=True)
+        cv2.imwrite(os.path.join(args.save_dir, f"calib_{len(obj_points):02d}.png"), raw)
+    print(f"  + pose {len(obj_points)}/{args.need}")
+
+
+if args.auto:
+    print(f"LIVE AUTO: pose diambil OTOMATIS tiap papan terdeteksi & digerakkan "
+          f"(tiap ~{args.interval}s). Kalibrasi otomatis saat {args.need} pose. q=keluar.")
+else:
+    print("LIVE: SPACE=ambil · c=kalibrasi · q=keluar")
+    print("  ⚠ Tombol tak berfungsi? KLIK dulu jendela video (fokus keyboard), "
+          "atau jalankan dgn --auto (tanpa tombol).")
+
 while True:
     ok, frame = cap.read()
     if not ok:
         break
+    raw = frame.copy()                          # sebelum digambari sudut (utk --save-dir)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     image_size = gray.shape[::-1]
     corners = try_frame(gray, vis=frame)
-    cv2.putText(frame, f"pose terkumpul: {len(obj_points)}/{args.need}"
-                + ("  [papan OK - SPACE]" if corners is not None else "  [cari papan]"),
+
+    # ── auto-capture: ambil bila papan terdeteksi, sudah lewat interval, & papan
+    #    bergerak cukup jauh dari capture terakhir (agar variasi pose) ──
+    if args.auto and corners is not None:
+        now = time.time()
+        c = _centroid(corners)
+        moved = last_center is None or float(np.linalg.norm(c - last_center)) > args.move
+        if (now - last_cap_t) > args.interval and moved:
+            capture(corners, raw)
+            last_cap_t, last_center = now, c
+            if len(obj_points) >= args.need and calibrate_and_save():
+                break
+
+    mode = "AUTO" if args.auto else "SPACE=ambil"
+    cv2.putText(frame, f"pose: {len(obj_points)}/{args.need}  [{mode}]"
+                + ("  papan OK" if corners is not None else "  cari papan"),
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
                 (0, 255, 0) if corners is not None else (0, 0, 255), 2)
     cv2.imshow("Kalibrasi (SPACE/c/q)", frame)
+
     k = cv2.waitKey(1) & 0xFF
     if k == ord('q'):
         break
-    elif k == ord(' ') and corners is not None:
-        obj_points.append(objp.copy()); img_points.append(corners)
-        print(f"  + pose {len(obj_points)}")
+    elif k == ord(' ') and corners is not None:   # manual tetap ada
+        capture(corners, raw)
     elif k == ord('c'):
         if calibrate_and_save():
             break
+
 cap.release()
 cv2.destroyAllWindows()
