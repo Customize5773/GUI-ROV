@@ -1,7 +1,8 @@
 """
-vision/aruco_qr.py — KKI 2026 ROV Vision Pipeline
-===================================================
-Deteksi QR Code dan ArUco marker dari kamera.
+vision/qr_detect.py — KKI 2026 ROV QR Vision Pipeline
+=====================================================
+Deteksi **QR Code** payload dari kamera (fokus tunggal — deteksi ArUco sudah dihapus).
+Target visual misi = QR payload (4×4 cm) yang dicetak tim, BUKAN marker ArUco.
 
 Mendukung 3 sumber kamera:
   - 'mock'  : simulasi tanpa kamera fisik (untuk testing)
@@ -9,14 +10,16 @@ Mendukung 3 sumber kamera:
   - 'rtsp'  : stream dari Raspberry Pi / Jetson via RTSP/HTTP
 
 Output:
-  - Callback on_detection(result: dict) dipanggil tiap ada deteksi
+  - Callback on_detection(result: dict) dipanggil tiap ada deteksi QR
   - result = {
-      'type': 'qr' | 'aruco',
-      'data': str,           # isi QR atau ID ArUco
+      'type': 'qr',
+      'data': str,           # isi QR
       'wall': 'A'|'B'|'C'|'D' | None,  # sisi kolam dari QR
-      'center': (x, y),     # pusat marker di frame
+      'center': (x, y),     # pusat QR di frame
       'area': float,         # area bounding box (proxy jarak)
       'frame': ndarray,      # frame dengan anotasi
+      'frame_w', 'frame_h': int,
+      'pose': {x,y,z,dist,yaw_deg} | None,  # PBVS solvePnP bila kamera terkalibrasi
       'timestamp': float,
     }
 
@@ -67,7 +70,7 @@ except ImportError:
 
 class VisionPipeline:
     """
-    Pipeline deteksi QR + ArUco untuk misi ROV KKI 2026.
+    Pipeline deteksi QR payload untuk misi ROV KKI 2026.
 
     Contoh penggunaan:
         def on_det(result):
@@ -86,22 +89,19 @@ class VisionPipeline:
         rtsp_url: str = 'rtsp://hydroship:8554/cam',
         callback: Optional[Callable] = None,
         fps: int = 10,
-        aruco_dict: str = 'DICT_4X4_50',
         calib_file: Optional[str] = None,
-        marker_length: float = 0.10,
         qr_length: float = 0.04,
     ):
         """
         Parameters
         ----------
-        source        : 'mock' | 'usb' | 'rtsp'
-        device        : index USB webcam (default 0)
-        rtsp_url      : URL RTSP/HTTP jika source='rtsp'
-        callback      : fungsi dipanggil tiap deteksi
-        fps           : target frame-rate capture
-        aruco_dict    : nama kamus ArUco (cv2.aruco.DICT_*)
-        marker_length : sisi fisik marker ArUco (m) utk solvePnP
-        qr_length     : sisi fisik QR payload (m) utk solvePnP — KKI 2026 = 0.04 (4×4 cm)
+        source     : 'mock' | 'usb' | 'rtsp'
+        device     : index USB webcam (default 0)
+        rtsp_url   : URL RTSP/HTTP jika source='rtsp'
+        callback   : fungsi dipanggil tiap deteksi QR
+        fps        : target frame-rate capture
+        calib_file : .npz kalibrasi kamera → aktifkan PBVS (solvePnP). None → IBVS.
+        qr_length  : sisi fisik QR payload (m) utk solvePnP — KKI 2026 = 0.04 (4×4 cm)
         """
         self.source = source
         self.device = device
@@ -112,11 +112,9 @@ class VisionPipeline:
         self._thread: Optional[threading.Thread] = None
         self._cap = None
         self._last_result: Optional[dict] = None
-        self._last_aruco: Optional[dict] = None   # deteksi ArUco terakhir (utk visual servo)
-        self._last_qr: Optional[dict] = None      # deteksi QR terakhir (utk scan wall)
+        self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
 
         # Kalibrasi kamera utk PBVS (solvePnP). Bila tak ada → pose=None (fallback IBVS).
-        self.marker_length = marker_length
         self.qr_length = qr_length
         self._K = None
         self._dist = None
@@ -127,18 +125,6 @@ class VisionPipeline:
                 log.info("[vision] Kalibrasi dimuat: %s — PBVS (solvePnP) AKTIF", calib_file)
             except Exception as e:
                 log.warning("[vision] gagal muat kalibrasi %s: %s — fallback IBVS", calib_file, e)
-
-        # Setup ArUco detector
-        self._aruco_detector = None
-        if CV2_OK and hasattr(cv2, 'aruco'):
-            try:
-                dict_id = getattr(cv2.aruco, aruco_dict)
-                aruco_d = cv2.aruco.getPredefinedDictionary(dict_id)
-                params = cv2.aruco.DetectorParameters()
-                self._aruco_detector = cv2.aruco.ArucoDetector(aruco_d, params)
-                log.info("[vision] ArUco detector siap: %s", aruco_dict)
-            except Exception as e:
-                log.warning("[vision] ArUco init gagal: %s", e)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -204,8 +190,8 @@ class VisionPipeline:
             cx = int(320 + 140 * err)
             cy = int(240 + 90 * err)
             area = self.MOCK_TARGET_AREA * (1.0 - 0.6 * err)
-            frame = self._mock_frame('qr', self.MOCK_QR_DATA, (cx, cy))
-            result = self._build_result('qr', self.MOCK_QR_DATA, (cx, cy), area, frame)
+            frame = self._mock_frame(self.MOCK_QR_DATA, (cx, cy))
+            result = self._build_result(self.MOCK_QR_DATA, (cx, cy), area, frame)
 
             if self._K is not None:   # kalibrasi ada → sediakan pose (PBVS), spt kamera nyata
                 z = self.MOCK_TARGET_DIST + 0.5 * err
@@ -215,7 +201,7 @@ class VisionPipeline:
             time.sleep(1.0 / self.fps)
 
     def _run_camera(self):
-        """Capture loop nyata (USB / RTSP)."""
+        """Capture loop nyata (USB / RTSP) — QR saja."""
         src = self.device if self.source == 'usb' else self.rtsp_url
         self._cap = cv2.VideoCapture(src)
         if not self._cap.isOpened():
@@ -224,6 +210,8 @@ class VisionPipeline:
 
         interval = 1.0 / self.fps
         log.info("[vision] Kamera terbuka: %s", src)
+        if not PYZBAR_OK:
+            log.error("[vision] pyzbar tidak tersedia — QR tak bisa dideteksi dari kamera")
 
         while self._running:
             t_start = time.time()
@@ -240,28 +228,13 @@ class VisionPipeline:
                     pts = np.array([[p.x, p.y] for p in obj.polygon])
                     center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
                     area = float(cv2.contourArea(pts.reshape(-1, 1, 2)))
-                    frame = self._annotate(frame, 'qr', data, center, pts)
-                    result = self._build_result('qr', data, center, area, frame)
+                    frame = self._annotate(frame, data, center, pts)
+                    result = self._build_result(data, center, area, frame)
                     # PBVS: pose 3D QR via solvePnP (butuh kalibrasi + 4 sudut terurut)
                     if self._K is not None and len(pts) >= 4:
                         ordered = self._order_corners(pts)
                         result['pose'] = self._estimate_pose_pts(ordered, self.qr_length)
                     self._dispatch(result)
-
-            # Deteksi ArUco
-            if self._aruco_detector is not None:
-                gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-                corners, ids, _ = self._aruco_detector.detectMarkers(gray)
-                if ids is not None:
-                    for corner, aid in zip(corners, ids.flatten()):
-                        pts = corner.reshape(4, 2).astype(int)
-                        center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
-                        area = float(cv2.contourArea(pts.reshape(-1, 1, 2)))
-                        data = str(aid)
-                        frame = self._annotate(frame, 'aruco', data, center, pts)
-                        result = self._build_result('aruco', data, center, area, frame)
-                        result['pose'] = self._estimate_pose(corner)
-                        self._dispatch(result)
 
             elapsed = time.time() - t_start
             sleep_t = max(0, interval - elapsed)
@@ -269,13 +242,12 @@ class VisionPipeline:
 
     # ── Helper ────────────────────────────────────────────────────────────────
 
-    def _build_result(self, det_type, data, center, area, frame) -> dict:
-        wall = wall_from_qr(data) if det_type == 'qr' else None
+    def _build_result(self, data, center, area, frame) -> dict:
         h, w = (frame.shape[0], frame.shape[1]) if frame is not None else (480, 640)
         result = {
-            'type': det_type,
+            'type': 'qr',
             'data': data,
-            'wall': wall,
+            'wall': wall_from_qr(data),
             'center': center,
             'area': area,
             'frame': frame,
@@ -285,20 +257,8 @@ class VisionPipeline:
             'timestamp': time.time(),
         }
         self._last_result = result
-        if det_type == 'aruco':
-            self._last_aruco = result
-        elif det_type == 'qr':
-            self._last_qr = result
+        self._last_qr = result
         return result
-
-    def latest_aruco(self, max_age=0.5, marker_id=None) -> Optional[dict]:
-        """Deteksi ArUco terakhir bila masih segar (utk closed-loop servo)."""
-        r = self._last_aruco
-        if not r or (time.time() - r['timestamp']) > max_age:
-            return None
-        if marker_id is not None and str(r['data']) != str(marker_id):
-            return None
-        return r
 
     def latest_qr(self, max_age=1.0) -> Optional[dict]:
         """Deteksi QR terakhir bila masih segar (hindari transisi dari deteksi basi)."""
@@ -342,39 +302,35 @@ class VisionPipeline:
         return {'x': x, 'y': y, 'z': z, 'dist': math.sqrt(x * x + y * y + z * z),
                 'yaw_deg': yaw_deg}
 
-    def _estimate_pose(self, corner) -> Optional[dict]:
-        """Pose marker ArUco via solvePnP (butuh kalibrasi). corner shape (1,4,2) atau (4,2)."""
-        return self._estimate_pose_pts(corner.reshape(4, 2), self.marker_length)
-
     def _dispatch(self, result: dict):
-        # debug: deteksi terjadi tiap frame saat objek di FOV → hindari banjir log INFO
-        log.debug("[vision] Deteksi %s data=%s wall=%s center=%s",
-                  result['type'], result['data'], result['wall'], result['center'])
+        # debug: deteksi terjadi tiap frame saat QR di FOV → hindari banjir log INFO
+        log.debug("[vision] Deteksi QR data=%s wall=%s center=%s",
+                  result['data'], result['wall'], result['center'])
         if self.callback:
             try:
                 self.callback(result)
             except Exception as e:
                 log.error("[vision] Callback error: %s", e)
 
-    def _annotate(self, frame, det_type, data, center, pts):
+    def _annotate(self, frame, data, center, pts):
         if not CV2_OK:
             return frame
-        color = (0, 255, 0) if det_type == 'qr' else (255, 100, 0)
+        color = (0, 255, 0)
         cv2.polylines(frame, [pts], True, color, 2)
-        cv2.putText(frame, f"{det_type.upper()}:{data}", center,
+        cv2.putText(frame, f"QR:{data}", center,
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, color, 2)
         return frame
 
-    def _mock_frame(self, det_type, data, center):
+    def _mock_frame(self, data, center):
         """Buat frame dummy 640x480 untuk mock mode."""
         frame = np.zeros((480, 640, 3), dtype=np.uint8)
         if CV2_OK:
-            color = (0, 255, 0) if det_type == 'qr' else (255, 100, 0)
+            color = (0, 255, 0)
             cv2.rectangle(frame,
                           (center[0]-30, center[1]-30),
                           (center[0]+30, center[1]+30),
                           color, 2)
-            cv2.putText(frame, f"MOCK {det_type.upper()}:{data}", (10, 30),
+            cv2.putText(frame, f"MOCK QR:{data}", (10, 30),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
         return frame
 
@@ -385,7 +341,7 @@ if __name__ == '__main__':
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(message)s')
 
-    ap = argparse.ArgumentParser(description='Vision pipeline test')
+    ap = argparse.ArgumentParser(description='QR vision pipeline test')
     ap.add_argument('--source', default='mock', choices=['mock', 'usb', 'rtsp'])
     ap.add_argument('--device', type=int, default=0)
     ap.add_argument('--rtsp', default='rtsp://192.168.1.10:8554/cam')

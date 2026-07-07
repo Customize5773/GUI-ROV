@@ -22,7 +22,7 @@ if _AUTONOMY not in sys.path:
     sys.path.insert(0, _AUTONOMY)
 
 from control.visual_servo import PID, VisualServo, PoseServo
-from vision.aruco_qr import wall_from_qr
+from vision.qr_detect import wall_from_qr
 from fsm.mission5 import Mission5FSM, State
 from tests.evaluate_mission5 import run_scenario
 

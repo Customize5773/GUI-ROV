@@ -7,7 +7,7 @@ Menutup loop kontrol Mission5FSM TANPA hardware, UDP, kamera, atau ArduSub:
               ◄─telem─ SimTelemetry ───┤──►  SimPlant  (fisika + geometri QR)
               ◄─visi── SimVision ──────┘
 
-Berbeda dengan `vision.aruco_qr` mode 'mock' (yang hanya memancarkan deteksi QR yang
+Berbeda dengan `vision.qr_detect` mode 'mock' (yang hanya memancarkan deteksi QR yang
 meluruh berdasarkan WAKTU), SimPlant memodelkan **umpan balik nyata**: perintah
 thruster mengubah depth/heading dan geometri QR relatif, sehingga PoseServo/VisualServo
 benar-benar diuji — bukan sekadar timer. Ini membuat evaluasi (`evaluate_mission5.py`)
@@ -16,7 +16,7 @@ dan pytest (`test_mission5.py`) repeatable & deterministik.
 Semua adapter meniru antarmuka yang dipakai FSM:
   CommandSender   : send/arm/stop_all/emergency_stop/close
   TelemetryReceiver: get
-  VisionPipeline  : latest_qr/latest_aruco/last_result/start/stop
+  VisionPipeline  : latest_qr/last_result/start/stop
 
 Waktu memakai FakeClock (virtual): tidak ada sleep nyata → mission penuh selesai
 dalam milidetik. Pasang lewat `install_fake_time(mission5, clock)`.
@@ -28,7 +28,7 @@ import types
 from dataclasses import dataclass
 from typing import Optional
 
-from vision.aruco_qr import wall_from_qr   # butuh autonomy/ di sys.path (diatur harness)
+from vision.qr_detect import wall_from_qr   # butuh autonomy/ di sys.path (diatur harness)
 
 # ── Parameter geometri kamera (samakan dgn asumsi VisionPipeline) ────────────────
 FRAME_W, FRAME_H = 640, 480
@@ -277,9 +277,6 @@ class SimVision:
             return None               # simulasi dropout deteksi (riak/glare)
         self._last = self.plant.detection(self.clock.time(), self.provide_pose)
         return self._last
-
-    def latest_aruco(self, max_age=0.5, marker_id=None):
-        return None
 
     def last_result(self):
         return self._last

@@ -1,21 +1,21 @@
 """
-control/visual_servo.py — Closed-loop visual servoing untuk approach hook (KKI 2026)
+control/visual_servo.py — Closed-loop visual servoing docking QR payload (KKI 2026)
 ====================================================================================
-Mengubah posisi marker ArUco di frame kamera menjadi koreksi gerak ROV
-(sway / surge / vert / yaw) agar ROV mendekat & sejajar dengan hook.
+Mengubah posisi QR payload di frame kamera menjadi koreksi gerak ROV
+(sway / surge / vert / yaw) agar ROV mendekat & sejajar dengan payload.
 
-Pendekatan: Image-Based Visual Servoing (IBVS) — pakai error piksel + luas marker,
-TANPA butuh kalibrasi kamera. Begitu kalibrasi (intrinsics + ukuran marker) tersedia,
+Pendekatan: Image-Based Visual Servoing (IBVS) — pakai error piksel + luas QR,
+TANPA butuh kalibrasi kamera. Begitu kalibrasi (intrinsics + ukuran QR) tersedia,
 bisa di-upgrade ke Pose-Based (solvePnP) tanpa mengubah antarmuka FSM.
 
 Error yang dipakai:
-  ex = (cx - W/2)/(W/2)      # -1..1, + = marker di KANAN frame
-  ey = (cy - H/2)/(H/2)      # -1..1, + = marker di BAWAH frame
-  ea = (target_area - area)/target_area   # + = marker terlalu kecil (terlalu jauh)
+  ex = (cx - W/2)/(W/2)      # -1..1, + = QR di KANAN frame
+  ey = (cy - H/2)/(H/2)      # -1..1, + = QR di BAWAH frame
+  ea = (target_area - area)/target_area   # + = QR terlalu kecil (terlalu jauh)
 
 Mapping → command (-100..100):
-  sway  = PID(ex)            # marker kanan → geser kanan agar ke tengah
-  vert  = PID(-ey)           # marker bawah → turun agar ke tengah
+  sway  = PID(ex)            # QR kanan → geser kanan agar ke tengah
+  vert  = PID(-ey)           # QR bawah → turun agar ke tengah
   surge = PID(ea)            # terlalu jauh → maju
   yaw   = PID(ex) (opsional) # alternatif/penyelaras heading
 

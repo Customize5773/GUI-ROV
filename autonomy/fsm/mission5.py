@@ -39,7 +39,7 @@ from typing import Optional
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vision.aruco_qr import VisionPipeline
+from vision.qr_detect import VisionPipeline
 from control.visual_servo import VisualServo, PoseServo
 
 log = logging.getLogger(__name__)
@@ -67,12 +67,11 @@ TIMEOUT_DOCK          = 15.0   # detik max docking (misi 4 surface dock)
 WALL_HEADING = {'A': 270, 'B': 90, 'C': 0, 'D': 180}
 
 # ── Misi 5: docking closed-loop ke QR payload ("nembak x & y") ────────────────
-# Target visual = QR CODE di payload (4×4 cm), BUKAN ArUco. PBVS bila kamera terkalibrasi.
+# Target visual = QR CODE di payload (4×4 cm). PBVS bila kamera terkalibrasi, else IBVS.
 QR_SIDE_M          = 0.04     # sisi fisik QR payload (m) — KKI 2026 = 4 cm (utk solvePnP)
 SERVO_TARGET_AREA  = 3000.0   # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
 SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payload (TUNE di kolam)
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
-MARKER_LENGTH_M    = 0.10     # sisi marker ArUco fisik (m) — solvePnP (dipakai bila ada ArUco)
 CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
 
 # Arah sumbu servo — VERIFIKASI di kolam (lihat VERIFIKASI_ARDUSUB.md). Balik bila error MEMBESAR.
@@ -732,8 +731,6 @@ def main():
                     help='URL RTSP jika --vision=rtsp')
     ap.add_argument('--calib', default=CALIB_FILE,
                     help='path .npz kalibrasi kamera → aktifkan PBVS (solvePnP). Tanpa ini = IBVS')
-    ap.add_argument('--marker-length', type=float, default=MARKER_LENGTH_M,
-                    help='sisi marker ArUco fisik (m) utk solvePnP')
     ap.add_argument('--qr-size', type=float, default=QR_SIDE_M,
                     help='sisi QR payload fisik (m) utk solvePnP PBVS (KKI 2026 = 0.04)')
     ap.add_argument('--start-state', default='DIVE',
@@ -757,8 +754,7 @@ def main():
     telem = TelemetryReceiver(port=args.telem_port)
     cam   = VisionPipeline(source=args.vision, device=args.device,
                            rtsp_url=args.rtsp,
-                           calib_file=args.calib, marker_length=args.marker_length,
-                           qr_length=args.qr_size)
+                           calib_file=args.calib, qr_length=args.qr_size)
     log.info("[main] Mode visi: %s", "PBVS (solvePnP)" if args.calib else "IBVS (piksel)")
 
     telem.start()

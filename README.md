@@ -35,10 +35,10 @@ GUI-ROV/
 │  ├─ server.js                # jembatan WebSocket <-> UDP + static server
 │  ├─ package.json
 │  └─ package-lock.json
-├─ autonomy/                   # otonomi ROV: visual servo, ArduSub SITL, ArUco
+├─ autonomy/                   # otonomi ROV: visual servo, ArduSub SITL, deteksi QR
 │  ├─ control/visual_servo.py   # PBVS (position-based visual servo)
 │  ├─ fsm/mission5.py            # finite-state machine misi
-│  ├─ vision/aruco_qr.py         # deteksi ArUco/QR
+│  ├─ vision/qr_detect.py        # deteksi QR payload
 │  ├─ tools/                    # kalibrasi kamera, generator marker/checkerboard, tes SITL
 │  ├─ rov_link.py               # link komunikasi ke ROV
 │  ├─ sitl_mock.py              # mock SITL untuk pengujian tanpa hardware
@@ -191,21 +191,19 @@ Browser ──WS:8080── server.js ──cmd JSON :14550──► rov_link.py
 autonomy/
 ├─ rov_link.py              # jembatan server.js (UDP JSON) <-> vehicle (MAVLink)
 ├─ sitl_mock.py             # vehicle MAVLink palsu, buat uji tanpa ArduSub
-├─ vision/aruco_qr.py       # deteksi ArUco + QR, estimasi pose solvePnP (PBVS)
+├─ vision/qr_detect.py      # deteksi QR payload, estimasi pose solvePnP (PBVS)
 ├─ control/visual_servo.py  # VisualServo (IBVS, piksel) & PoseServo (PBVS, meter)
-├─ fsm/mission5.py          # state machine APPROACH_HOOK (PBVS bila --calib, else IBVS)
+├─ fsm/mission5.py          # state machine docking QR (PBVS bila --calib, else IBVS)
 ├─ tools/
 │  ├─ calibrate_camera.py     # kalibrasi kamera via checkerboard -> intrinsics .npz
 │  ├─ make_checkerboard.py    # cetak papan kalibrasi
-│  ├─ make_marker.py          # generator marker ArUco (hook_marker_id7.png)
-│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo dgn webcam
-│  ├─ servo_webcam_test.py    # tes APPROACH_HOOK (IBVS/PBVS) dgn webcam
+│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo pd QR payload dgn webcam
+│  ├─ servo_webcam_test.py    # tes docking QR (IBVS/PBVS) dgn webcam
 │  └─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
 ├─ tests/                    # tes-nilai-evaluasi misi 5 (closed-loop, tanpa hardware)
 │  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
 │  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
 │  └─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
-├─ hook_marker_id7.png      # marker ArUco target hook
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
 ├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
