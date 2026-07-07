@@ -76,7 +76,7 @@ def calibrate_and_save():
     print(f"\n[OK] disimpan: {args.out}")
     print(f"  RMS reproj error = {rms:.3f} px (bagus bila < 0.5; <1.0 masih oke)")
     print(f"  K =\n{K}\n  dist = {dist.ravel()}")
-    print(f"  Pakai: VisionPipeline(source='usb', calib_file='{args.out}', marker_length=<meter>)")
+    print(f"  Pakai: VisionPipeline(source='usb', calib_file='{args.out}', qr_length=<meter>)")
     return True
 
 

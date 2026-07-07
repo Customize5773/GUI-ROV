@@ -92,5 +92,5 @@ Tandai `VERIFIKASI` di `rov_link.py`:
 - **Densitas air** kolam (tawar 997).
 
 ## 5. Setelah (c) hijau
-Lanjut ke visi (point a/b): modul `vision/aruco_qr.py` + state-machine `fsm/mission5.py`
+Lanjut ke visi (point a/b): modul `vision/qr_detect.py` + state-machine `fsm/mission5.py`
 yang menyuntik command JSON yang sama ke `:14550` saat mode autonomous.

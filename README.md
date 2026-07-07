@@ -35,10 +35,10 @@ GUI-ROV/
 │  ├─ server.js                # jembatan WebSocket <-> UDP + static server
 │  ├─ package.json
 │  └─ package-lock.json
-├─ autonomy/                   # otonomi ROV: visual servo, ArduSub SITL, ArUco
+├─ autonomy/                   # otonomi ROV: visual servo, ArduSub SITL, deteksi QR
 │  ├─ control/visual_servo.py   # PBVS (position-based visual servo)
 │  ├─ fsm/mission5.py            # finite-state machine misi
-│  ├─ vision/aruco_qr.py         # deteksi ArUco/QR
+│  ├─ vision/qr_detect.py        # deteksi QR payload
 │  ├─ tools/                    # kalibrasi kamera, generator marker/checkerboard, tes SITL
 │  ├─ rov_link.py               # link komunikasi ke ROV
 │  ├─ sitl_mock.py              # mock SITL untuk pengujian tanpa hardware
@@ -71,7 +71,9 @@ Buka `http://localhost:8080`. ROV 3D akan bergerak mengikuti data simulasi.
 GUI memenuhi ketentuan Panduan KKI 2026 §4.7.3:
 - **2 kamera**: halaman Camera menampilkan CAM 1 (BOTTOM) & CAM 2 (WALL) bersamaan.
 - **Deteksi QR Code**: dibaca di browser dengan **jsQR** dari feed BOTTOM; panel QR
-  menampilkan data + sisi dinding **A/B/C/D**.
+  menampilkan data + sisi dinding **A/B/C/D**. Isi QR payload = **JSON terstruktur**
+  `{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}` (sisi diambil dari `id`);
+  QR string biasa (mis. `SIDE_B`) tetap didukung sebagai fallback.
 - **Identitas** (nama tim, perguruan tinggi) + hari/tanggal/waktu di header (atur di
   Setup → Team Identity, atau `config.js` `TEAM_NAME`/`UNIVERSITY`).
 - **Altitude** ROV terhadap dasar kolam = `POOL_DEPTH − depth` (readout `ALT`).
@@ -191,17 +193,19 @@ Browser ──WS:8080── server.js ──cmd JSON :14550──► rov_link.py
 autonomy/
 ├─ rov_link.py              # jembatan server.js (UDP JSON) <-> vehicle (MAVLink)
 ├─ sitl_mock.py             # vehicle MAVLink palsu, buat uji tanpa ArduSub
-├─ vision/aruco_qr.py       # deteksi ArUco + QR, estimasi pose solvePnP (PBVS)
+├─ vision/qr_detect.py      # deteksi QR payload, estimasi pose solvePnP (PBVS)
 ├─ control/visual_servo.py  # VisualServo (IBVS, piksel) & PoseServo (PBVS, meter)
-├─ fsm/mission5.py          # state machine APPROACH_HOOK (PBVS bila --calib, else IBVS)
+├─ fsm/mission5.py          # state machine docking QR (PBVS bila --calib, else IBVS)
 ├─ tools/
 │  ├─ calibrate_camera.py     # kalibrasi kamera via checkerboard -> intrinsics .npz
 │  ├─ make_checkerboard.py    # cetak papan kalibrasi
-│  ├─ make_marker.py          # generator marker ArUco (hook_marker_id7.png)
-│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo dgn webcam
-│  ├─ servo_webcam_test.py    # tes APPROACH_HOOK (IBVS/PBVS) dgn webcam
+│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo pd QR payload dgn webcam
+│  ├─ servo_webcam_test.py    # tes docking QR (IBVS/PBVS) dgn webcam
 │  └─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
-├─ hook_marker_id7.png      # marker ArUco target hook
+├─ tests/                    # tes-nilai-evaluasi misi 5 (closed-loop, tanpa hardware)
+│  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
+│  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
+│  └─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
 ├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
@@ -220,3 +224,30 @@ GUI mode LIVE (`RPI_ADDR=127.0.0.1 npm start`) — lihat langkah lengkap & krite
 sukses di `autonomy/README_SETUP_C.md`. Untuk naik ke fisika nyata (ArduSub SITL
 di WSL2), ikuti `autonomy/SITL_SETUP.md`.
 ```
+
+### Tes-Nilai-Evaluasi Misi 5 (`autonomy/tests/`)
+
+Untuk **memvalidasi rantai docking payload autonomous misi 5 secara terukur tanpa
+kolam/hardware**, `autonomy/tests/` menutup loop kontrol Mission5FSM melawan
+`sim_plant.py` — simulator ROV+payload in-process yang memodelkan **umpan balik
+nyata** (perintah thruster mengubah depth/heading & geometri QR relatif), sehingga
+PoseServo/VisualServo benar-benar diuji, bukan sekadar timer. Jam virtual membuat
+misi penuh selesai dalam milidetik & deterministik.
+
+```bash
+cd autonomy
+pip install -r requirements.txt pytest      # numpy + pytest (cv2/pyzbar opsional)
+
+pytest tests/ -v                            # unit (PID/servo/heading) + integrasi 1→5
+
+python tests/evaluate_mission5.py           # laporan skor rubrik + evaluasi mutu docking
+python tests/evaluate_mission5.py --start M5_REDIVE   # hanya misi 5 autonomous (1-4 manual)
+python tests/evaluate_mission5.py --ibvs    # tanpa kalibrasi (IBVS piksel)
+python tests/evaluate_mission5.py --json    # keluaran JSON (untuk CI)
+```
+
+Harness memberi **NILAI** (skor rubrik m1..m5, total /100) dan **EVALUASI** (checklist
+mutu: jalur docking visual vs fallback timed, akurasi align lateral & jarak saat engage,
+payload lepas-hook & sampai permukaan, waktu tempuh). Cakupan uji termasuk mode PBVS &
+IBVS, keempat sisi kolam A/B/C/D, dan **ketahanan loss-of-lock** (dropout deteksi QR
+sesaat) yang menguji dead-reckon hold + sapu reacquire terarah pada `M5_DOCK`/`M5_ENGAGE`.

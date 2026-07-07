@@ -39,7 +39,7 @@ from typing import Optional
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vision.aruco_qr import VisionPipeline
+from vision.qr_detect import VisionPipeline
 from control.visual_servo import VisualServo, PoseServo
 
 log = logging.getLogger(__name__)
@@ -67,13 +67,18 @@ TIMEOUT_DOCK          = 15.0   # detik max docking (misi 4 surface dock)
 WALL_HEADING = {'A': 270, 'B': 90, 'C': 0, 'D': 180}
 
 # ── Misi 5: docking closed-loop ke QR payload ("nembak x & y") ────────────────
-# Target visual = QR CODE di payload (4×4 cm), BUKAN ArUco. PBVS bila kamera terkalibrasi.
+# Target visual = QR CODE di payload (4×4 cm). PBVS bila kamera terkalibrasi, else IBVS.
 QR_SIDE_M          = 0.04     # sisi fisik QR payload (m) — KKI 2026 = 4 cm (utk solvePnP)
 SERVO_TARGET_AREA  = 3000.0   # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
 SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payload (TUNE di kolam)
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
-MARKER_LENGTH_M    = 0.10     # sisi marker ArUco fisik (m) — solvePnP (dipakai bila ada ArUco)
 CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
+
+# Validasi payload QR JSON terstruktur ({"mission":5,"type":"payload","id":"A"}) agar
+# FSM tak salah pungut objek lain. QR JSON dicek mission & type; QR string biasa (legacy)
+# tanpa JSON tetap diterima apa adanya.
+PAYLOAD_MISSION    = 5
+PAYLOAD_TYPE       = 'payload'
 
 # Arah sumbu servo — VERIFIKASI di kolam (lihat VERIFIKASI_ARDUSUB.md). Balik bila error MEMBESAR.
 SERVO_INVERT = dict(invert_sway=False, invert_vert=False, invert_surge=False, invert_yaw=False)
@@ -91,6 +96,11 @@ TIMEOUT_M5_ENGAGE  = 12.0     # detik max grab payload
 TIMEOUT_UNHOOK     = 10.0     # detik max lepas-hook
 TIMEOUT_M5_ASCEND  = 20.0     # detik max naik ke permukaan bawa payload
 TIMEOUT_FALLBACK   = 30.0     # detik max jalur timed (degraded, tanpa visual)
+
+# Loss-of-lock: deteksi QR bisa dropout 1-2 frame karena riak air/glare. Jangan
+# langsung menyapu (bisa overshoot & benar-benar kehilangan target). Beri grace
+# singkat "dead-reckon hold", baru menyapu TERARAH ke sisi QR terakhir terlihat.
+M5_LOCK_GRACE_T    = 0.6      # detik hold saat dropout sesaat sebelum mulai menyapu
 
 
 # ── State machine states ───────────────────────────────────────────────────────
@@ -218,6 +228,9 @@ class Mission5FSM:
         self._score   = {'m1': 0, 'm2': 0, 'm3': 0, 'm4': 0, 'm5': 0}
         self._running = False
         self._require_auto = True      # bila True, abort saat mode balik ke MANUAL
+        # Loss-of-lock tracker untuk docking misi 5 (M5_DOCK / M5_ENGAGE)
+        self._m5_last_det_t  = 0.0     # waktu terakhir QR payload terlihat
+        self._m5_search_dir  = 1       # arah sapu reacquire = sisi QR terakhir (+kanan/−kiri)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -341,9 +354,10 @@ class Mission5FSM:
             self._transition(State.ABORT)
             return
 
-        if vis and vis['type'] == 'qr' and vis['wall'] is not None:
+        if (vis and vis['type'] == 'qr' and vis['wall'] is not None
+                and self._is_target_payload(vis)):
             self._target_wall = vis['wall']
-            log.info("[FSM] QR terdeteksi: data=%s → target wall=%s",
+            log.info("[FSM] QR payload terdeteksi: data=%s → target wall=%s",
                      vis['data'], self._target_wall)
             self._score['m1'] = 15
             log.info("[FSM] ✓ Misi 1 selesai (+15 poin)")
@@ -512,7 +526,7 @@ class Mission5FSM:
             self._transition(State.M5_FALLBACK)
             return
 
-        qr   = self.vision.latest_qr(max_age=0.5)
+        qr   = self._fresh_payload(0.5)
         near = depth >= HOOK_DEPTH - DEPTH_TOLERANCE
 
         if qr is not None and near:
@@ -543,12 +557,19 @@ class Mission5FSM:
             self._transition(State.M5_FALLBACK)
             return
 
-        det = self.vision.latest_qr(max_age=0.5)
+        det = self._fresh_payload(0.5)
         if det is None:
-            self.cmd.send(yaw=YAW_SPEED)   # QR hilang → sapu cari
-            log.debug("[FSM] M5_DOCK QR hilang — sapu cari")
+            since = time.time() - self._m5_last_det_t
+            if since < M5_LOCK_GRACE_T:
+                self.cmd.stop_all()        # dropout sesaat → hold, jangan overshoot
+                log.debug("[FSM] M5_DOCK dropout %.2fs — dead-reckon hold", since)
+            else:
+                self.cmd.send(yaw=YAW_SPEED * self._m5_search_dir)   # sapu terarah ke sisi terakhir
+                log.debug("[FSM] M5_DOCK QR hilang %.1fs — sapu terarah dir=%+d",
+                          since, self._m5_search_dir)
             return
 
+        self._note_detection(det)
         out, mode = self._servo_step(det)
         self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert)
         if out.aligned:
@@ -569,17 +590,22 @@ class Mission5FSM:
 
         # Hold x/y dari deteksi QR terbaru (surge dikendalikan fase, bukan servo)
         sway = vert = 0.0
-        det = self.vision.latest_qr(max_age=0.5)
+        det = self._fresh_payload(0.5)
         if det is not None:
+            self._note_detection(det)
             out, _ = self._servo_step(det)
             sway, vert = out.sway, out.vert
+        # Jangan merayap MAJU secara buta bila lock hilang lebih dari grace: risiko
+        # menabrak dinding/hook di luar frame. Tahan surge sampai QR ter-lock lagi.
+        lost_long = (time.time() - self._m5_last_det_t) > M5_LOCK_GRACE_T
 
         if elapsed < 1.5:                          # buka gripper
             self.cmd.send(surge=0, sway=sway, vert=vert, gripper=0)
             log.debug("[FSM] M5_ENGAGE buka gripper")
         elif elapsed < 4.5:                        # merayap seat payload ke gripper
-            self.cmd.send(surge=M5_ENGAGE_SURGE, sway=sway, vert=vert, gripper=0)
-            log.debug("[FSM] M5_ENGAGE merayap ke payload")
+            creep = 0 if lost_long else M5_ENGAGE_SURGE
+            self.cmd.send(surge=creep, sway=sway, vert=vert, gripper=0)
+            log.debug("[FSM] M5_ENGAGE merayap ke payload (surge=%d lost=%s)", creep, lost_long)
         elif elapsed < 6.5:                        # tutup gripper
             self.cmd.send(surge=0, sway=sway, vert=vert, gripper=1)
             log.debug("[FSM] M5_ENGAGE tutup gripper — payload dicengkeram")
@@ -663,6 +689,41 @@ class Mission5FSM:
         log.info("[FSM] %s → %s", self._state.name, new_state.name)
         self._state   = new_state
         self._state_t = time.time()
+        # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
+        if new_state in (State.M5_DOCK, State.M5_ENGAGE):
+            self._m5_last_det_t = self._state_t
+
+    def _is_target_payload(self, det) -> bool:
+        """True bila deteksi QR adalah payload misi ini. QR JSON terstruktur divalidasi
+        (mission & type); QR string biasa (tanpa JSON) diterima apa adanya (legacy)."""
+        payload = det.get('payload')
+        if payload is None:
+            return True
+        m = payload.get('mission')
+        if m is not None and str(m) != str(PAYLOAD_MISSION):
+            return False
+        ptype = payload.get('type')
+        if ptype is not None and str(ptype).lower() != PAYLOAD_TYPE:
+            return False
+        return True
+
+    def _fresh_payload(self, max_age=0.5):
+        """latest_qr yang TERVALIDASI sebagai payload target (else None) — dipakai
+        akuisisi & servo misi 5 agar tak mengunci QR/objek yang salah."""
+        det = self.vision.latest_qr(max_age=max_age)
+        if det is not None and not self._is_target_payload(det):
+            return None
+        return det
+
+    def _note_detection(self, det):
+        """Catat deteksi QR payload segar: perbarui timer lock + arah sapu reacquire.
+        Arah sapu diambil dari sisi lateral QR terakhir (pose.x bila PBVS, else error piksel)
+        agar bila lock hilang ROV menyapu MENUJU target, bukan menjauh."""
+        self._m5_last_det_t = time.time()
+        pose = det.get('pose')
+        lat = pose['x'] if pose is not None else (det['center'][0] - det['frame_w'] / 2.0)
+        if abs(lat) > 1e-6:
+            self._m5_search_dir = 1 if lat > 0 else -1
 
     def _elapsed(self) -> float:
         return time.time() - self._state_t
@@ -699,8 +760,6 @@ def main():
                     help='URL RTSP jika --vision=rtsp')
     ap.add_argument('--calib', default=CALIB_FILE,
                     help='path .npz kalibrasi kamera → aktifkan PBVS (solvePnP). Tanpa ini = IBVS')
-    ap.add_argument('--marker-length', type=float, default=MARKER_LENGTH_M,
-                    help='sisi marker ArUco fisik (m) utk solvePnP')
     ap.add_argument('--qr-size', type=float, default=QR_SIDE_M,
                     help='sisi QR payload fisik (m) utk solvePnP PBVS (KKI 2026 = 0.04)')
     ap.add_argument('--start-state', default='DIVE',
@@ -724,8 +783,7 @@ def main():
     telem = TelemetryReceiver(port=args.telem_port)
     cam   = VisionPipeline(source=args.vision, device=args.device,
                            rtsp_url=args.rtsp,
-                           calib_file=args.calib, marker_length=args.marker_length,
-                           qr_length=args.qr_size)
+                           calib_file=args.calib, qr_length=args.qr_size)
     log.info("[main] Mode visi: %s", "PBVS (solvePnP)" if args.calib else "IBVS (piksel)")
 
     telem.start()
