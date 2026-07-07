@@ -26,18 +26,95 @@ const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 
+/* ======================= JOYSTICK CONFIG FILE ======================= */
+const CONFIG_DIR = path.join(__dirname, "config");
+const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
+
+function defaultJoystickConfig() {
+  return {
+    enabled: true,
+    axisConfig: [
+      { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
+      { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
+      { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
+      { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
+      { input: "axis 4", assigned: "No function", min: -1, max: 1, direction: "↕" },
+    ],
+  };
+}
+
+function ensureConfigDir() {
+  if (!fs.existsSync(CONFIG_DIR)) {
+    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  }
+}
+
+function sanitizeJoystickConfig(data) {
+  const fallback = defaultJoystickConfig();
+  if (!data || typeof data !== "object") return fallback;
+
+  const enabled = data.enabled !== false;
+  const src = Array.isArray(data.axisConfig) ? data.axisConfig : fallback.axisConfig;
+
+  const axisConfig = fallback.axisConfig.map((def, i) => {
+    const row = src[i] || {};
+    return {
+      input: typeof row.input === "string" ? row.input : def.input,
+      assigned: typeof row.assigned === "string" ? row.assigned : def.assigned,
+      min: Number.isFinite(Number(row.min)) ? Number(row.min) : def.min,
+      max: Number.isFinite(Number(row.max)) ? Number(row.max) : def.max,
+      direction: row.direction === "↕" ? "↕" : "↔",
+    };
+  });
+
+  return { enabled, axisConfig };
+}
+
+function loadJoystickConfig() {
+  try {
+    if (!fs.existsSync(JOY_CFG_FILE)) {
+      const cfg = defaultJoystickConfig();
+      ensureConfigDir();
+      fs.writeFileSync(JOY_CFG_FILE, JSON.stringify(cfg, null, 2), "utf8");
+      console.log("[JOYCFG] file config belum ada, dibuat default");
+      return cfg;
+    }
+
+    const raw = fs.readFileSync(JOY_CFG_FILE, "utf8");
+    const parsed = JSON.parse(raw);
+    const cfg = sanitizeJoystickConfig(parsed);
+    console.log("[JOYCFG] config joystick dimuat");
+    return cfg;
+  } catch (err) {
+    console.warn("[JOYCFG] gagal load config, pakai default:", err.message);
+    return defaultJoystickConfig();
+  }
+}
+
+function saveJoystickConfig(data) {
+  const cfg = sanitizeJoystickConfig(data);
+  ensureConfigDir();
+  fs.writeFileSync(JOY_CFG_FILE, JSON.stringify(cfg, null, 2), "utf8");
+  console.log("[JOYCFG] config joystick disimpan ke", JOY_CFG_FILE);
+  return cfg;
+}
+
+let joystickConfig = loadJoystickConfig();
+
 /* ----------------------- HTTP static server ----------------------- */
 const MIME = {
   ".html": "text/html", ".css": "text/css", ".js": "text/javascript",
   ".json": "application/json", ".glb": "model/gltf-binary",
   ".fbx": "application/octet-stream", ".png": "image/png", ".svg": "image/svg+xml",
 };
+
 // Host tujuan yang boleh di-proxy (umbilical LAN). Cegah open-proxy ke internet.
 // Set CAM_ALLOW_ANY=1 untuk menonaktifkan pembatasan (mis. uji lab).
 function isAllowedCamHost(host) {
   if (process.env.CAM_ALLOW_ANY === "1") return true;
   if (!host) return false;
   if (host === "localhost" || host.endsWith(".local")) return true;
+
   // IPv4 privat: 127/8, 10/8, 192.168/16, 172.16–31/12
   const m = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!m) return false;
@@ -53,29 +130,53 @@ const httpServer = http.createServer((req, res) => {
   if (urlPath === "/cam") {
     const target = new URL(req.url, `http://localhost:${WS_PORT}`).searchParams.get("url");
     if (!target) { res.writeHead(400); return res.end("param 'url' wajib"); }
+
     let t;
-    try { t = new URL(target); } catch { res.writeHead(400); return res.end("url tidak valid"); }
-    if (t.protocol !== "http:" && t.protocol !== "https:") { res.writeHead(400); return res.end("protokol tidak didukung"); }
-    if (!isAllowedCamHost(t.hostname)) { res.writeHead(403); return res.end("host kamera tidak diizinkan"); }
+    try { t = new URL(target); }
+    catch { res.writeHead(400); return res.end("url tidak valid"); }
+
+    if (t.protocol !== "http:" && t.protocol !== "https:") {
+      res.writeHead(400);
+      return res.end("protokol tidak didukung");
+    }
+
+    if (!isAllowedCamHost(t.hostname)) {
+      res.writeHead(403);
+      return res.end("host kamera tidak diizinkan");
+    }
+
     const mod = t.protocol === "https:" ? https : http;
     const up = mod.get(target, (upRes) => {
       res.writeHead(upRes.statusCode || 502, upRes.headers);
       upRes.pipe(res);
     });
+
     up.on("error", (e) => {
       if (!res.headersSent) res.writeHead(502);
       res.end("kamera upstream error: " + e.message);
     });
+
     req.on("close", () => up.destroy());
     return;
   }
 
   if (urlPath === "/") urlPath = "/index.html";
+
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
-  if (!filePath.startsWith(PUBLIC)) { res.writeHead(403); return res.end("Forbidden"); }
+  if (!filePath.startsWith(PUBLIC)) {
+    res.writeHead(403);
+    return res.end("Forbidden");
+  }
+
   fs.readFile(filePath, (err, data) => {
-    if (err) { res.writeHead(404); return res.end("Not found"); }
-    res.writeHead(200, { "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream" });
+    if (err) {
+      res.writeHead(404);
+      return res.end("Not found");
+    }
+
+    res.writeHead(200, {
+      "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream"
+    });
     res.end(data);
   });
 });
@@ -86,34 +187,111 @@ const clients = new Set();
 
 function broadcast(obj) {
   const s = JSON.stringify(obj);
-  for (const c of clients) if (c.readyState === 1) c.send(s);
+  for (const c of clients) {
+    if (c.readyState === 1) c.send(s);
+  }
 }
 
 wss.on("connection", (ws, req) => {
   clients.add(ws);
   const ip = req.socket.remoteAddress;
+
   console.log(`[WS] dashboard terhubung (${ip}). Total: ${clients.size}`);
-  ws.send(JSON.stringify({ type: "event", text: `Terhubung ke server (${SIM ? "SIM" : "LIVE"})`, level: "ok" }));
+
+  ws.send(JSON.stringify({
+    type: "event",
+    text: `Terhubung ke server (${SIM ? "SIM" : "LIVE"})`,
+    level: "ok"
+  }));
+
+  // kirim config joystick saat dashboard baru connect
+  ws.send(JSON.stringify({
+    type: "joystick_config",
+    data: joystickConfig,
+  }));
 
   ws.on("message", (raw) => {
-    let msg; try { msg = JSON.parse(raw); } catch { return; }
-    if (msg.type === "ping") { ws.send(JSON.stringify({ type: "pong", t: msg.t })); return; }
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      return;
+    }
+
+    // ================= PING =================
+    if (msg.type === "ping") {
+      ws.send(JSON.stringify({ type: "pong", t: msg.t }));
+      return;
+    }
+
+    // ================= JOYSTICK CONFIG GET =================
+    if (msg.type === "joystick_config_get") {
+      ws.send(JSON.stringify({
+        type: "joystick_config",
+        data: joystickConfig,
+      }));
+      return;
+    }
+
+    // ================= JOYSTICK CONFIG SAVE =================
+    if (msg.type === "joystick_config_save") {
+      try {
+        joystickConfig = saveJoystickConfig(msg.data);
+
+        ws.send(JSON.stringify({
+          type: "event",
+          text: "Joystick mapping berhasil disimpan",
+          level: "ok",
+        }));
+
+        ws.send(JSON.stringify({
+          type: "joystick_config",
+          data: joystickConfig,
+        }));
+
+        console.log("[JOYCFG] mapping joystick disimpan oleh dashboard");
+      } catch (err) {
+        ws.send(JSON.stringify({
+          type: "event",
+          text: `Gagal menyimpan joystick mapping: ${err.message}`,
+          level: "err",
+        }));
+
+        console.warn("[JOYCFG] save gagal:", err.message);
+      }
+      return;
+    }
+
+    // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
       // di mode SIM, pantulkan status perintah agar tombol header berefek nyata
       if (SIM) applySimCommand(msg.name, msg.value);
+
       // teruskan command ke Raspi via UDP
-      const packet = Buffer.from(JSON.stringify({ name: msg.name, value: msg.value, t: Date.now() }));
+      const packet = Buffer.from(JSON.stringify({
+        name: msg.name,
+        value: msg.value,
+        t: Date.now()
+      }));
+
       udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
         if (e) console.warn("[UDP] gagal kirim command:", e.message);
       });
+
       console.log(`[CMD] ${msg.name} = ${msg.value} -> ${RPI_ADDR}:${UDP_OUT}`);
+      return;
     }
   });
-  ws.on("close", () => { clients.delete(ws); console.log(`[WS] terputus. Total: ${clients.size}`); });
+
+  ws.on("close", () => {
+    clients.delete(ws);
+    console.log(`[WS] terputus. Total: ${clients.size}`);
+  });
 });
 
 /* ----------------------- UDP (telemetry masuk) ----------------------- */
 const udp = dgram.createSocket("udp4");
+
 udp.on("message", (buf, rinfo) => {
   let data;
   try {
@@ -130,7 +308,9 @@ udp.on("message", (buf, rinfo) => {
 
   broadcast({ type: "telemetry", data, recv: Date.now() });
 });
+
 udp.on("error", (e) => console.error("[UDP] error:", e.message));
+
 udp.bind(UDP_IN, "0.0.0.0", () => {
   console.log(`[UDP] mendengar telemetri di 0.0.0.0:${UDP_IN}`);
 });
@@ -138,20 +318,31 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 /* ----------------------- simulator (opsional) ----------------------- */
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
 const simState = { armed: false, light: false, mode: "manual" };
+
 function applySimCommand(name, value) {
   switch (name) {
-    case "arm": simState.armed = !!value; break;
-    case "light": simState.light = !!value; break;
-    case "stop": simState.armed = false; break;          // failsafe: netralkan
-    case "control_mode": simState.mode = value; break;
+    case "arm":
+      simState.armed = !!value;
+      break;
+    case "light":
+      simState.light = !!value;
+      break;
+    case "stop":
+      simState.armed = false;
+      break; // failsafe: netralkan
+    case "control_mode":
+      simState.mode = value;
+      break;
   }
 }
 
 if (SIM) {
   console.log("[SIM] menghasilkan telemetri palsu (tanpa Raspi).");
   let t = 0;
+
   setInterval(() => {
     t += 0.1;
+
     broadcast({
       type: "telemetry",
       data: {
@@ -162,7 +353,9 @@ if (SIM) {
         pitch: 7 * Math.sin(t * 0.4 + 1),
         temp: 26.5 + Math.sin(t * 0.05),
         voltage: 15.7 + 0.2 * Math.sin(t),
-        armed: simState.armed, light: simState.light, mode: simState.mode,
+        armed: simState.armed,
+        light: simState.light,
+        mode: simState.mode,
       },
       recv: Date.now(),
     });
@@ -174,5 +367,6 @@ httpServer.listen(WS_PORT, () => {
   console.log(`  Dashboard : http://localhost:${WS_PORT}`);
   console.log(`  WebSocket : ws://localhost:${WS_PORT}`);
   console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
-  console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}\n`);
+  console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
+  console.log(`  Joy cfg   : ${JOY_CFG_FILE}\n`);
 });

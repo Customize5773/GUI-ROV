@@ -1,4 +1,8 @@
-import { joystickState } from "../joystick-state.js";
+import {
+  joystickState,
+  applyJoystickConfig,
+  getJoystickConfigPayload
+} from "../joystick-state.js";
 
 let root = null;
 let axisLoopStarted = false;
@@ -23,6 +27,16 @@ const axisRows = [
   { name: "axis 4" },
 ];
 
+function sendWsMessage(msg) {
+  const ws = window.ws;
+  if (!ws || ws.readyState !== 1) {
+    console.warn("[Joystick] WebSocket belum terhubung");
+    return false;
+  }
+  ws.send(JSON.stringify(msg));
+  return true;
+}
+
 export const joystickPage = {
   init(container) {
     root = container;
@@ -44,6 +58,26 @@ export const joystickPage = {
               <span class="joycontroller__name" id="joyControllerNameTable">
                 Unknown controller
               </span>
+            </div>
+          </div>
+
+          <!-- TOOLBAR -->
+          <div class="joytoolbar">
+            <div class="joytoolbar__left">
+              <button class="joyactionBtn joyactionBtn--primary" id="joySaveBtn" type="button">
+                Save Mapping
+              </button>
+              <button class="joyactionBtn" id="joyResetBtn" type="button">
+                Reset Default
+              </button>
+            </div>
+
+            <div class="joytoolbar__right">
+              <label class="joyenabled">
+                <input type="checkbox" id="joyEnabledToggle" ${joystickState.enabled ? "checked" : ""} />
+                <span>Enabled</span>
+              </label>
+              <span class="joysaveStatus" id="joySaveStatus">Config belum disimpan</span>
             </div>
           </div>
 
@@ -153,6 +187,28 @@ export const joystickPage = {
     injectJoystickStyles();
     bindJoystickUI(root);
     updateControllerName(root);
+    renderJoystickConfigToUI(root);
+
+    // minta config dari server saat page dibuka
+    sendWsMessage({ type: "joystick_config_get" });
+
+    // listener global untuk menerima config dari app.js
+    if (!window.__joyCfgListenerInstalled) {
+      window.__joyCfgListenerInstalled = true;
+
+      window.addEventListener("hydro-joystick-config", (ev) => {
+        const data = ev.detail;
+        if (!data) return;
+
+        applyJoystickConfig(data);
+        if (root) renderJoystickConfigToUI(root);
+
+        const status = root?.querySelector("#joySaveStatus");
+        if (status) {
+          status.textContent = "Config sinkron dengan server";
+        }
+      });
+    }
 
     if (!axisLoopStarted) {
       axisLoopStarted = true;
@@ -180,6 +236,7 @@ function bindJoystickUI(root) {
         axisConfig[index].direction === "↔" ? "↕" : "↔";
 
       btn.textContent = axisConfig[index].direction;
+      markDirty(root);
     });
   });
 
@@ -192,6 +249,7 @@ function bindJoystickUI(root) {
       if (!Number.isNaN(index) && axisConfig[index]) {
         axisConfig[index].assigned = value;
         console.log(`[Joystick] ${axisConfig[index].input} -> ${value}`);
+        markDirty(root);
       }
     });
   });
@@ -204,6 +262,7 @@ function bindJoystickUI(root) {
 
       if (!Number.isNaN(index) && axisConfig[index]) {
         axisConfig[index].min = value;
+        markDirty(root);
       }
     });
   });
@@ -216,9 +275,47 @@ function bindJoystickUI(root) {
 
       if (!Number.isNaN(index) && axisConfig[index]) {
         axisConfig[index].max = value;
+        markDirty(root);
       }
     });
   });
+
+  const enabledToggle = root.querySelector("#joyEnabledToggle");
+  if (enabledToggle) {
+    enabledToggle.checked = joystickState.enabled !== false;
+    enabledToggle.addEventListener("change", () => {
+      joystickState.enabled = enabledToggle.checked;
+      markDirty(root);
+    });
+  }
+
+  const saveBtn = root.querySelector("#joySaveBtn");
+  const resetBtn = root.querySelector("#joyResetBtn");
+  const saveStatus = root.querySelector("#joySaveStatus");
+
+  if (saveBtn) {
+    saveBtn.addEventListener("click", () => {
+      const ok = sendWsMessage({
+        type: "joystick_config_save",
+        data: getJoystickConfigPayload(),
+      });
+
+      if (ok && saveStatus) {
+        saveStatus.textContent = "Menyimpan ke server...";
+      }
+    });
+  }
+
+  if (resetBtn) {
+    resetBtn.addEventListener("click", () => {
+      applyJoystickConfig(getDefaultJoystickConfig());
+      renderJoystickConfigToUI(root);
+
+      if (saveStatus) {
+        saveStatus.textContent = "Default dimuat. Klik Save Mapping untuk menyimpan.";
+      }
+    });
+  }
 
   window.addEventListener("gamepadconnected", () => updateControllerName(root));
   window.addEventListener("gamepaddisconnected", () => updateControllerName(root));
@@ -233,6 +330,45 @@ function updateControllerName(root) {
 
   const el = root.querySelector("#joyControllerNameTable");
   if (el) el.textContent = name;
+}
+
+function renderJoystickConfigToUI(root) {
+  if (!root) return;
+
+  const enabledToggle = root.querySelector("#joyEnabledToggle");
+  if (enabledToggle) enabledToggle.checked = joystickState.enabled !== false;
+
+  joystickState.axisConfig.forEach((row, index) => {
+    const dirBtn = root.querySelector(`[data-dir-btn="${index}"]`);
+    const minInput = root.querySelector(`[data-min-input="${index}"]`);
+    const maxInput = root.querySelector(`[data-max-input="${index}"]`);
+    const axisSelect = root.querySelector(`[data-axis-select="${index}"]`);
+
+    if (dirBtn) dirBtn.textContent = row.direction ?? "↔";
+    if (minInput) minInput.value = row.min ?? 0;
+    if (maxInput) maxInput.value = row.max ?? 0;
+    if (axisSelect) axisSelect.value = row.assigned ?? "No function";
+  });
+}
+
+function getDefaultJoystickConfig() {
+  return {
+    enabled: true,
+    axisConfig: [
+      { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
+      { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
+      { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
+      { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
+      { input: "axis 4", assigned: "No function", min: -1, max: 1, direction: "↕" },
+    ],
+  };
+}
+
+function markDirty(root) {
+  const saveStatus = root?.querySelector("#joySaveStatus");
+  if (saveStatus) {
+    saveStatus.textContent = "Ada perubahan belum disimpan";
+  }
 }
 
 function startAxisPreviewLoop() {
@@ -281,6 +417,12 @@ function startAxisPreviewLoop() {
   };
 
   requestAnimationFrame(loop);
+}
+
+export function handleJoystickConfigMessage(data) {
+  window.dispatchEvent(
+    new CustomEvent("hydro-joystick-config", { detail: data })
+  );
 }
 
 function injectJoystickStyles() {
@@ -354,6 +496,61 @@ function injectJoystickStyles() {
       background: #29d3ff;
       box-shadow: 0 0 12px rgba(41, 211, 255, 0.6);
       flex: 0 0 auto;
+    }
+
+    .joytoolbar{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:16px;
+      flex-wrap:wrap;
+      margin-top:-2px;
+    }
+
+    .joytoolbar__left,
+    .joytoolbar__right{
+      display:flex;
+      align-items:center;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+
+    .joyactionBtn{
+      height:40px;
+      padding:0 16px;
+      border-radius:12px;
+      border:1px solid rgba(53,111,164,.35);
+      background:rgba(14,34,56,.55);
+      color:#eaf4ff;
+      font-size:14px;
+      font-weight:700;
+      cursor:pointer;
+      transition:.18s ease;
+    }
+
+    .joyactionBtn:hover{
+      border-color:rgba(77,169,255,.5);
+      color:#fff;
+    }
+
+    .joyactionBtn--primary{
+      background:linear-gradient(180deg, rgba(30,116,182,.85), rgba(20,83,140,.9));
+      border-color:rgba(73,170,255,.45);
+      color:#fff;
+    }
+
+    .joyenabled{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      color:#d7e7f5;
+      font-size:14px;
+      font-weight:600;
+    }
+
+    .joysaveStatus{
+      color:#9cb6cc;
+      font-size:13px;
     }
 
     .joytable__wrap {
@@ -587,6 +784,16 @@ function injectJoystickStyles() {
       .joycontroller {
         min-width: unset;
         width: 100%;
+      }
+
+      .joytoolbar{
+        flex-direction:column;
+        align-items:flex-start;
+      }
+
+      .joytoolbar__right{
+        width:100%;
+        justify-content:space-between;
       }
     }
   `;

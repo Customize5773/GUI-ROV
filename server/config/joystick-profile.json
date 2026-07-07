@@ -1,0 +1,40 @@
+{
+  "enabled": true,
+  "axisConfig": [
+    {
+      "input": "axis 0",
+      "assigned": "Axis R",
+      "min": -1000,
+      "max": 1000,
+      "direction": "↔"
+    },
+    {
+      "input": "axis 1",
+      "assigned": "Axis Z",
+      "min": 1000,
+      "max": -1000,
+      "direction": "↕"
+    },
+    {
+      "input": "axis 2",
+      "assigned": "Axis Y",
+      "min": -1000,
+      "max": 1000,
+      "direction": "↔"
+    },
+    {
+      "input": "axis 3",
+      "assigned": "Axis X",
+      "min": 1000,
+      "max": -1000,
+      "direction": "↕"
+    },
+    {
+      "input": "axis 4",
+      "assigned": "No function",
+      "min": -1,
+      "max": 1,
+      "direction": "↕"
+    }
+  ]
+}

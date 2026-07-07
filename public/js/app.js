@@ -5,7 +5,7 @@ import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
-import { joystickPage } from "./pages/joystick.js";
+import {joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState, updateJoystickStateFromGamepad } from "./joystick-state.js";
 
 /*  elemen DOM  */
@@ -316,8 +316,13 @@ setInterval(() => {
 /*  WebSocket  */
 let ws = null, demo = null, pingT = 0, linkStale = false;
 function connect() {
-  try { ws = new WebSocket(CONFIG.WS_URL); }
-  catch (e) { log("WS gagal dibuat", "err"); return scheduleReconnect(); }
+  try {
+    ws = new WebSocket(CONFIG.WS_URL);
+    window.ws = ws;
+  } catch (e) {
+    log("WS gagal dibuat", "err");
+    return scheduleReconnect();
+  }
 
   ws.onopen = () => {
     linkStale = false;
@@ -327,12 +332,29 @@ function connect() {
   ws.onclose = () => { linkStale = false; setLink("off"); scheduleReconnect(); maybeDemo(); };
   ws.onerror = () => { log("Error koneksi WS", "err"); };
   ws.onmessage = (ev) => {
-    let msg; try { msg = JSON.parse(ev.data); } catch { return; }
-    if (msg.type === "telemetry") applyTelemetry(msg.data);
-    else if (msg.type === "pong") setLatency(performance.now() - msg.t);
-    else if (msg.type === "event") log(msg.text, msg.level || "");
-  };
+  let msg;
+  try {
+    msg = JSON.parse(ev.data);
+  } catch {
+    return;
+  }
+
+  if (msg.type === "telemetry") {
+    applyTelemetry(msg.data);
+  }
+  else if (msg.type === "pong") {
+    setLatency(performance.now() - msg.t);
+  }
+  else if (msg.type === "event") {
+    log(msg.text, msg.level || "");
+  }
+  else if (msg.type === "joystick_config") {
+    handleJoystickConfigMessage(msg.data);
+    log("Joystick config diterima dari server", "ok");
+  }
+};
 }
+
 let reconnectTimer = null;
 function scheduleReconnect() {
   clearTimeout(reconnectTimer);

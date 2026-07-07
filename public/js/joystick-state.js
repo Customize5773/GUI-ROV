@@ -20,6 +20,38 @@ export const joystickState = {
   ],
 };
 
+export function getJoystickConfigPayload() {
+  return {
+    enabled: joystickState.enabled,
+    axisConfig: joystickState.axisConfig.map((row) => ({
+      input: row.input,
+      assigned: row.assigned,
+      min: row.min,
+      max: row.max,
+      direction: row.direction,
+    })),
+  };
+}
+
+export function applyJoystickConfig(config) {
+  if (!config || typeof config !== "object") return;
+
+  joystickState.enabled = config.enabled !== false;
+
+  if (Array.isArray(config.axisConfig)) {
+    joystickState.axisConfig.forEach((row, i) => {
+      const src = config.axisConfig[i];
+      if (!src) return;
+
+      row.input = typeof src.input === "string" ? src.input : row.input;
+      row.assigned = typeof src.assigned === "string" ? src.assigned : row.assigned;
+      row.min = Number.isFinite(Number(src.min)) ? Number(src.min) : row.min;
+      row.max = Number.isFinite(Number(src.max)) ? Number(src.max) : row.max;
+      row.direction = src.direction === "↕" ? "↕" : "↔";
+    });
+  }
+}
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
