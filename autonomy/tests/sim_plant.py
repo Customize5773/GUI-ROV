@@ -24,6 +24,7 @@ dalam milidetik. Pasang lewat `install_fake_time(mission5, clock)`.
 
 from __future__ import annotations
 
+import json
 import types
 from dataclasses import dataclass
 from typing import Optional
@@ -115,8 +116,10 @@ class SimPlant:
     def __init__(self, target_wall='C', target_dist=0.30, target_area=3000.0):
         self.s = PlantState()
         self.target_wall = target_wall
-        # data QR = string yg memetakan ke wall (wall_from_qr mengenali huruf terisolasi)
-        self.qr_data = f'HYDROSHIP-M5-{target_wall}'
+        # data QR = JSON payload terstruktur KKI 2026 (spt cetak PDF tim)
+        self.qr_payload = {'mission': 5, 'team': 'HYDROSHIP',
+                           'type': 'payload', 'id': target_wall}
+        self.qr_data = json.dumps(self.qr_payload)
         self._in = {'surge': 0.0, 'sway': 0.0, 'yaw': 0.0, 'vert': 0.0}
         self._in_band_prev = False
         # instrumentasi
@@ -197,6 +200,7 @@ class SimPlant:
         det = {
             'type': 'qr',
             'data': self.qr_data,
+            'payload': dict(self.qr_payload),
             'wall': wall_from_qr(self.qr_data),
             'center': (cx, cy),
             'area': area,

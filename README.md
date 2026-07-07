@@ -71,7 +71,9 @@ Buka `http://localhost:8080`. ROV 3D akan bergerak mengikuti data simulasi.
 GUI memenuhi ketentuan Panduan KKI 2026 §4.7.3:
 - **2 kamera**: halaman Camera menampilkan CAM 1 (BOTTOM) & CAM 2 (WALL) bersamaan.
 - **Deteksi QR Code**: dibaca di browser dengan **jsQR** dari feed BOTTOM; panel QR
-  menampilkan data + sisi dinding **A/B/C/D**.
+  menampilkan data + sisi dinding **A/B/C/D**. Isi QR payload = **JSON terstruktur**
+  `{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}` (sisi diambil dari `id`);
+  QR string biasa (mis. `SIDE_B`) tetap didukung sebagai fallback.
 - **Identitas** (nama tim, perguruan tinggi) + hari/tanggal/waktu di header (atur di
   Setup → Team Identity, atau `config.js` `TEAM_NAME`/`UNIVERSITY`).
 - **Altitude** ROV terhadap dasar kolam = `POOL_DEPTH − depth` (readout `ALT`).

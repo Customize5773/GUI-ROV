@@ -74,6 +74,12 @@ SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payl
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
 CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
 
+# Validasi payload QR JSON terstruktur ({"mission":5,"type":"payload","id":"A"}) agar
+# FSM tak salah pungut objek lain. QR JSON dicek mission & type; QR string biasa (legacy)
+# tanpa JSON tetap diterima apa adanya.
+PAYLOAD_MISSION    = 5
+PAYLOAD_TYPE       = 'payload'
+
 # Arah sumbu servo — VERIFIKASI di kolam (lihat VERIFIKASI_ARDUSUB.md). Balik bila error MEMBESAR.
 SERVO_INVERT = dict(invert_sway=False, invert_vert=False, invert_surge=False, invert_yaw=False)
 
@@ -348,9 +354,10 @@ class Mission5FSM:
             self._transition(State.ABORT)
             return
 
-        if vis and vis['type'] == 'qr' and vis['wall'] is not None:
+        if (vis and vis['type'] == 'qr' and vis['wall'] is not None
+                and self._is_target_payload(vis)):
             self._target_wall = vis['wall']
-            log.info("[FSM] QR terdeteksi: data=%s → target wall=%s",
+            log.info("[FSM] QR payload terdeteksi: data=%s → target wall=%s",
                      vis['data'], self._target_wall)
             self._score['m1'] = 15
             log.info("[FSM] ✓ Misi 1 selesai (+15 poin)")
@@ -519,7 +526,7 @@ class Mission5FSM:
             self._transition(State.M5_FALLBACK)
             return
 
-        qr   = self.vision.latest_qr(max_age=0.5)
+        qr   = self._fresh_payload(0.5)
         near = depth >= HOOK_DEPTH - DEPTH_TOLERANCE
 
         if qr is not None and near:
@@ -550,7 +557,7 @@ class Mission5FSM:
             self._transition(State.M5_FALLBACK)
             return
 
-        det = self.vision.latest_qr(max_age=0.5)
+        det = self._fresh_payload(0.5)
         if det is None:
             since = time.time() - self._m5_last_det_t
             if since < M5_LOCK_GRACE_T:
@@ -583,7 +590,7 @@ class Mission5FSM:
 
         # Hold x/y dari deteksi QR terbaru (surge dikendalikan fase, bukan servo)
         sway = vert = 0.0
-        det = self.vision.latest_qr(max_age=0.5)
+        det = self._fresh_payload(0.5)
         if det is not None:
             self._note_detection(det)
             out, _ = self._servo_step(det)
@@ -685,6 +692,28 @@ class Mission5FSM:
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
         if new_state in (State.M5_DOCK, State.M5_ENGAGE):
             self._m5_last_det_t = self._state_t
+
+    def _is_target_payload(self, det) -> bool:
+        """True bila deteksi QR adalah payload misi ini. QR JSON terstruktur divalidasi
+        (mission & type); QR string biasa (tanpa JSON) diterima apa adanya (legacy)."""
+        payload = det.get('payload')
+        if payload is None:
+            return True
+        m = payload.get('mission')
+        if m is not None and str(m) != str(PAYLOAD_MISSION):
+            return False
+        ptype = payload.get('type')
+        if ptype is not None and str(ptype).lower() != PAYLOAD_TYPE:
+            return False
+        return True
+
+    def _fresh_payload(self, max_age=0.5):
+        """latest_qr yang TERVALIDASI sebagai payload target (else None) — dipakai
+        akuisisi & servo misi 5 agar tak mengunci QR/objek yang salah."""
+        det = self.vision.latest_qr(max_age=max_age)
+        if det is not None and not self._is_target_payload(det):
+            return None
+        return det
 
     def _note_detection(self, det):
         """Catat deteksi QR payload segar: perbarui timer lock + arah sapu reacquire.

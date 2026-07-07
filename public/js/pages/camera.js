@@ -305,11 +305,23 @@ export const cameraPage = {
       this.lastQR = "";
       return;
     }
-    this.els.qrData.textContent = data;
-    // ambil huruf A-D yang berdiri sendiri (tidak diapit huruf lain), mis. "A", "SIDE_B", "WALL-C".
-    // Tanpa lookbehind (?<!) agar kompatibel di semua browser (mis. Safari lama).
-    const m = String(data).toUpperCase().match(/(?:^|[^A-Z])([ABCD])(?![A-Z])/);
-    const side = m ? m[1] : "?";
+    // QR payload KKI 2026 = JSON terstruktur, mis:
+    //   {"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}
+    // Ambil sisi dari field "id"; fallback ke huruf sisi terisolasi ("A","SIDE_B","WALL-C")
+    // untuk QR string biasa. Regex tanpa lookbehind agar kompatibel Safari lama.
+    let side = "?", shown = data, parsed = null;
+    try { parsed = JSON.parse(data); } catch (_) { parsed = null; }
+    if (parsed && typeof parsed === "object" && typeof parsed.id === "string" &&
+        /^[ABCD]$/.test(parsed.id.trim().toUpperCase())) {
+      side = parsed.id.trim().toUpperCase();
+      const team = parsed.team ? ` · ${parsed.team}` : "";
+      const miss = parsed.mission != null ? ` · M${parsed.mission}` : "";
+      shown = `id=${side}${miss}${team}`;
+    } else {
+      const m = String(data).toUpperCase().match(/(?:^|[^A-Z])([ABCD])(?![A-Z])/);
+      side = m ? m[1] : "?";
+    }
+    this.els.qrData.textContent = shown;
     this.els.qrSide.textContent = side;
     this.els.qrSide.className = "qr__side qr__side--" + (side === "?" ? "unknown" : "ok");
     this.els.qrTime.textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });

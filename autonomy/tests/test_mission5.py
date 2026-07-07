@@ -22,9 +22,18 @@ if _AUTONOMY not in sys.path:
     sys.path.insert(0, _AUTONOMY)
 
 from control.visual_servo import PID, VisualServo, PoseServo
-from vision.qr_detect import wall_from_qr
+from vision.qr_detect import wall_from_qr, parse_payload
 from fsm.mission5 import Mission5FSM, State
 from tests.evaluate_mission5 import run_scenario
+from tests.sim_plant import FakeClock, SimPlant, SimCommandLink, SimTelemetry, SimVision
+
+
+def _make_fsm():
+    """FSM ringan dgn adapter sim — cukup untuk menguji helper murni (validasi payload)."""
+    clock = FakeClock()
+    plant = SimPlant()
+    return Mission5FSM(SimCommandLink(plant), SimTelemetry(plant),
+                       SimVision(plant, clock))
 
 
 # ── Unit: PID ────────────────────────────────────────────────────────────────
@@ -58,13 +67,42 @@ def test_heading_error_at_180_is_boundary():
     assert abs(Mission5FSM._heading_error(0, 180)) == pytest.approx(180)
 
 
-# ── Unit: wall_from_qr ───────────────────────────────────────────────────────
+# ── Unit: wall_from_qr (QR JSON terstruktur + string legacy) ─────────────────
 @pytest.mark.parametrize('data,wall', [
+    # JSON payload KKI 2026 (format baru)
+    ('{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}', 'A'),
+    ('{"mission":5,"type":"payload","id":"b"}', 'B'),   # id huruf kecil → tetap dipetakan
+    ('{"id":"Z"}', None),                                # id di luar A-D
+    # String biasa (kompatibilitas mundur)
     ('A', 'A'), ('SIDE_B', 'B'), ('WALL-C', 'C'), ('HYDROSHIP-M5-D', 'D'),
     ('AREA', None), ('12345', None),
 ])
 def test_wall_from_qr(data, wall):
     assert wall_from_qr(data) == wall
+
+
+def test_parse_payload_json_vs_plain():
+    assert parse_payload('{"id":"A","mission":5}') == {'id': 'A', 'mission': 5}
+    assert parse_payload('A') is None            # bukan JSON
+    assert parse_payload('[1,2,3]') is None       # JSON tapi bukan object
+    assert parse_payload('12345') is None         # JSON angka
+
+
+# ── Unit: validasi payload FSM (mission==5 & type==payload) ──────────────────
+def test_payload_validation_accepts_target():
+    fsm = _make_fsm()
+    assert fsm._is_target_payload({'payload': {'mission': 5, 'type': 'payload', 'id': 'A'}})
+
+
+def test_payload_validation_rejects_wrong_mission_or_type():
+    fsm = _make_fsm()
+    assert not fsm._is_target_payload({'payload': {'mission': 3, 'type': 'payload', 'id': 'A'}})
+    assert not fsm._is_target_payload({'payload': {'mission': 5, 'type': 'debris', 'id': 'A'}})
+
+
+def test_payload_validation_accepts_legacy_non_json():
+    fsm = _make_fsm()
+    assert fsm._is_target_payload({'payload': None})   # QR string biasa → tak divalidasi
 
 
 # ── Unit: VisualServo (IBVS) konvergen ke aligned ────────────────────────────

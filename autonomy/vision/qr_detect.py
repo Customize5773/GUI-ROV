@@ -13,8 +13,9 @@ Output:
   - Callback on_detection(result: dict) dipanggil tiap ada deteksi QR
   - result = {
       'type': 'qr',
-      'data': str,           # isi QR
-      'wall': 'A'|'B'|'C'|'D' | None,  # sisi kolam dari QR
+      'data': str,           # isi QR mentah (string)
+      'payload': dict|None,  # isi QR JSON terparse {mission,team,type,id} bila JSON
+      'wall': 'A'|'B'|'C'|'D' | None,  # sisi kolam dari QR (field id / huruf sisi)
       'center': (x, y),     # pusat QR di frame
       'area': float,         # area bounding box (proxy jarak)
       'frame': ndarray,      # frame dengan anotasi
@@ -31,6 +32,7 @@ Instalasi dependensi:
 import time
 import math
 import re
+import json
 import threading
 import logging
 from typing import Callable, Optional
@@ -38,14 +40,36 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
-# Ambil huruf sisi A/B/C/D yang berdiri sendiri dari isi QR (mis. "A", "SIDE_B",
-# "WALL-C", "A-01"); huruf yang diapit huruf lain (mis. "AREA") tidak dianggap.
-# Sama dengan logika jsQR di GUI (public/js/pages/camera.js).
+# QR payload KKI 2026 = JSON terstruktur, mis:
+#   {"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}   (A/B/C/D per sisi)
+# Sisi dinding diambil dari field "id". Untuk kompatibilitas mundur, QR string biasa
+# ("A", "SIDE_B", "WALL-C") tetap didukung via regex huruf sisi terisolasi.
 _WALL_RE = re.compile(r'(?:^|[^A-Z])([ABCD])(?![A-Z])')
 
 
+def parse_payload(data) -> Optional[dict]:
+    """Parse isi QR JSON terstruktur → dict, atau None bila bukan JSON object.
+    Memudahkan sistem lain: field `id`/`mission`/`team`/`type` langsung tersedia
+    tanpa regex (mis. validasi payload['mission']==5 sebelum GRAB)."""
+    try:
+        obj = json.loads(str(data))
+    except (ValueError, TypeError):
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
 def wall_from_qr(data) -> Optional[str]:
-    """Petakan isi QR → sisi kolam 'A'|'B'|'C'|'D', atau None bila tak ada."""
+    """Petakan isi QR → sisi kolam 'A'|'B'|'C'|'D', atau None bila tak ada.
+
+    Prioritas: QR JSON terstruktur (field "id"); fallback ke huruf sisi terisolasi
+    pada string biasa (kompatibilitas mundur)."""
+    payload = parse_payload(data)
+    if payload is not None:
+        pid = payload.get('id')
+        if isinstance(pid, str):
+            pid = pid.strip().upper()
+            if pid in ('A', 'B', 'C', 'D'):
+                return pid
     m = _WALL_RE.search(str(data).upper())
     return m.group(1) if m else None
 
@@ -161,7 +185,8 @@ class VisionPipeline:
             log.error("[vision] opencv tidak tersedia dan source bukan mock")
 
     # Parameter mock docking (mensimulasikan QR payload yang makin center & dekat)
-    MOCK_QR_DATA        = 'HYDROSHIP-M5-C'   # data QR payload (wall C) — sama format print PDF
+    # data QR payload = JSON terstruktur (wall C) — sama format cetak PDF tim
+    MOCK_QR_DATA        = '{"mission":5,"team":"HYDROSHIP","type":"payload","id":"C"}'
     MOCK_FAR_SEC        = 3.0                 # detik "jauh & off-center" sebelum konvergen
     MOCK_CONVERGE_SEC   = 3.0                 # durasi ramp jauh → aligned
     MOCK_TARGET_AREA    = 3000.0             # px² saat engage (samakan dgn SERVO_TARGET_AREA FSM)
@@ -247,6 +272,7 @@ class VisionPipeline:
         result = {
             'type': 'qr',
             'data': data,
+            'payload': parse_payload(data),
             'wall': wall_from_qr(data),
             'center': center,
             'area': area,
