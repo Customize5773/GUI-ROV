@@ -201,6 +201,10 @@ autonomy/
 │  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo dgn webcam
 │  ├─ servo_webcam_test.py    # tes APPROACH_HOOK (IBVS/PBVS) dgn webcam
 │  └─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
+├─ tests/                    # tes-nilai-evaluasi misi 5 (closed-loop, tanpa hardware)
+│  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
+│  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
+│  └─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
 ├─ hook_marker_id7.png      # marker ArUco target hook
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
@@ -220,3 +224,30 @@ GUI mode LIVE (`RPI_ADDR=127.0.0.1 npm start`) — lihat langkah lengkap & krite
 sukses di `autonomy/README_SETUP_C.md`. Untuk naik ke fisika nyata (ArduSub SITL
 di WSL2), ikuti `autonomy/SITL_SETUP.md`.
 ```
+
+### Tes-Nilai-Evaluasi Misi 5 (`autonomy/tests/`)
+
+Untuk **memvalidasi rantai docking payload autonomous misi 5 secara terukur tanpa
+kolam/hardware**, `autonomy/tests/` menutup loop kontrol Mission5FSM melawan
+`sim_plant.py` — simulator ROV+payload in-process yang memodelkan **umpan balik
+nyata** (perintah thruster mengubah depth/heading & geometri QR relatif), sehingga
+PoseServo/VisualServo benar-benar diuji, bukan sekadar timer. Jam virtual membuat
+misi penuh selesai dalam milidetik & deterministik.
+
+```bash
+cd autonomy
+pip install -r requirements.txt pytest      # numpy + pytest (cv2/pyzbar opsional)
+
+pytest tests/ -v                            # unit (PID/servo/heading) + integrasi 1→5
+
+python tests/evaluate_mission5.py           # laporan skor rubrik + evaluasi mutu docking
+python tests/evaluate_mission5.py --start M5_REDIVE   # hanya misi 5 autonomous (1-4 manual)
+python tests/evaluate_mission5.py --ibvs    # tanpa kalibrasi (IBVS piksel)
+python tests/evaluate_mission5.py --json    # keluaran JSON (untuk CI)
+```
+
+Harness memberi **NILAI** (skor rubrik m1..m5, total /100) dan **EVALUASI** (checklist
+mutu: jalur docking visual vs fallback timed, akurasi align lateral & jarak saat engage,
+payload lepas-hook & sampai permukaan, waktu tempuh). Cakupan uji termasuk mode PBVS &
+IBVS, keempat sisi kolam A/B/C/D, dan **ketahanan loss-of-lock** (dropout deteksi QR
+sesaat) yang menguji dead-reckon hold + sapu reacquire terarah pada `M5_DOCK`/`M5_ENGAGE`.

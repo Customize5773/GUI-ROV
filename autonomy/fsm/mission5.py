@@ -92,6 +92,11 @@ TIMEOUT_UNHOOK     = 10.0     # detik max lepas-hook
 TIMEOUT_M5_ASCEND  = 20.0     # detik max naik ke permukaan bawa payload
 TIMEOUT_FALLBACK   = 30.0     # detik max jalur timed (degraded, tanpa visual)
 
+# Loss-of-lock: deteksi QR bisa dropout 1-2 frame karena riak air/glare. Jangan
+# langsung menyapu (bisa overshoot & benar-benar kehilangan target). Beri grace
+# singkat "dead-reckon hold", baru menyapu TERARAH ke sisi QR terakhir terlihat.
+M5_LOCK_GRACE_T    = 0.6      # detik hold saat dropout sesaat sebelum mulai menyapu
+
 
 # ── State machine states ───────────────────────────────────────────────────────
 class State(Enum):
@@ -218,6 +223,9 @@ class Mission5FSM:
         self._score   = {'m1': 0, 'm2': 0, 'm3': 0, 'm4': 0, 'm5': 0}
         self._running = False
         self._require_auto = True      # bila True, abort saat mode balik ke MANUAL
+        # Loss-of-lock tracker untuk docking misi 5 (M5_DOCK / M5_ENGAGE)
+        self._m5_last_det_t  = 0.0     # waktu terakhir QR payload terlihat
+        self._m5_search_dir  = 1       # arah sapu reacquire = sisi QR terakhir (+kanan/−kiri)
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -545,10 +553,17 @@ class Mission5FSM:
 
         det = self.vision.latest_qr(max_age=0.5)
         if det is None:
-            self.cmd.send(yaw=YAW_SPEED)   # QR hilang → sapu cari
-            log.debug("[FSM] M5_DOCK QR hilang — sapu cari")
+            since = time.time() - self._m5_last_det_t
+            if since < M5_LOCK_GRACE_T:
+                self.cmd.stop_all()        # dropout sesaat → hold, jangan overshoot
+                log.debug("[FSM] M5_DOCK dropout %.2fs — dead-reckon hold", since)
+            else:
+                self.cmd.send(yaw=YAW_SPEED * self._m5_search_dir)   # sapu terarah ke sisi terakhir
+                log.debug("[FSM] M5_DOCK QR hilang %.1fs — sapu terarah dir=%+d",
+                          since, self._m5_search_dir)
             return
 
+        self._note_detection(det)
         out, mode = self._servo_step(det)
         self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert)
         if out.aligned:
@@ -571,15 +586,20 @@ class Mission5FSM:
         sway = vert = 0.0
         det = self.vision.latest_qr(max_age=0.5)
         if det is not None:
+            self._note_detection(det)
             out, _ = self._servo_step(det)
             sway, vert = out.sway, out.vert
+        # Jangan merayap MAJU secara buta bila lock hilang lebih dari grace: risiko
+        # menabrak dinding/hook di luar frame. Tahan surge sampai QR ter-lock lagi.
+        lost_long = (time.time() - self._m5_last_det_t) > M5_LOCK_GRACE_T
 
         if elapsed < 1.5:                          # buka gripper
             self.cmd.send(surge=0, sway=sway, vert=vert, gripper=0)
             log.debug("[FSM] M5_ENGAGE buka gripper")
         elif elapsed < 4.5:                        # merayap seat payload ke gripper
-            self.cmd.send(surge=M5_ENGAGE_SURGE, sway=sway, vert=vert, gripper=0)
-            log.debug("[FSM] M5_ENGAGE merayap ke payload")
+            creep = 0 if lost_long else M5_ENGAGE_SURGE
+            self.cmd.send(surge=creep, sway=sway, vert=vert, gripper=0)
+            log.debug("[FSM] M5_ENGAGE merayap ke payload (surge=%d lost=%s)", creep, lost_long)
         elif elapsed < 6.5:                        # tutup gripper
             self.cmd.send(surge=0, sway=sway, vert=vert, gripper=1)
             log.debug("[FSM] M5_ENGAGE tutup gripper — payload dicengkeram")
@@ -663,6 +683,19 @@ class Mission5FSM:
         log.info("[FSM] %s → %s", self._state.name, new_state.name)
         self._state   = new_state
         self._state_t = time.time()
+        # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
+        if new_state in (State.M5_DOCK, State.M5_ENGAGE):
+            self._m5_last_det_t = self._state_t
+
+    def _note_detection(self, det):
+        """Catat deteksi QR payload segar: perbarui timer lock + arah sapu reacquire.
+        Arah sapu diambil dari sisi lateral QR terakhir (pose.x bila PBVS, else error piksel)
+        agar bila lock hilang ROV menyapu MENUJU target, bukan menjauh."""
+        self._m5_last_det_t = time.time()
+        pose = det.get('pose')
+        lat = pose['x'] if pose is not None else (det['center'][0] - det['frame_w'] / 2.0)
+        if abs(lat) > 1e-6:
+            self._m5_search_dir = 1 if lat > 0 else -1
 
     def _elapsed(self) -> float:
         return time.time() - self._state_t
