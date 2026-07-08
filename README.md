@@ -44,7 +44,8 @@ GUI-ROV/
 │  ├─ sitl_mock.py              # mock SITL untuk pengujian tanpa hardware
 │  ├─ SITL_SETUP.md              # panduan setup ArduSub SITL (WSL2)
 │  ├─ README_SETUP_C.md
-│  └─ VERIFIKASI_ARDUSUB.md
+│  ├─ VERIFIKASI_ARDUSUB.md
+│  └─ ROADMAP_MISI5.md           # peta jalan Fase 0-4: meja -> SITL -> hardware -> kolam -> lomba
 ├─ image logo/                 # aset logo sumber (Logo1.png, Logo2.png)
 ├─ raspi_rov_example (notfinish).py   # contoh format UDP di sisi ROV
 ├─ Rencana.md
@@ -201,15 +202,20 @@ autonomy/
 │  ├─ make_checkerboard.py    # cetak papan kalibrasi
 │  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo pd QR payload dgn webcam
 │  ├─ servo_webcam_test.py    # tes docking QR (IBVS/PBVS) dgn webcam
-│  └─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
+│  ├─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
+│  └─ launch_sitl.py          # peluncur SATU-PERINTAH: vehicle(mock/SITL) -> rov_link -> GUI(-> FSM)
 ├─ tests/                    # tes-nilai-evaluasi misi 5 (closed-loop, tanpa hardware)
 │  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
 │  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
 │  └─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
+├─ config/                   # tuning misi 5 TANPA edit kode (--config di mission5.py)
+│  ├─ loader.py                # baca .yaml/.yml/.json -> override konstanta modul
+│  └─ mission5.example.yaml    # contoh lengkap (salin -> mission5.local.yaml, gitignored)
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
 ├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
-└─ VERIFIKASI_ARDUSUB.md    # checklist yang wajib dicek saat naik ke ArduSub asli
+├─ VERIFIKASI_ARDUSUB.md    # checklist yang wajib dicek saat naik ke ArduSub asli
+└─ ROADMAP_MISI5.md         # peta jalan lengkap: meja -> SITL -> hardware -> kolam -> lomba
 ```
 
 Setup singkat (Python 3.12 + venv):
@@ -223,7 +229,23 @@ Uji end-to-end tanpa hardware: jalankan `sitl_mock.py`, lalu `rov_link.py`, lalu
 GUI mode LIVE (`RPI_ADDR=127.0.0.1 npm start`) — lihat langkah lengkap & kriteria
 sukses di `autonomy/README_SETUP_C.md`. Untuk naik ke fisika nyata (ArduSub SITL
 di WSL2), ikuti `autonomy/SITL_SETUP.md`.
+
+### Peluncur satu-perintah (`tools/launch_sitl.py`)
+
+Alih-alih 3-4 terminal manual di atas, jalankan sekaligus vehicle (mock/SITL) →
+`rov_link.py` → GUI (→ FSM opsional) dengan **satu perintah**:
+
+```bash
+cd autonomy
+python tools/launch_sitl.py                          # mock + rov_link + GUI (default, tanpa WSL)
+python tools/launch_sitl.py --vehicle sitl            # ArduSub SITL WSL2 sudah jalan terpisah
+python tools/launch_sitl.py --fsm --start-state M5_REDIVE --vision mock   # + FSM sekalian
+python tools/launch_sitl.py --no-gui                  # tanpa server.js (mis. GUI sudah jalan)
 ```
+
+Keluaran tiap proses diberi label warna `[VEHICLE]`/`[ROV_LINK]`/`[GUI]`/`[FSM]` di satu
+terminal. Ctrl+C sekali menghentikan semua; bila satu proses crash, semua proses lain
+ikut dihentikan otomatis (tak ada yang "nyangkut" separuh jalan).
 
 ### Tes-Nilai-Evaluasi Misi 5 (`autonomy/tests/`)
 
@@ -251,3 +273,23 @@ mutu: jalur docking visual vs fallback timed, akurasi align lateral & jarak saat
 payload lepas-hook & sampai permukaan, waktu tempuh). Cakupan uji termasuk mode PBVS &
 IBVS, keempat sisi kolam A/B/C/D, dan **ketahanan loss-of-lock** (dropout deteksi QR
 sesaat) yang menguji dead-reckon hold + sapu reacquire terarah pada `M5_DOCK`/`M5_ENGAGE`.
+
+### Tuning tanpa edit kode (`autonomy/config/`)
+
+Parameter yang biasa di-tuning di kolam (gain PID docking, target jarak/luas engage,
+kedalaman, timeout tiap state, `WALL_HEADING`, arah `invert_*`, gerak lepas-hook, syarat
+validasi payload QR) bisa diubah lewat **file config** — tim tak perlu sentuh
+`fsm/mission5.py` sama sekali:
+
+```bash
+cd autonomy
+cp config/mission5.example.yaml config/mission5.local.yaml   # gitignored, aman diubah bebas
+# ...edit mission5.local.yaml sesuai hasil tuning...
+python fsm/mission5.py --config config/mission5.local.yaml --vision usb
+```
+
+Format `.yaml`/`.yml` (butuh `pip install pyyaml`, sudah ada di `requirements.txt`) atau
+`.json` (setara, tanpa instalasi tambahan). Semua kunci **opsional** — yang tak diisi tetap
+memakai default di kode. Lihat `config/mission5.example.yaml` untuk daftar lengkap +
+penjelasan tiap parameter, dan `autonomy/ROADMAP_MISI5.md` Fase 3 untuk urutan tuning
+di kolam yang disarankan.

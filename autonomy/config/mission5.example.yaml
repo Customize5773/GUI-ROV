@@ -1,0 +1,90 @@
+# config/mission5.example.yaml — Contoh konfigurasi tuning misi 5 (KKI 2026)
+#
+# Salin file ini ke `mission5.local.yaml` lalu ubah nilainya sesuai hasil tuning
+# di kolam. File *.local.yaml diabaikan git (.gitignore) — aman diubah bebas tanpa
+# bikin noise di commit history / konflik antar anggota tim.
+#
+# Pakai:
+#   python fsm/mission5.py --config config/mission5.local.yaml --vision usb
+#
+# Semua field OPSIONAL. Hapus/hilangkan grup atau kunci yang tak ingin diubah —
+# nilainya otomatis memakai default bawaan di fsm/mission5.py.
+# Tak mau instal PyYAML? Salin isi ini ke mission5.local.json (format JSON setara).
+
+# ── Kedalaman (meter) ─────────────────────────────────────────────────────────
+depth:
+  target_bottom: 0.70    # target selam ke dasar kolam (0.7-0.9 m tergantung venue)
+  target_surface: 0.05   # ambang "sudah di permukaan"
+  tolerance: 0.05        # toleransi depth utk transisi state
+  hook_depth: 0.45       # kedalaman hook DARI PERMUKAAN (Panduan KKI 2026 hal. 52)
+
+# ── Kecepatan thruster (%) ────────────────────────────────────────────────────
+speed:
+  dive: 30      # vertikal saat menyelam
+  ascend: 30    # vertikal saat naik
+  surge: 35     # maju saat navigasi horizontal
+  yaw: 25       # rotasi saat scan/sapu cari QR
+
+# ── Timeout tiap state (detik) — jaring pengaman anti macet ───────────────────
+timeouts:
+  dive: 15.0
+  scan: 20.0
+  grab: 10.0
+  nav: 30.0
+  hang: 15.0
+  surface: 15.0
+  dock: 15.0
+  redive: 15.0       # misi 5a: selam ulang + akuisisi QR
+  m5_dock: 25.0      # misi 5b: docking visual sblm degradasi ke fallback timed
+  m5_engage: 12.0    # misi 5c: grab payload
+  unhook: 10.0       # misi 5d: lepas dari hook
+  m5_ascend: 20.0    # misi 5e: naik bawa payload
+  fallback: 30.0     # jalur degraded (tanpa lock visual)
+
+# ── Heading target tiap sisi kolam (derajat) — kalibrasi di venue ─────────────
+wall_heading:
+  A: 270
+  B: 90
+  C: 0
+  D: 180
+
+# ── Target docking QR payload (misi 5: "nembak x & y") ────────────────────────
+docking:
+  qr_side_m: 0.04          # sisi fisik QR payload (m) — KKI 2026 = 4x4 cm, utk solvePnP
+  servo_target_area: 3000.0  # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
+  servo_target_dist: 0.30    # PBVS: jarak engage (m) — gripper mencapai payload
+  servo_kp_yaw: 0.0          # >0 → ROV squaring tegak lurus dinding (aktifkan stlh verifikasi)
+  lock_grace_t: 0.6          # detik hold saat QR dropout sesaat sblm mulai menyapu cari
+
+# ── Arah sumbu servo — VERIFIKASI di kolam, balik jika error MEMBESAR ─────────
+# (lihat VERIFIKASI_ARDUSUB.md utk prosedur cek tanda tiap sumbu)
+invert:
+  sway: false
+  vert: false
+  surge: false
+  yaw: false
+
+# ── Gain PID servo docking — mode IBVS (piksel, tanpa kalibrasi kamera) ───────
+pid_ibvs:
+  kp_sway: 45.0
+  kp_surge: 40.0
+  kp_vert: 35.0
+
+# ── Gain PID servo docking — mode PBVS (meter, kamera terkalibrasi) ───────────
+pid_pbvs:
+  kp_sway: 140.0
+  kp_surge: 140.0
+  kp_vert: 110.0
+
+# ── Gerak mekanis lepas-hook (misi 5d) — TUNE + verifikasi arah di kolam ──────
+m5_mechanics:
+  engage_surge: 15      # % surge merayap seat payload ke gripper
+  unhook_vert: 30        # % vert angkat lubang payload lepas dari ujung hook
+  unhook_surge: -20      # % surge tarik mundur agar lubang bebas dari candy-cane
+  unhook_lift_t: 3.0     # detik fase angkat
+  unhook_pull_t: 2.0     # detik fase tarik mundur
+
+# ── Validasi payload QR JSON — agar FSM tak salah pungut objek lain ───────────
+payload:
+  mission: 5
+  type: payload

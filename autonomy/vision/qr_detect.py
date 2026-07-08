@@ -249,7 +249,9 @@ class VisionPipeline:
             # Deteksi QR code
             if PYZBAR_OK:
                 for obj in pyzbar.decode(frame):
-                    data = obj.data.decode('utf-8').strip().upper()
+                    # JANGAN .upper() — isi QR payload = JSON (key/nilai case-sensitive).
+                    # wall_from_qr/parse_payload menangani huruf besar-kecil sendiri.
+                    data = obj.data.decode('utf-8').strip()
                     pts = np.array([[p.x, p.y] for p in obj.polygon])
                     center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
                     area = float(cv2.contourArea(pts.reshape(-1, 1, 2)))
@@ -321,6 +323,7 @@ class VisionPipeline:
         ok, rvec, tvec = cv2.solvePnP(objp, img, self._K, self._dist, flags=flags)
         if not ok:
             return None
+        tvec = np.asarray(tvec, dtype=float).ravel()   # (3,1) → (3,); aman di numpy 2.x
         x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
         R, _ = cv2.Rodrigues(rvec)
         # yaw = skew fiducial thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.

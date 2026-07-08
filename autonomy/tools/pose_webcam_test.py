@@ -56,8 +56,8 @@ while True:
         break
     found = False
     for obj in pyzbar.decode(frame):
-        data = obj.data.decode('utf-8', 'ignore').strip().upper()
-        if a.data and a.data.upper() not in data:
+        data = obj.data.decode('utf-8', 'ignore').strip()   # JSON payload: jangan .upper()
+        if a.data and a.data.upper() not in data.upper():
             continue
         found = True
         pts = np.array([[p.x, p.y] for p in obj.polygon], dtype=np.float32)
@@ -68,6 +68,7 @@ while True:
         ok2, rvec, tvec = cv2.solvePnP(objp, img, K, dist, flags=flags)
         if not ok2:
             break
+        tvec = np.asarray(tvec, dtype=float).ravel()
         x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
         R, _ = cv2.Rodrigues(rvec)
         yaw = math.degrees(math.atan2(R[0, 2], R[2, 2]))
