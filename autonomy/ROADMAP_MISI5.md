@@ -41,7 +41,9 @@ Tujuan: uji FSM lewat jalur **MAVLink + `rov_link.py` + GUI** yang sesungguhnya
 dipakai saat lomba — bukan lagi `sim_plant.py` in-process, tapi proses terpisah
 dgn latency & timing nyata.
 
-- [ ] Ikuti `SITL_SETUP.md`: ArduSub SITL (WSL2) ATAU pakai `sitl_mock.py`
+- [ ] Cara cepat (satu perintah): `python tools/launch_sitl.py --fsm --vision mock
+      --no-wait-autonomous` — start vehicle mock + `rov_link.py` + GUI + FSM sekaligus.
+      Atau manual ikuti `SITL_SETUP.md`: ArduSub SITL (WSL2) ATAU pakai `sitl_mock.py`
       (lebih ringan, tanpa WSL) sbg pengganti sementara.
 - [ ] Jalankan `rov_link.py` menjembatani MAVLink ↔ UDP JSON (`:14550`/`:14551`).
 - [ ] Buka GUI (`npm start` mode LIVE, `RPI_ADDR=127.0.0.1`) — pastikan
@@ -145,8 +147,12 @@ Dikerjakan paralel, tidak menunggu fase hardware:
       (gitignored) lalu tuning di kolam TANPA edit kode Python. Format `.yaml`/`.json`.
       Diuji: 8 test baru (flatten/merge/apply + bukti FSM benar berubah perilaku saat
       config diterapkan) — lihat `README.md` §"Tuning tanpa edit kode".
-- [ ] **Skrip peluncur SITL satu-perintah** — otomatis start `sitl_mock.py` →
-      `rov_link.py` → GUI (`npm start`), memuluskan Fase 1.
+- [x] **Skrip peluncur SITL satu-perintah** (`tools/launch_sitl.py`) — otomatis start
+      vehicle (`sitl_mock.py` default, atau `--vehicle sitl` utk ArduSub SITL WSL2
+      yang sudah jalan terpisah) → `rov_link.py` → GUI (`npm start`) → opsional `--fsm`.
+      Label warna per proses di satu terminal; Ctrl+C / crash satu proses mematikan
+      semua dgn rapi. Diuji: 13 test (`tests/test_launch_sitl.py`, murni argparse+plan
+      tanpa spawn nyata) + smoke test nyata (mock terhubung ke rov_link, heartbeat OK).
 - [ ] **Mode logging visi** di `servo_webcam_test.py` / `pose_webcam_test.py`
       — rekam laju deteksi + error pose ke CSV, berguna saat tuning Fase 3.
 - [ ] Checklist verifikasi tanda/arah yang bisa dicentang (perluasan

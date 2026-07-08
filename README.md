@@ -202,7 +202,8 @@ autonomy/
 │  ├─ make_checkerboard.py    # cetak papan kalibrasi
 │  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo pd QR payload dgn webcam
 │  ├─ servo_webcam_test.py    # tes docking QR (IBVS/PBVS) dgn webcam
-│  └─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
+│  ├─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
+│  └─ launch_sitl.py          # peluncur SATU-PERINTAH: vehicle(mock/SITL) -> rov_link -> GUI(-> FSM)
 ├─ tests/                    # tes-nilai-evaluasi misi 5 (closed-loop, tanpa hardware)
 │  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
 │  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
@@ -228,6 +229,23 @@ Uji end-to-end tanpa hardware: jalankan `sitl_mock.py`, lalu `rov_link.py`, lalu
 GUI mode LIVE (`RPI_ADDR=127.0.0.1 npm start`) — lihat langkah lengkap & kriteria
 sukses di `autonomy/README_SETUP_C.md`. Untuk naik ke fisika nyata (ArduSub SITL
 di WSL2), ikuti `autonomy/SITL_SETUP.md`.
+
+### Peluncur satu-perintah (`tools/launch_sitl.py`)
+
+Alih-alih 3-4 terminal manual di atas, jalankan sekaligus vehicle (mock/SITL) →
+`rov_link.py` → GUI (→ FSM opsional) dengan **satu perintah**:
+
+```bash
+cd autonomy
+python tools/launch_sitl.py                          # mock + rov_link + GUI (default, tanpa WSL)
+python tools/launch_sitl.py --vehicle sitl            # ArduSub SITL WSL2 sudah jalan terpisah
+python tools/launch_sitl.py --fsm --start-state M5_REDIVE --vision mock   # + FSM sekalian
+python tools/launch_sitl.py --no-gui                  # tanpa server.js (mis. GUI sudah jalan)
+```
+
+Keluaran tiap proses diberi label warna `[VEHICLE]`/`[ROV_LINK]`/`[GUI]`/`[FSM]` di satu
+terminal. Ctrl+C sekali menghentikan semua; bila satu proses crash, semua proses lain
+ikut dihentikan otomatis (tak ada yang "nyangkut" separuh jalan).
 
 ### Tes-Nilai-Evaluasi Misi 5 (`autonomy/tests/`)
 

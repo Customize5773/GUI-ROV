@@ -4,6 +4,12 @@ Tujuan: jalankan **ArduSub SITL** (simulator firmware + fisika depth-hold) di WS
 sambungkan ke `rov_link.py` (Windows), lalu uji **FSM → rov_link → ArduSub** dan GUI —
 serta tutup item `VERIFIKASI_ARDUSUB.md` (arah sumbu, z-neutral, mode, depth).
 
+> **Tanpa WSL dulu?** Pakai `python tools/launch_sitl.py` (default `--vehicle mock`) —
+> satu perintah menjalankan mock vehicle + `rov_link.py` + GUI, tanpa perlu ArduSub SITL
+> asli. Cocok untuk uji cepat jalur MAVLink/telemetri sebelum invest waktu build SITL di
+> §2 bawah ini. Setelah SITL asli (ArduSub, fisika depth-hold sungguhan) siap, pakai
+> `python tools/launch_sitl.py --vehicle sitl` (jalankan `run_sitl.sh` di WSL terpisah).
+
 ```
 [WSL2 Ubuntu]                         [Windows]
 ArduSub SITL ──MAVLink udpout:14555──► rov_link.py ──telem JSON──► GUI (14551) + FSM (14552)
