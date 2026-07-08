@@ -138,10 +138,13 @@ checklist hari-H & prosedur pemulihan bila fallback terpicu.
 
 Dikerjakan paralel, tidak menunggu fase hardware:
 
-- [ ] **File konfigurasi tunable** (`config.yaml` / `.env`) — pindahkan
-      konstanta tuning (gain PID, target dist/area, depth, timing, `invert_*`,
-      `WALL_HEADING`) keluar dari `mission5.py` supaya tim bisa tuning di
-      kolam tanpa edit kode Python.
+- [x] **File konfigurasi tunable** (`config/mission5.example.yaml` + `config/loader.py`,
+      flag `--config` di `fsm/mission5.py`) — pindahkan konstanta tuning (gain PID,
+      target dist/area, depth, timing, `invert_*`, `WALL_HEADING`, mekanik unhook,
+      validasi payload) keluar dari `mission5.py`. Salin ke `config/mission5.local.yaml`
+      (gitignored) lalu tuning di kolam TANPA edit kode Python. Format `.yaml`/`.json`.
+      Diuji: 8 test baru (flatten/merge/apply + bukti FSM benar berubah perilaku saat
+      config diterapkan) — lihat `README.md` §"Tuning tanpa edit kode".
 - [ ] **Skrip peluncur SITL satu-perintah** — otomatis start `sitl_mock.py` →
       `rov_link.py` → GUI (`npm start`), memuluskan Fase 1.
 - [ ] **Mode logging visi** di `servo_webcam_test.py` / `pose_webcam_test.py`

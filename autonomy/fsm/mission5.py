@@ -74,6 +74,10 @@ SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payl
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
 CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
 
+# Gain PID servo docking (TUNE di kolam — pindahkan lwt --config bila sering diubah)
+IBVS_KP_SWAY, IBVS_KP_SURGE, IBVS_KP_VERT = 45.0, 40.0, 35.0    # mode IBVS (piksel)
+PBVS_KP_SWAY, PBVS_KP_SURGE, PBVS_KP_VERT = 140.0, 140.0, 110.0  # mode PBVS (meter)
+
 # Validasi payload QR JSON terstruktur ({"mission":5,"type":"payload","id":"A"}) agar
 # FSM tak salah pungut objek lain. QR JSON dicek mission & type; QR string biasa (legacy)
 # tanpa JSON tetap diterima apa adanya.
@@ -217,10 +221,12 @@ class Mission5FSM:
         self.telem  = telem
         self.vision = vision
         # Servo docking ke QR payload (IBVS piksel / PBVS meter). Arah sumbu = SERVO_INVERT.
-        self.servo      = VisualServo(target_area=SERVO_TARGET_AREA,
-                                      kp_yaw=SERVO_KP_YAW, **SERVO_INVERT)     # IBVS (piksel)
-        self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST,
-                                    kp_yaw=SERVO_KP_YAW, **SERVO_INVERT)       # PBVS (meter)
+        self.servo      = VisualServo(target_area=SERVO_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
+                                      kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
+                                      kp_vert=IBVS_KP_VERT, **SERVO_INVERT)      # IBVS (piksel)
+        self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
+                                    kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
+                                    kp_vert=PBVS_KP_VERT, **SERVO_INVERT)        # PBVS (meter)
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
@@ -747,7 +753,27 @@ class Mission5FSM:
 
 # ── Entry point ────────────────────────────────────────────────────────────────
 def main():
-    ap = argparse.ArgumentParser(description='Mission 5 FSM — KKI 2026 ROV')
+    # Logging sementara (agar log pra-parse config di bawah ini tampil) — direkonfigurasi
+    # ulang sesuai --loglevel setelah argparse penuh selesai (force=True).
+    logging.basicConfig(level=logging.INFO,
+                        format='%(asctime)s %(levelname)-8s %(message)s', datefmt='%H:%M:%S')
+
+    # Pra-parse --config LEBIH DULU: bila diberikan, override konstanta tuning
+    # (globals() modul ini) SEBELUM argparse penuh dibangun, supaya default flag
+    # lain (mis. --calib, --qr-size) memakai nilai config yang sudah dioverride.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument('--config', default=None,
+                     help='path config tuning .yaml/.yml/.json — pindahkan gain PID, '
+                          'target docking, depth, timing, WALL_HEADING, invert_* KELUAR '
+                          'dari kode (lihat config/mission5.example.yaml)')
+    pre_args, _ = pre.parse_known_args()
+    if pre_args.config:
+        from config.loader import load_config, apply_config
+        applied = apply_config(globals(), load_config(pre_args.config))
+        log.info("[main] Config tuning dimuat: %s (%d nilai dioverride)",
+                 pre_args.config, len(applied))
+
+    ap = argparse.ArgumentParser(description='Mission 5 FSM — KKI 2026 ROV', parents=[pre])
     ap.add_argument('--server', default='127.0.0.1', help='IP rov_link')
     ap.add_argument('--cmd-port', type=int, default=14550, help='Port command ke rov_link')
     ap.add_argument('--telem-port', type=int, default=14552,
@@ -775,6 +801,7 @@ def main():
         level=getattr(logging, args.loglevel.upper()),
         format='%(asctime)s %(levelname)-8s %(message)s',
         datefmt='%H:%M:%S',
+        force=True,   # timpa basicConfig sementara di atas (dipakai saat load --config)
     )
 
     log.info("[main] Inisialisasi komponen...")

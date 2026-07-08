@@ -207,6 +207,9 @@ autonomy/
 │  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
 │  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
 │  └─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
+├─ config/                   # tuning misi 5 TANPA edit kode (--config di mission5.py)
+│  ├─ loader.py                # baca .yaml/.yml/.json -> override konstanta modul
+│  └─ mission5.example.yaml    # contoh lengkap (salin -> mission5.local.yaml, gitignored)
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
 ├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
@@ -225,7 +228,6 @@ Uji end-to-end tanpa hardware: jalankan `sitl_mock.py`, lalu `rov_link.py`, lalu
 GUI mode LIVE (`RPI_ADDR=127.0.0.1 npm start`) — lihat langkah lengkap & kriteria
 sukses di `autonomy/README_SETUP_C.md`. Untuk naik ke fisika nyata (ArduSub SITL
 di WSL2), ikuti `autonomy/SITL_SETUP.md`.
-```
 
 ### Tes-Nilai-Evaluasi Misi 5 (`autonomy/tests/`)
 
@@ -253,3 +255,23 @@ mutu: jalur docking visual vs fallback timed, akurasi align lateral & jarak saat
 payload lepas-hook & sampai permukaan, waktu tempuh). Cakupan uji termasuk mode PBVS &
 IBVS, keempat sisi kolam A/B/C/D, dan **ketahanan loss-of-lock** (dropout deteksi QR
 sesaat) yang menguji dead-reckon hold + sapu reacquire terarah pada `M5_DOCK`/`M5_ENGAGE`.
+
+### Tuning tanpa edit kode (`autonomy/config/`)
+
+Parameter yang biasa di-tuning di kolam (gain PID docking, target jarak/luas engage,
+kedalaman, timeout tiap state, `WALL_HEADING`, arah `invert_*`, gerak lepas-hook, syarat
+validasi payload QR) bisa diubah lewat **file config** — tim tak perlu sentuh
+`fsm/mission5.py` sama sekali:
+
+```bash
+cd autonomy
+cp config/mission5.example.yaml config/mission5.local.yaml   # gitignored, aman diubah bebas
+# ...edit mission5.local.yaml sesuai hasil tuning...
+python fsm/mission5.py --config config/mission5.local.yaml --vision usb
+```
+
+Format `.yaml`/`.yml` (butuh `pip install pyyaml`, sudah ada di `requirements.txt`) atau
+`.json` (setara, tanpa instalasi tambahan). Semua kunci **opsional** — yang tak diisi tetap
+memakai default di kode. Lihat `config/mission5.example.yaml` untuk daftar lengkap +
+penjelasan tiap parameter, dan `autonomy/ROADMAP_MISI5.md` Fase 3 untuk urutan tuning
+di kolam yang disarankan.

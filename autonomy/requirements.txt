@@ -6,3 +6,7 @@ pyzbar>=0.1.9                # QR — butuh libzbar0 di Linux
 
 # Tes-nilai-evaluasi (autonomy/tests/) — cukup numpy di atas; cv2/pyzbar opsional:
 pytest>=7.0                  # `pytest tests/` — uji unit + integrasi closed-loop misi 5
+
+# Config tuning (autonomy/config/) — OPSIONAL, hanya utk --config *.yaml/*.yml;
+# tak mau instal? pakai file *.json (format setara, bawaan Python tanpa lib tambahan)
+pyyaml>=6.0

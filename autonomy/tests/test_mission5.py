@@ -21,9 +21,11 @@ _AUTONOMY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _AUTONOMY not in sys.path:
     sys.path.insert(0, _AUTONOMY)
 
+import fsm.mission5 as m5
 from control.visual_servo import PID, VisualServo, PoseServo
 from vision.qr_detect import wall_from_qr, parse_payload
 from fsm.mission5 import Mission5FSM, State
+from config.loader import read_file, flatten, load_config, apply_config
 from tests.evaluate_mission5 import run_scenario
 from tests.sim_plant import FakeClock, SimPlant, SimCommandLink, SimTelemetry, SimVision
 
@@ -231,3 +233,87 @@ def test_full_mission_each_wall(wall):
     assert rep['state_akhir'] == 'DONE'
     assert rep['nilai_total'] == 100
     assert rep['skenario']['target_wall'] == wall
+
+
+# ── Unit: config/loader.py — flatten & merge ─────────────────────────────────
+def test_config_flatten_scalar_and_merge_keys():
+    raw = {
+        'depth': {'hook_depth': 0.55},
+        'docking': {'servo_target_dist': 0.42},
+        'wall_heading': {'A': 45},                 # partial — B/C/D sengaja tak diisi
+        'invert': {'sway': True},                  # partial — axis lain sengaja tak diisi
+        'unknown_group': {'x': 1},                  # kunci tak dikenal harus diabaikan
+    }
+    cfg = flatten(raw)
+    assert cfg['HOOK_DEPTH'] == 0.55
+    assert cfg['SERVO_TARGET_DIST'] == 0.42
+    assert cfg['_WALL_HEADING_MERGE'] == {'A': 45}
+    assert cfg['_SERVO_INVERT_MERGE'] == {'invert_sway': True}
+    assert 'unknown_group' not in cfg and 'x' not in cfg.values()
+
+
+def test_config_flatten_empty_when_no_matching_keys():
+    assert flatten({'tidak_relevan': 123}) == {}
+
+
+def test_config_apply_merges_partial_dict_without_clobbering():
+    ns = {'WALL_HEADING': {'A': 270, 'B': 90, 'C': 0, 'D': 180},
+         'SERVO_INVERT': {'invert_sway': False, 'invert_vert': False,
+                          'invert_surge': False, 'invert_yaw': False}}
+    apply_config(ns, {'_WALL_HEADING_MERGE': {'A': 45},
+                      '_SERVO_INVERT_MERGE': {'invert_sway': True}})
+    assert ns['WALL_HEADING'] == {'A': 45, 'B': 90, 'C': 0, 'D': 180}
+    assert ns['SERVO_INVERT']['invert_sway'] is True
+    assert ns['SERVO_INVERT']['invert_vert'] is False   # kunci lain tak ikut berubah
+
+
+def test_config_load_missing_file_raises():
+    with pytest.raises(FileNotFoundError):
+        load_config('/tidak/ada/mission5.local.yaml')
+
+
+def test_config_load_unknown_extension_raises(tmp_path):
+    bad = tmp_path / "cfg.txt"
+    bad.write_text("HOOK_DEPTH: 0.5")
+    with pytest.raises(ValueError):
+        load_config(str(bad))
+
+
+def test_config_json_and_yaml_equivalent(tmp_path):
+    """Format .json harus menghasilkan flatten yang SAMA dgn .yaml berisi struktur identik
+    (tim yang tak mau install PyYAML bisa pakai .json apa adanya)."""
+    import json
+    raw = {'depth': {'hook_depth': 0.5}, 'invert': {'yaw': True}}
+    jf = tmp_path / "cfg.json"
+    jf.write_text(json.dumps(raw))
+    assert load_config(str(jf)) == flatten(raw)
+
+
+def test_config_example_yaml_loads_and_covers_expected_constants():
+    """File config/mission5.example.yaml yang di-commit harus tetap valid & lengkap."""
+    example = os.path.join(_AUTONOMY, 'config', 'mission5.example.yaml')
+    cfg = load_config(example)
+    for attr in ('HOOK_DEPTH', 'SERVO_TARGET_DIST', 'SERVO_TARGET_AREA',
+                'IBVS_KP_SWAY', 'PBVS_KP_SWAY', 'M5_LOCK_GRACE_T',
+                'PAYLOAD_MISSION', 'PAYLOAD_TYPE'):
+        assert attr in cfg, f"{attr} hilang dari contoh config"
+    assert cfg['_WALL_HEADING_MERGE'] == {'A': 270, 'B': 90, 'C': 0, 'D': 180}
+    assert set(cfg['_SERVO_INVERT_MERGE'].keys()) == {
+        'invert_sway', 'invert_vert', 'invert_surge', 'invert_yaw'}
+
+
+# ── Integrasi: config yang diterapkan BENAR-BENAR mengubah perilaku FSM ──────
+def test_config_override_changes_docking_target_at_runtime():
+    """Bukti bahwa apply_config() bukan cuma mengubah nilai konstanta, tapi juga
+    perilaku Mission5FSM saat dijalankan (late-binding global Python)."""
+    backup = {k: getattr(m5, k) for k in ('SERVO_TARGET_DIST',)}
+    try:
+        apply_config(vars(m5), {'SERVO_TARGET_DIST': 0.45})
+        rep = run_scenario(start_state=State.M5_REDIVE, provide_pose=True)
+        assert rep['state_akhir'] == 'DONE'
+        assert rep['nilai_misi_5'] == 40
+        acc = rep['akurasi_docking']
+        assert abs(acc['rz'] - 0.45) <= 0.06   # docking ke jarak BARU dari config
+    finally:
+        for k, v in backup.items():
+            setattr(m5, k, v)   # jangan bocorkan override ke test lain

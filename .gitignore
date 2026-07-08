@@ -3,6 +3,11 @@
 *.pyc
 autonomy/.venv/
 
+# Config tuning lokal (hasil tuning kolam tim) — jangan commit, cukup example*
+autonomy/config/*.local.yaml
+autonomy/config/*.local.yml
+autonomy/config/*.local.json
+
 # Editor / OS
 *.swp
 *.swo
