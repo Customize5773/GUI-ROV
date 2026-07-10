@@ -5,9 +5,8 @@ import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
-import {joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
-import { joystickState, updateJoystickStateFromGamepad } from "./joystick-state.js";
-
+import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
+import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
 const els = {
@@ -647,10 +646,9 @@ window.addEventListener("keyup", (e) => {
 
 /* ====================== GAMEPAD PILOTING ======================
    aktif hanya saat controller = Gamepad. Layout standar (Xbox-style):
-   stik kiri → surge/sway, stik kanan → yaw/vert, bumper → gripper,
-   Start → STOP. Axis diskala ke −100..100 dan hanya dikirim saat nilai
-   integer-nya berubah; perintah axis dikirim "quiet" (tanpa spam console)
-   karena bersifat kontinu. */
+   hasil mapping axis diambil dari joystick-state / halaman joystick.
+   Panel joystick tetap bisa membaca gamepad walaupun activeController
+   dashboard masih Keyboard. */
 const GP_DEADZONE = 0.12;
 
 function clamp100(v) {
@@ -680,60 +678,208 @@ function getMappedJoystickAxes() {
   };
 }
 
+/* loop khusus untuk halaman joystick / panel tester
+   supaya status connected, axis preview, dan tester tombol tetap hidup
+   walaupun activeController belum dipilih ke Gamepad */
+function pollJoystickPanel() {
+  updateJoystickStateFromGamepad();
+  requestAnimationFrame(pollJoystickPanel);
+}
+
 function firstGamepad() {
   const pads = navigator.getGamepads ? navigator.getGamepads() : [];
   for (const p of pads) if (p && p.connected) return p;
   return null;
 }
+
 function setGamepadBadge(connected) {
   if (activeController !== "Gamepad") return;
   els.ctrlBadge.textContent = connected ? "Active: Gamepad ●" : "Active: Gamepad";
 }
+
 function logGamepadStatus() {
   const p = firstGamepad();
   setGamepadBadge(!!p);
-  if (p) log(`Gamepad aktif: ${p.id}`, "ok");
-  else log("Gamepad dipilih — sambungkan & tekan tombol untuk mengaktifkan", "warn");
-}
-// scaled radial deadzone: petakan satu stik (x,y ∈ −1..1) ke −100..100,
-// gerak mulai halus dari tepi deadzone dan arah diagonal tetap terjaga.
-function stickToAxes(x, y) {
-  x = x || 0; y = y || 0;
-  const mag = Math.hypot(x, y);
-  if (mag < GP_DEADZONE) return [0, 0];
-  const f = ((mag - GP_DEADZONE) / (1 - GP_DEADZONE)) / mag * 100;
-  const clamp = (n) => Math.round(Math.max(-100, Math.min(100, n)));
-  return [clamp(x * f), clamp(y * f)];
+
+  if (p) {
+    log(`Gamepad aktif: ${p.id}`, "ok");
+  } else {
+    log("Gamepad dipilih — sambungkan & tekan tombol untuk mengaktifkan", "warn");
+  }
 }
 
 const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
-const gpBtnPrev = {}; // deteksi tepi tombol
+
+// status tombol fisik frame sebelumnya
+const gpBtnPrev = {};
 
 function gpPressed(pad, idx) {
   const b = pad.buttons[idx];
   const now = !!(b && (b.pressed || b.value > 0.5));
   const was = !!gpBtnPrev[idx];
   gpBtnPrev[idx] = now;
-  return now && !was; // rising edge
+  return now && !was;
 }
+
 function neutralizeGamepadAxes() {
   for (const a of ["surge", "sway", "yaw", "heave"]) {
-    gpLast[a] = 0; setAxis(a, 0); sendCmd(a, 0, true);
+    gpLast[a] = 0;
+    setAxis(a, 0);
+    sendCmd(a, 0, true);
   }
+
+  for (const k in gpBtnPrev) delete gpBtnPrev[k];
+}
+
+function executeJoystickAction(action, mode = "toggle") {
+  if (!action || action === "no_function") return;
+
+  switch (action) {
+    /* ================= ARM / DISARM ================= */
+    case "arm": {
+      if (!state.armed) els.btnArm.click();
+      return;
+    }
+
+    case "disarm": {
+      if (state.armed) els.btnArm.click();
+      return;
+    }
+
+    /* ================= CONTROL MODE ================= */
+    case "mode_manual": {
+  sendCmd("pilot_mode", "manual");
+  log("Pilot mode: MANUAL", "ok");
+  return;
+}
+
+case "mode_stabilize": {
+  sendCmd("pilot_mode", "stabilize");
+  log("Pilot mode: STABILIZE", "ok");
+  return;
+}
+
+case "mode_depth_hold": {
+  sendCmd("pilot_mode", "depth_hold");
+  log("Pilot mode: DEPTH HOLD", "ok");
+  return;
+}
+
+    case "input_hold_set": {
+      sendCmd("input_hold_set", true);
+      log("Input hold set", "ok");
+      return;
+    }
+
+    /* ================= CAMERA / MOUNT ================= */
+    case "mount_tilt_up": {
+      sendCmd("mount_tilt", mode === "hold" ? { dir: "up", hold: true } : "up");
+      return;
+    }
+
+    case "mount_tilt_down": {
+      sendCmd("mount_tilt", mode === "hold" ? { dir: "down", hold: true } : "down");
+      return;
+    }
+
+    case "mount_center": {
+      sendCmd("mount_center", true);
+      log("Mount center", "ok");
+      return;
+    }
+
+    /* ================= ACTUATOR ================= */
+    case "actuator1_inc": {
+      sendCmd("actuator1", mode === "hold" ? { dir: "inc", hold: true } : "inc");
+      return;
+    }
+
+    case "actuator1_dec": {
+      sendCmd("actuator1", mode === "hold" ? { dir: "dec", hold: true } : "dec");
+      return;
+    }
+
+    /* ================= LIGHT ================= */
+    case "lights_brighter": {
+      sendCmd("light_level", mode === "hold" ? { dir: "up", hold: true } : "up");
+      return;
+    }
+
+    case "lights_dimmer": {
+      sendCmd("light_level", mode === "hold" ? { dir: "down", hold: true } : "down");
+      return;
+    }
+
+    /* ================= GAIN ================= */
+    case "gain_inc": {
+      sendCmd("gain", mode === "hold" ? { dir: "inc", hold: true } : "inc");
+      return;
+    }
+
+    case "gain_dec": {
+      sendCmd("gain", mode === "hold" ? { dir: "dec", hold: true } : "dec");
+      return;
+    }
+  }
+}
+
+function processMappedGamepadButtons() {
+  const layerName = getActiveButtonLayerName();
+  const rows = joystickState.buttonConfig?.[layerName] || [];
+
+  // tombol yang sedang dipakai di layer aktif
+  const usedButtons = new Set();
+
+  for (const row of rows) {
+    if (!row) continue;
+
+    const btnIndex = Number(row.button);
+    if (!Number.isInteger(btnIndex) || btnIndex < 0) continue;
+
+    usedButtons.add(btnIndex);
+
+    const current = !!joystickState.rawButtons?.[btnIndex]?.pressed;
+    const prev = !!gpBtnPrev[btnIndex];
+    const rising = current && !prev;
+
+    if (row.mode === "hold") {
+      if (current) {
+        executeJoystickAction(row.action, "hold");
+      }
+    } else {
+      if (rising) {
+        executeJoystickAction(row.action, "toggle");
+      }
+    }
+  }
+
+  // update cache tombol fisik
+  (joystickState.rawButtons || []).forEach((b, idx) => {
+    gpBtnPrev[idx] = !!(b && b.pressed);
+  });
+
+  return usedButtons;
 }
 
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
 
+  // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
+  updateJoystickStateFromGamepad();
+
+  // thruster control hanya aktif kalau dashboard controller = Gamepad
   if (activeController !== "Gamepad") return;
+  if (!joystickState.connected) return;
+  if (!joystickState.enabled) return;
 
-  const pad = firstGamepad();
-  if (!pad) return;
+  /* ================= AXIS ================= */
+  const next = {
+    surge: axisToPercent(joystickState.mapped.surge),
+    sway:  axisToPercent(joystickState.mapped.sway),
+    yaw:   axisToPercent(joystickState.mapped.yaw),
+    heave: axisToPercent(joystickState.mapped.heave),
+  };
 
-  // ambil hasil mapping dari halaman joystick
-  const next = getMappedJoystickAxes();
-
-  // kirim ke axis panel + pilotAxes + websocket command
   for (const a of ["surge", "sway", "yaw", "heave"]) {
     if (next[a] !== gpLast[a]) {
       gpLast[a] = next[a];
@@ -742,24 +888,28 @@ function pollGamepad() {
     }
   }
 
-  // tombol gamepad
-  // LB(4)=gripper open
-  // RB(5)=gripper close
-  // Start(9)=STOP
-  if (gpPressed(pad, 4)) els.btnGripOpen.click();
-  if (gpPressed(pad, 5)) els.btnGripClose.click();
-  if (gpPressed(pad, 9)) els.btnStop.click();
+  /* ================= BUTTON MAPPING ================= */
+  processMappedGamepadButtons();
 }
 
 window.addEventListener("gamepadconnected", (e) => {
   log(`Gamepad tersambung: ${e.gamepad.id}`, "ok");
   setGamepadBadge(true);
 });
+
 window.addEventListener("gamepaddisconnected", (e) => {
   log(`Gamepad terputus: ${e.gamepad.id}`, "warn");
   setGamepadBadge(false);
-  if (activeController === "Gamepad") neutralizeGamepadAxes();
+
+  if (activeController === "Gamepad") {
+    neutralizeGamepadAxes();
+  }
 });
+
+/* penting:
+   - pollJoystickPanel = untuk halaman joystick / tester / mapping
+   - pollGamepad       = untuk kontrol thruster saat mode Gamepad aktif */
+requestAnimationFrame(pollJoystickPanel);
 requestAnimationFrame(pollGamepad);
 
 /* set surface level */

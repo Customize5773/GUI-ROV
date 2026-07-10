@@ -1,5 +1,6 @@
 {
   "enabled": true,
+  "shiftButton": 0,
   "axisConfig": [
     {
       "input": "axis 0",
@@ -36,5 +37,171 @@
       "max": 1,
       "direction": "↕"
     }
-  ]
+  ],
+  "buttonConfig": {
+    "regular": [
+      {
+        "action": "no_function",
+        "button": 0,
+        "mode": "toggle"
+      },
+      {
+        "action": "mode_manual",
+        "button": 1,
+        "mode": "toggle"
+      },
+      {
+        "action": "mode_stabilize",
+        "button": 2,
+        "mode": "toggle"
+      },
+      {
+        "action": "mode_depth_hold",
+        "button": 3,
+        "mode": "toggle"
+      },
+      {
+        "action": "mount_tilt_down",
+        "button": 4,
+        "mode": "hold"
+      },
+      {
+        "action": "mount_tilt_up",
+        "button": 5,
+        "mode": "hold"
+      },
+      {
+        "action": "actuator1_inc",
+        "button": 6,
+        "mode": "hold"
+      },
+      {
+        "action": "actuator1_dec",
+        "button": 7,
+        "mode": "hold"
+      },
+      {
+        "action": "disarm",
+        "button": 8,
+        "mode": "toggle"
+      },
+      {
+        "action": "arm",
+        "button": 9,
+        "mode": "toggle"
+      },
+      {
+        "action": "mount_center",
+        "button": 10,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 11,
+        "mode": "toggle"
+      },
+      {
+        "action": "gain_inc",
+        "button": 12,
+        "mode": "toggle"
+      },
+      {
+        "action": "gain_dec",
+        "button": 13,
+        "mode": "toggle"
+      },
+      {
+        "action": "lights_dimmer",
+        "button": 14,
+        "mode": "toggle"
+      },
+      {
+        "action": "lights_brighter",
+        "button": 15,
+        "mode": "toggle"
+      }
+    ],
+    "shift": [
+      {
+        "action": "no_function",
+        "button": 0,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 1,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 2,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 3,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 4,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 5,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 6,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 7,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 8,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 9,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 10,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 11,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 12,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 13,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 14,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 15,
+        "mode": "toggle"
+      }
+    ]
+  }
 }

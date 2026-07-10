@@ -30,9 +30,32 @@ const PUBLIC = path.join(__dirname, "..", "public");
 const CONFIG_DIR = path.join(__dirname, "config");
 const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
 
+function defaultButtonLayer() {
+  return [
+    { action: "arm", button: 0, mode: "toggle" },
+    { action: "disarm", button: 1, mode: "toggle" },
+    { action: "mode_manual", button: 2, mode: "toggle" },
+    { action: "mode_stabilize", button: 3, mode: "toggle" },
+    { action: "mode_depth_hold", button: 4, mode: "toggle" },
+    { action: "mount_tilt_up", button: 5, mode: "hold" },
+    { action: "mount_tilt_down", button: 6, mode: "hold" },
+    { action: "mount_center", button: 7, mode: "toggle" },
+    { action: "actuator1_inc", button: 8, mode: "hold" },
+    { action: "actuator1_dec", button: 9, mode: "hold" },
+    { action: "lights_brighter", button: 10, mode: "hold" },
+    { action: "lights_dimmer", button: 11, mode: "hold" },
+    { action: "gain_inc", button: 12, mode: "hold" },
+    { action: "gain_dec", button: 13, mode: "hold" },
+    { action: "input_hold_set", button: 14, mode: "toggle" },
+    { action: "no_function", button: 15, mode: "toggle" },
+  ];
+}
+
 function defaultJoystickConfig() {
   return {
     enabled: true,
+    shiftButton: 5,
+
     axisConfig: [
       { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
       { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
@@ -40,6 +63,11 @@ function defaultJoystickConfig() {
       { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
       { input: "axis 4", assigned: "No function", min: -1, max: 1, direction: "↕" },
     ],
+
+    buttonConfig: {
+      regular: defaultButtonLayer(),
+      shift: defaultButtonLayer(),
+    },
   };
 }
 
@@ -54,10 +82,17 @@ function sanitizeJoystickConfig(data) {
   if (!data || typeof data !== "object") return fallback;
 
   const enabled = data.enabled !== false;
-  const src = Array.isArray(data.axisConfig) ? data.axisConfig : fallback.axisConfig;
+  const shiftButton = Number.isInteger(Number(data.shiftButton))
+    ? Number(data.shiftButton)
+    : fallback.shiftButton;
+
+  /* ================= AXIS ================= */
+  const srcAxis = Array.isArray(data.axisConfig)
+    ? data.axisConfig
+    : fallback.axisConfig;
 
   const axisConfig = fallback.axisConfig.map((def, i) => {
-    const row = src[i] || {};
+    const row = srcAxis[i] || {};
     return {
       input: typeof row.input === "string" ? row.input : def.input,
       assigned: typeof row.assigned === "string" ? row.assigned : def.assigned,
@@ -67,7 +102,37 @@ function sanitizeJoystickConfig(data) {
     };
   });
 
-  return { enabled, axisConfig };
+  /* ================= BUTTON ================= */
+  const srcBtnCfg = (data.buttonConfig && typeof data.buttonConfig === "object")
+    ? data.buttonConfig
+    : {};
+
+  const buttonConfig = {
+    regular: fallback.buttonConfig.regular.map((def, i) => {
+      const row = Array.isArray(srcBtnCfg.regular) ? (srcBtnCfg.regular[i] || {}) : {};
+      return {
+        action: typeof row.action === "string" ? row.action : def.action,
+        button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
+        mode: row.mode === "hold" ? "hold" : "toggle",
+      };
+    }),
+
+    shift: fallback.buttonConfig.shift.map((def, i) => {
+      const row = Array.isArray(srcBtnCfg.shift) ? (srcBtnCfg.shift[i] || {}) : {};
+      return {
+        action: typeof row.action === "string" ? row.action : def.action,
+        button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
+        mode: row.mode === "hold" ? "hold" : "toggle",
+      };
+    }),
+  };
+
+  return {
+    enabled,
+    shiftButton,
+    axisConfig,
+    buttonConfig,
+  };
 }
 
 function loadJoystickConfig() {

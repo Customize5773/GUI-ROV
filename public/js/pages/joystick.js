@@ -1,429 +1,819 @@
 import {
   joystickState,
-  applyJoystickConfig,
-  getJoystickConfigPayload
+  updateJoystickStateFromGamepad,
+  getJoystickConfigPayload,
+  getAvailableButtonActions,
+  getActiveButtonLayerName,
+  getButtonPressed,
+  getButtonValue,
 } from "../joystick-state.js";
 
 let root = null;
-let axisLoopStarted = false;
+let rafId = null;
 
-const AXIS_OPTIONS = [
-  "No function",
-  "Axis X",
-  "Axis Y",
-  "Axis Z",
-  "Axis R",
-  "Axis S",
-  "Axis T",
-];
+let visualMode = "visual"; // visual | table
+let mappingLayer = "regular"; // regular | shift
 
-const axisConfig = joystickState.axisConfig;
+const AXIS_OPTIONS = ["Axis X", "Axis Y", "Axis Z", "Axis R", "Axis S", "Axis T", "No function"];
+const BUTTON_OPTIONS = Array.from({ length: 16 }, (_, i) => i);
+const BUTTON_MODES = ["toggle", "hold"];
 
-const axisRows = [
-  { name: "axis 0" },
-  { name: "axis 1" },
-  { name: "axis 2" },
-  { name: "axis 3" },
-  { name: "axis 4" },
-];
-
-function sendWsMessage(msg) {
-  const ws = window.ws;
-  if (!ws || ws.readyState !== 1) {
-    console.warn("[Joystick] WebSocket belum terhubung");
-    return false;
-  }
-  ws.send(JSON.stringify(msg));
-  return true;
-}
-
-export const joystickPage = {
-  init(container) {
-    root = container;
-
-    root.innerHTML = `
-      <main class="joypage">
-        <section class="joypanel panel">
-          <div class="joypanel__head">
-            <div>
-              <div class="panel__eyebrow">INPUT DEVICE</div>
-              <h2 class="joypanel__title">Joystick Configuration</h2>
-              <p class="joypanel__subtitle">
-                Mapping axis gamepad ke kontrol ROV.
-              </p>
-            </div>
-
-            <div class="joycontroller">
-              <span class="joycontroller__dot"></span>
-              <span class="joycontroller__name" id="joyControllerNameTable">
-                Unknown controller
-              </span>
-            </div>
-          </div>
-
-          <!-- TOOLBAR -->
-          <div class="joytoolbar">
-            <div class="joytoolbar__left">
-              <button class="joyactionBtn joyactionBtn--primary" id="joySaveBtn" type="button">
-                Save Mapping
-              </button>
-              <button class="joyactionBtn" id="joyResetBtn" type="button">
-                Reset Default
-              </button>
-            </div>
-
-            <div class="joytoolbar__right">
-              <label class="joyenabled">
-                <input type="checkbox" id="joyEnabledToggle" ${joystickState.enabled ? "checked" : ""} />
-                <span>Enabled</span>
-              </label>
-              <span class="joysaveStatus" id="joySaveStatus">Config belum disimpan</span>
-            </div>
-          </div>
-
-          <div class="joytable__wrap">
-            <table class="joytable__table">
-              <thead>
-                <tr>
-                  <th class="col-name">Name</th>
-                  <th class="col-preview">Preview</th>
-                  <th class="col-dir">Direction</th>
-                  <th class="col-min">Min</th>
-                  <th class="col-axis">Axis</th>
-                  <th class="col-max">Max</th>
-                </tr>
-              </thead>
-
-              <tbody>
-                ${axisRows
-                  .map(
-                    (row, index) => `
-                  <tr data-axis-row="${index}">
-                    <td class="col-name">
-                      <span class="joyrow__name">${row.name}</span>
-                    </td>
-
-                    <td class="col-preview">
-                      <div class="joypreview">
-                        <div class="joypreview__value" id="joyPreviewMain-${index}">
-                          0.00
-                        </div>
-
-                        <div class="joypreview__bar">
-                          <span class="joypreview__zero"></span>
-                          <span
-                            class="joypreview__fill joypreview__fill--neg"
-                            id="joyPreviewFillNeg-${index}"
-                          ></span>
-                          <span
-                            class="joypreview__fill joypreview__fill--pos"
-                            id="joyPreviewFillPos-${index}"
-                          ></span>
-                        </div>
-
-                        <div class="joypreview__sub" id="joyPreviewSub-${index}">
-                          0.00
-                        </div>
-                      </div>
-                    </td>
-
-                    <td class="col-dir">
-                      <button
-                        class="joydirBtn"
-                        type="button"
-                        data-dir-btn="${index}"
-                        title="Ubah arah"
-                      >
-                        ${axisConfig[index]?.direction ?? "↔"}
-                      </button>
-                    </td>
-
-                    <td class="col-min">
-                      <input
-                        class="joynum"
-                        type="number"
-                        value="${axisConfig[index]?.min ?? 0}"
-                        data-min-input="${index}"
-                      />
-                    </td>
-
-                    <td class="col-axis">
-                      <div class="joyselectWrap">
-                        <select class="joyselect" data-axis-select="${index}">
-                          ${AXIS_OPTIONS.map(
-                            (opt) => `
-                              <option
-                                value="${opt}"
-                                ${opt === axisConfig[index]?.assigned ? "selected" : ""}
-                              >
-                                ${opt}
-                              </option>
-                            `
-                          ).join("")}
-                        </select>
-                        <span class="joyselectArrow">▾</span>
-                      </div>
-                    </td>
-
-                    <td class="col-max">
-                      <input
-                        class="joynum"
-                        type="number"
-                        value="${axisConfig[index]?.max ?? 0}"
-                        data-max-input="${index}"
-                      />
-                    </td>
-                  </tr>
-                `
-                  )
-                  .join("")}
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </main>
-    `;
-
-    injectJoystickStyles();
-    bindJoystickUI(root);
-    updateControllerName(root);
-    renderJoystickConfigToUI(root);
-
-    // minta config dari server saat page dibuka
-    sendWsMessage({ type: "joystick_config_get" });
-
-    // listener global untuk menerima config dari app.js
-    if (!window.__joyCfgListenerInstalled) {
-      window.__joyCfgListenerInstalled = true;
-
-      window.addEventListener("hydro-joystick-config", (ev) => {
-        const data = ev.detail;
-        if (!data) return;
-
-        applyJoystickConfig(data);
-        if (root) renderJoystickConfigToUI(root);
-
-        const status = root?.querySelector("#joySaveStatus");
-        if (status) {
-          status.textContent = "Config sinkron dengan server";
-        }
-      });
-    }
-
-    if (!axisLoopStarted) {
-      axisLoopStarted = true;
-      startAxisPreviewLoop();
-    }
-  },
-
-  onShow() {
-    updateControllerName(root);
-  },
-
-  onHide() {},
-
-  onTelemetry(_data) {},
+const ACTION_LABELS = {
+  no_function: "No function",
+  arm: "Arm",
+  disarm: "Disarm",
+  mode_manual: "Mode manual",
+  mode_stabilize: "Mode stabilize",
+  mode_depth_hold: "Mode depth hold",
+  input_hold_set: "Input hold set",
+  mount_tilt_up: "Mount tilt up",
+  mount_tilt_down: "Mount tilt down",
+  mount_center: "Mount center",
+  actuator1_inc: "Actuator 1 inc",
+  actuator1_dec: "Actuator 1 dec",
+  lights_brighter: "Lights brighter",
+  lights_dimmer: "Lights dimmer",
+  gain_inc: "Gain inc",
+  gain_dec: "Gain dec",
 };
 
-function bindJoystickUI(root) {
-  const dirButtons = root.querySelectorAll("[data-dir-btn]");
-  dirButtons.forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const index = Number(btn.dataset.dirBtn);
-      if (Number.isNaN(index) || !axisConfig[index]) return;
-
-      axisConfig[index].direction =
-        axisConfig[index].direction === "↔" ? "↕" : "↔";
-
-      btn.textContent = axisConfig[index].direction;
-      markDirty(root);
-    });
-  });
-
-  const axisSelects = root.querySelectorAll("[data-axis-select]");
-  axisSelects.forEach((select) => {
-    select.addEventListener("change", (e) => {
-      const index = Number(select.dataset.axisSelect);
-      const value = e.target.value;
-
-      if (!Number.isNaN(index) && axisConfig[index]) {
-        axisConfig[index].assigned = value;
-        console.log(`[Joystick] ${axisConfig[index].input} -> ${value}`);
-        markDirty(root);
-      }
-    });
-  });
-
-  const minInputs = root.querySelectorAll("[data-min-input]");
-  minInputs.forEach((input) => {
-    input.addEventListener("change", (e) => {
-      const index = Number(input.dataset.minInput);
-      const value = Number(e.target.value);
-
-      if (!Number.isNaN(index) && axisConfig[index]) {
-        axisConfig[index].min = value;
-        markDirty(root);
-      }
-    });
-  });
-
-  const maxInputs = root.querySelectorAll("[data-max-input]");
-  maxInputs.forEach((input) => {
-    input.addEventListener("change", (e) => {
-      const index = Number(input.dataset.maxInput);
-      const value = Number(e.target.value);
-
-      if (!Number.isNaN(index) && axisConfig[index]) {
-        axisConfig[index].max = value;
-        markDirty(root);
-      }
-    });
-  });
-
-  const enabledToggle = root.querySelector("#joyEnabledToggle");
-  if (enabledToggle) {
-    enabledToggle.checked = joystickState.enabled !== false;
-    enabledToggle.addEventListener("change", () => {
-      joystickState.enabled = enabledToggle.checked;
-      markDirty(root);
-    });
-  }
-
-  const saveBtn = root.querySelector("#joySaveBtn");
-  const resetBtn = root.querySelector("#joyResetBtn");
-  const saveStatus = root.querySelector("#joySaveStatus");
-
-  if (saveBtn) {
-    saveBtn.addEventListener("click", () => {
-      const ok = sendWsMessage({
-        type: "joystick_config_save",
-        data: getJoystickConfigPayload(),
-      });
-
-      if (ok && saveStatus) {
-        saveStatus.textContent = "Menyimpan ke server...";
-      }
-    });
-  }
-
-  if (resetBtn) {
-    resetBtn.addEventListener("click", () => {
-      applyJoystickConfig(getDefaultJoystickConfig());
-      renderJoystickConfigToUI(root);
-
-      if (saveStatus) {
-        saveStatus.textContent = "Default dimuat. Klik Save Mapping untuk menyimpan.";
-      }
-    });
-  }
-
-  window.addEventListener("gamepadconnected", () => updateControllerName(root));
-  window.addEventListener("gamepaddisconnected", () => updateControllerName(root));
-}
-
-function updateControllerName(root) {
-  if (!root) return;
-
-  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-  const gp = Array.from(pads).find(Boolean);
-  const name = gp ? gp.id : "Unknown controller";
-
-  const el = root.querySelector("#joyControllerNameTable");
-  if (el) el.textContent = name;
-}
-
-function renderJoystickConfigToUI(root) {
-  if (!root) return;
-
-  const enabledToggle = root.querySelector("#joyEnabledToggle");
-  if (enabledToggle) enabledToggle.checked = joystickState.enabled !== false;
-
-  joystickState.axisConfig.forEach((row, index) => {
-    const dirBtn = root.querySelector(`[data-dir-btn="${index}"]`);
-    const minInput = root.querySelector(`[data-min-input="${index}"]`);
-    const maxInput = root.querySelector(`[data-max-input="${index}"]`);
-    const axisSelect = root.querySelector(`[data-axis-select="${index}"]`);
-
-    if (dirBtn) dirBtn.textContent = row.direction ?? "↔";
-    if (minInput) minInput.value = row.min ?? 0;
-    if (maxInput) maxInput.value = row.max ?? 0;
-    if (axisSelect) axisSelect.value = row.assigned ?? "No function";
-  });
-}
-
-function getDefaultJoystickConfig() {
-  return {
-    enabled: true,
-    axisConfig: [
-      { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
-      { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
-      { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
-      { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
-      { input: "axis 4", assigned: "No function", min: -1, max: 1, direction: "↕" },
+const COCKPIT_LAYOUT = {
+  regular: {
+    left: [
+      { action: "disarm", anchor: "l1" },
+      { action: "mount_tilt_down", anchor: "l2" },
+      { action: "actuator1_inc", anchor: "dpad_up" },
+      { action: "gain_inc", anchor: "dpad_left" },
+      { action: "lights_dimmer", anchor: "dpad_right" },
+      { action: "lights_brighter", anchor: "dpad_down" },
+      { action: "gain_dec", anchor: "left_stick" },
+      { action: "mount_center", anchor: "left_bottom" },
     ],
-  };
+    center: { action: "no_function", anchor: "touchpad" },
+    right: [
+      { action: "arm", anchor: "r1" },
+      { action: "mount_tilt_up", anchor: "r2" },
+      { action: "actuator1_dec", anchor: "face_up" },
+      { action: "mode_stabilize", anchor: "face_left" },
+      { action: "mode_manual", anchor: "face_right" },
+      { action: "mode_depth_hold", anchor: "face_down" },
+      { action: "shift", anchor: "right_stick" },
+      { action: "input_hold_set", anchor: "right_bottom" },
+    ],
+  },
+
+  shift: {
+    left: [
+      { action: "disarm", anchor: "l1" },
+      { action: "mount_tilt_down", anchor: "l2" },
+      { action: "actuator1_inc", anchor: "dpad_up" },
+      { action: "gain_inc", anchor: "dpad_left" },
+      { action: "lights_dimmer", anchor: "dpad_right" },
+      { action: "lights_brighter", anchor: "dpad_down" },
+      { action: "gain_dec", anchor: "left_stick" },
+      { action: "mount_center", anchor: "left_bottom" },
+    ],
+    center: { action: "no_function", anchor: "touchpad" },
+    right: [
+      { action: "arm", anchor: "r1" },
+      { action: "mount_tilt_up", anchor: "r2" },
+      { action: "actuator1_dec", anchor: "face_up" },
+      { action: "mode_stabilize", anchor: "face_left" },
+      { action: "mode_manual", anchor: "face_right" },
+      { action: "mode_depth_hold", anchor: "face_down" },
+      { action: "shift", anchor: "right_stick" },
+      { action: "input_hold_set", anchor: "right_bottom" },
+    ],
+  },
+};
+
+function esc(str) {
+  return String(str ?? "").replace(/[&<>"']/g, (m) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#039;",
+  }[m]));
 }
 
-function markDirty(root) {
-  const saveStatus = root?.querySelector("#joySaveStatus");
-  if (saveStatus) {
-    saveStatus.textContent = "Ada perubahan belum disimpan";
+function clamp(v, min, max) {
+  return Math.max(min, Math.min(max, v));
+}
+
+function normalizeAxis(v) {
+  return clamp(Number(v) || 0, -1, 1);
+}
+
+function axisPercent(v) {
+  return Math.round(normalizeAxis(v) * 100);
+}
+
+function axisBarStyle(v) {
+  const p = axisPercent(v); // -100..100
+  const width = Math.abs(p) / 2; // 0..50 (% dari track penuh)
+  if (p >= 0) {
+    return `left:50%;width:${width}%;`;
   }
+  return `left:${50 - width}%;width:${width}%;`;
 }
 
-function startAxisPreviewLoop() {
-  const loop = () => {
-    if (root) {
-      const pads = navigator.getGamepads ? navigator.getGamepads() : [];
-      const gp = Array.from(pads).find(Boolean);
+function axisPreviewValue(raw, row) {
+  let v = normalizeAxis(raw);
+  if (Number(row.min) > Number(row.max)) v *= -1;
+  return v;
+}
 
-      axisRows.forEach((_, index) => {
-        const main = root.querySelector(`#joyPreviewMain-${index}`);
-        const sub = root.querySelector(`#joyPreviewSub-${index}`);
-        const fillNeg = root.querySelector(`#joyPreviewFillNeg-${index}`);
-        const fillPos = root.querySelector(`#joyPreviewFillPos-${index}`);
+function getAxisAssignedOptions(current) {
+  return AXIS_OPTIONS.map((opt) => {
+    const selected = opt === current ? "selected" : "";
+    return `<option value="${esc(opt)}" ${selected}>${esc(opt)}</option>`;
+  }).join("");
+}
 
-        if (!main || !sub || !fillNeg || !fillPos) return;
+function getActionLabel(action) {
+  return ACTION_LABELS[action] || action || "No function";
+}
 
-        let val = 0;
-        if (gp && gp.axes && typeof gp.axes[index] === "number") {
-          val = gp.axes[index];
-        }
+function getCurrentLayerConfig() {
+  const layer = mappingLayer === "shift" ? "shift" : "regular";
+  return joystickState.buttonConfig?.[layer] || [];
+}
 
-        val = Math.max(-1, Math.min(1, Number(val) || 0));
+function getActionRow(layer, actionKey) {
+  const rows = joystickState.buttonConfig?.[layer] || [];
+  return rows.find((r) => r.action === actionKey) || null;
+}
 
-        const fixed = val.toFixed(2);
-        const scaled = (val * 1000).toFixed(2);
+function getActionButtonText(layer, actionKey) {
+  if (actionKey === "shift") {
+    return `Button ${joystickState.shiftButton}`;
+  }
+  const row = getActionRow(layer, actionKey);
+  if (!row || !Number.isInteger(row.button)) return "Unassigned";
+  return `Button ${row.button}`;
+}
 
-        main.textContent = fixed;
-        sub.textContent = scaled;
+function getActionPressed(layer, actionKey) {
+  if (actionKey === "shift") {
+    return getButtonPressed(joystickState.shiftButton);
+  }
+  const row = getActionRow(layer, actionKey);
+  if (!row || !Number.isInteger(row.button)) return false;
+  return getButtonPressed(row.button);
+}
 
-        const percent = Math.min(50, Math.abs(val) * 50);
+function getActionTesterValue(layer, actionKey) {
+  if (actionKey === "shift") {
+    return getButtonValue(joystickState.shiftButton);
+  }
+  const row = getActionRow(layer, actionKey);
+  if (!row || !Number.isInteger(row.button)) return 0;
+  return getButtonValue(row.button);
+}
 
-        if (val > 0) {
-          fillPos.style.width = `${percent}%`;
-          fillNeg.style.width = "0%";
-        } else if (val < 0) {
-          fillNeg.style.width = `${percent}%`;
-          fillPos.style.width = "0%";
-        } else {
-          fillNeg.style.width = "0%";
-          fillPos.style.width = "0%";
-        }
-      });
+function buildButtonOptions(current) {
+  return BUTTON_OPTIONS.map((n) => {
+    const selected = n === current ? "selected" : "";
+    return `<option value="${n}" ${selected}>Button ${n}</option>`;
+  }).join("");
+}
+
+function buildActionOptions(current) {
+  const actions = getAvailableButtonActions();
+  return actions.map((a) => {
+    const selected = a === current ? "selected" : "";
+    return `<option value="${esc(a)}" ${selected}>${esc(getActionLabel(a))}</option>`;
+  }).join("");
+}
+
+function buildModeOptions(current) {
+  return BUTTON_MODES.map((m) => {
+    const selected = m === current ? "selected" : "";
+    const label = m === "hold" ? "Hold" : "Toggle";
+    return `<option value="${m}" ${selected}>${label}</option>`;
+  }).join("");
+}
+
+/* ========================= AXIS PANEL ========================= */
+
+function renderAxisMappingPanel() {
+  const rows = joystickState.axisConfig || [];
+
+  return `
+    <section class="joy-card joy-card--axis">
+      <div class="joy-card__head">
+        <div>
+          <div class="joy-kicker">AXIS MAPPING</div>
+          <h3 class="joy-card__title">Axis Input</h3>
+        </div>
+      </div>
+
+      <div class="joy-axis-table-wrap">
+        <table class="joy-axis-table">
+          <thead>
+            <tr>
+              <th class="col-name">Name</th>
+              <th class="col-preview">Preview</th>
+              <th class="col-dir">Direction</th>
+              <th class="col-min">Min</th>
+              <th class="col-axis">Axis</th>
+              <th class="col-max">Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row, idx) => {
+              const raw = joystickState.rawAxes[idx] ?? 0;
+              const val = axisPreviewValue(raw, row);
+              const barStyle = axisBarStyle(val);
+
+              return `
+                <tr>
+                  <td class="joy-axis-name">${esc(row.input)}</td>
+
+                  <td class="joy-axis-preview">
+                    <div class="joy-axis-value">${val.toFixed(2)}</div>
+                    <div class="joy-axis-track">
+                      <div class="joy-axis-track__zero"></div>
+                      <div class="joy-axis-bar" style="${barStyle}"></div>
+                    </div>
+                    <div class="joy-axis-sub">${(val * 1000).toFixed(2)}</div>
+                  </td>
+
+                  <td class="joy-axis-dir">
+                    <button
+                      class="joy-mini-btn"
+                      data-action="toggle-axis-dir"
+                      data-axis-index="${idx}"
+                      type="button"
+                    >${esc(row.direction)}</button>
+                  </td>
+
+                  <td>
+                    <input
+                      class="joy-input joy-input--num"
+                      type="number"
+                      value="${esc(row.min)}"
+                      data-axis-index="${idx}"
+                      data-field="min"
+                    />
+                  </td>
+
+                  <td>
+                    <select
+                      class="joy-select"
+                      data-axis-index="${idx}"
+                      data-field="assigned"
+                    >
+                      ${getAxisAssignedOptions(row.assigned)}
+                    </select>
+                  </td>
+
+                  <td>
+                    <input
+                      class="joy-input joy-input--num"
+                      type="number"
+                      value="${esc(row.max)}"
+                      data-axis-index="${idx}"
+                      data-field="max"
+                    />
+                  </td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  `;
+}
+
+/* ========================= COCKPIT VISUAL ========================= */
+
+function renderCockpitLabel(layer, item, side) {
+  const actionKey = item.action;
+  const label = actionKey === "shift" ? "Shift" : getActionLabel(actionKey);
+  const btnText = getActionButtonText(layer, actionKey);
+  const active = getActionPressed(layer, actionKey) ? "is-active" : "";
+  const testerVal = getActionTesterValue(layer, actionKey);
+
+  return `
+    <div class="joy-vlabel joy-vlabel--${side} ${active}" data-action-key="${esc(actionKey)}">
+      <div class="joy-vlabel__main">${esc(label)}</div>
+      <div class="joy-vlabel__sub">
+        ${esc(btnText)}
+        ${testerVal > 0 ? `<span class="joy-vlabel__live">${testerVal.toFixed(2)}</span>` : ""}
+      </div>
+    </div>
+  `;
+}
+
+function renderCockpitVisualPanel() {
+  const layer = mappingLayer === "shift" ? "shift" : "regular";
+  const layout = COCKPIT_LAYOUT[layer];
+  const activeLayerRuntime = getActiveButtonLayerName();
+
+  return `
+    <section class="joy-card joy-card--visual">
+      <div class="joy-visual-head">
+        <div>
+          <div class="joy-visual-title">${esc(joystickState.controllerName || "Unknown controller")}</div>
+          <div class="joy-visual-sub">Layer aktif runtime: ${esc(activeLayerRuntime === "shift" ? "Shift" : "Regular")}</div>
+        </div>
+
+        <div class="joy-shift-box">
+          <div class="joy-kicker">SHIFT BUTTON</div>
+          <select id="joyShiftButtonSelect" class="joy-select joy-select--shift">
+            ${BUTTON_OPTIONS.map((n) => `
+              <option value="${n}" ${joystickState.shiftButton === n ? "selected" : ""}>Button ${n}</option>
+            `).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="joy-cockpit">
+        <div class="joy-cockpit__col joy-cockpit__col--left">
+          ${layout.left.map((item) => renderCockpitLabel(layer, item, "left")).join("")}
+        </div>
+
+        <div class="joy-cockpit__center">
+          <div class="joy-center-label ${getActionPressed(layer, layout.center.action) ? "is-active" : ""}">
+            ${esc(getActionLabel(layout.center.action))}
+          </div>
+
+          ${renderControllerSvg()}
+        </div>
+
+        <div class="joy-cockpit__col joy-cockpit__col--right">
+          ${layout.right.map((item) => renderCockpitLabel(layer, item, "right")).join("")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderControllerSvg() {
+  return `
+    <div class="joy-controller">
+      <svg class="joy-controller__svg" viewBox="0 0 820 420" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        <!-- outline -->
+        <path class="jc-stroke" d="
+          M285 105
+          C250 105 215 122 194 151
+          C171 184 160 224 160 265
+          C160 319 176 364 204 388
+          C223 405 248 406 267 388
+          C279 377 287 354 295 330
+          C304 302 320 286 345 286
+          H475
+          C500 286 516 302 525 330
+          C533 354 541 377 553 388
+          C572 406 597 405 616 388
+          C644 364 660 319 660 265
+          C660 224 649 184 626 151
+          C605 122 570 105 535 105
+          H285 Z
+        "/>
+
+        <!-- touchpad -->
+        <rect class="jc-stroke" x="330" y="128" rx="16" ry="16" width="160" height="82"/>
+
+        <!-- left stick -->
+        <circle class="jc-stroke" cx="310" cy="275" r="44"/>
+        <circle class="jc-stroke" cx="310" cy="275" r="20"/>
+
+        <!-- right stick -->
+        <circle class="jc-stroke" cx="510" cy="275" r="44"/>
+        <circle class="jc-stroke" cx="510" cy="275" r="20"/>
+
+        <!-- dpad -->
+        <rect class="jc-stroke" x="206" y="190" width="28" height="86" rx="10"/>
+        <rect class="jc-stroke" x="177" y="219" width="86" height="28" rx="10"/>
+
+        <!-- face buttons -->
+        <circle class="jc-stroke" cx="603" cy="221" r="18"/>
+        <circle class="jc-stroke" cx="563" cy="261" r="18"/>
+        <circle class="jc-stroke" cx="643" cy="261" r="18"/>
+        <circle class="jc-stroke" cx="603" cy="301" r="18"/>
+
+        <!-- center / ps -->
+        <circle class="jc-stroke" cx="410" cy="294" r="18"/>
+
+        <!-- shoulder small -->
+        <rect class="jc-stroke" x="236" y="140" width="18" height="34" rx="8"/>
+        <rect class="jc-stroke" x="566" y="140" width="18" height="34" rx="8"/>
+
+        <!-- helper center line -->
+        <path class="jc-center" d="M410 230 L410 350"/>
+
+        <!-- LEFT connectors -->
+        <path class="jc-line" d="M252 145 L145 145" />
+        <path class="jc-line" d="M236 170 L130 170" />
+        <path class="jc-line" d="M206 205 L112 205" />
+        <path class="jc-line" d="M177 236 L96 236" />
+        <path class="jc-line" d="M263 236 L120 236" opacity=".0"/>
+        <path class="jc-line" d="M206 265 L96 265" />
+        <path class="jc-line" d="M267 292 L126 292" />
+        <path class="jc-line" d="M285 350 L140 350" />
+
+        <!-- RIGHT connectors -->
+        <path class="jc-line" d="M568 145 L675 145" />
+        <path class="jc-line" d="M584 170 L690 170" />
+        <path class="jc-line" d="M603 205 L697 205" />
+        <path class="jc-line" d="M563 236 L704 236" />
+        <path class="jc-line" d="M643 265 L724 265" />
+        <path class="jc-line" d="M603 301 L697 301" />
+        <path class="jc-line" d="M554 314 L692 314" />
+        <path class="jc-line" d="M535 350 L680 350" />
+
+        <!-- center label line -->
+        <path class="jc-line" d="M410 128 L410 70" />
+      </svg>
+    </div>
+  `;
+}
+
+/* ========================= BUTTON TABLE ========================= */
+
+function renderButtonMappingPanel() {
+  const activeLayer = getActiveButtonLayerName();
+
+  return `
+    <section class="joy-card joy-card--buttons">
+      <div class="joy-card__head joy-card__head--buttonmap">
+        <div>
+          <div class="joy-kicker">BUTTON MAPPING</div>
+          <h3 class="joy-card__title">Regular / Shift</h3>
+        </div>
+
+        <div class="joy-shift-box joy-shift-box--inline">
+          <div class="joy-kicker">SHIFT BUTTON</div>
+          <select id="joyShiftButtonSelect" class="joy-select joy-select--shift">
+            ${BUTTON_OPTIONS.map((n) => `
+              <option value="${n}" ${joystickState.shiftButton === n ? "selected" : ""}>Button ${n}</option>
+            `).join("")}
+          </select>
+        </div>
+      </div>
+
+      <div class="joy-button-content">
+        <div class="joy-dual-grid">
+          ${renderButtonTableForLayer("regular", activeLayer === "regular")}
+          ${renderButtonTableForLayer("shift", activeLayer === "shift")}
+        </div>
+      </div>
+    </section>
+  `;
+}
+
+function renderButtonTableForLayer(layer, isRuntimeActive) {
+  const rows = joystickState.buttonConfig?.[layer] || [];
+
+  return `
+    <div class="joy-layer-card ${isRuntimeActive ? "is-runtime-active" : "is-runtime-inactive"}">
+      <div class="joy-layer-card__head">
+        <div class="joy-layer-card__title">${layer === "shift" ? "SHIFT" : "REGULAR"}</div>
+        <div class="joy-layer-card__state">
+          ${isRuntimeActive ? "ACTIVE" : "STANDBY"}
+        </div>
+      </div>
+
+      <div class="joy-table-card joy-table-card--layer">
+        <table class="joy-button-table joy-button-table--compact">
+          <thead>
+            <tr>
+              <th>Function</th>
+              <th>Button</th>
+              <th>Mode</th>
+              <th>Tester</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((row, idx) => {
+              const pressed = isRuntimeActive ? getButtonPressed(row.button) : false;
+              const val = isRuntimeActive ? getButtonValue(row.button) : 0;
+
+              return `
+                <tr class="${pressed ? "is-active" : ""}">
+                  <td>
+                    <select
+                      class="joy-select joy-select--compact"
+                      data-btn-layer="${layer}"
+                      data-btn-index="${idx}"
+                      data-field="action"
+                    >
+                      ${buildActionOptions(row.action)}
+                    </select>
+                  </td>
+
+                  <td>
+                    <select
+                      class="joy-select joy-select--compact joy-select--btn"
+                      data-btn-layer="${layer}"
+                      data-btn-index="${idx}"
+                      data-field="button"
+                    >
+                      ${buildButtonOptions(row.button)}
+                    </select>
+                  </td>
+
+                  <td>
+                    <select
+                      class="joy-select joy-select--compact joy-select--mode"
+                      data-btn-layer="${layer}"
+                      data-btn-index="${idx}"
+                      data-field="mode"
+                    >
+                      ${buildModeOptions(row.mode)}
+                    </select>
+                  </td>
+
+                  <td>
+                    <div class="joy-tester ${pressed ? "is-active" : ""} ${isRuntimeActive ? "" : "is-dim"}">
+                      <span class="joy-tester__lamp"></span>
+                      <span class="joy-tester__text">
+                        ${isRuntimeActive ? (pressed ? "Pressed" : "Idle") : "Standby"}
+                        <small>${isRuntimeActive ? val.toFixed(2) : "0.00"}</small>
+                      </span>
+                    </div>
+                  </td>
+                </tr>
+              `;
+            }).join("")}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+/* ========================= HEADER / LAYOUT ========================= */
+
+function renderTopSummary() {
+  const connected = !!joystickState.connected;
+  const statusClass = connected ? "is-connected" : "is-disconnected";
+  const statusText = connected ? "Connected" : "Disconnected";
+
+  return `
+    <div class="joy-page__head">
+      <div>
+        <span class="joy-kicker">INPUT DEVICE</span>
+        <h2 class="joy-page__title">Joystick Configuration</h2>
+        <p class="joy-page__desc">Mapping axis dan tombol gamepad ke kontrol ROV.</p>
+      </div>
+
+      <div class="joy-head-actions">
+        <div class="joy-device-card ${statusClass}">
+          <span class="joy-device-card__dot"></span>
+          <div>
+            <div class="joy-device-card__name">${esc(joystickState.controllerName || "Unknown controller")}</div>
+            <div class="joy-device-card__sub">${statusText}</div>
+          </div>
+        </div>
+
+        <button id="joySaveBtn" class="joy-save-btn" type="button">Save Mapping</button>
+
+        <label class="joy-enable-toggle">
+          <input id="joyEnabledToggle" type="checkbox" ${joystickState.enabled ? "checked" : ""}/>
+          <span>Enabled</span>
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function renderLayout() {
+  return `
+    <section class="panel joy-page page--joystick">
+      ${renderTopSummary()}
+      ${renderAxisMappingPanel()}
+      ${renderButtonMappingPanel()}
+    </section>
+  `;
+}
+
+/* ========================= EVENTS ========================= */
+
+function bindEvents() {
+  if (!root) return;
+
+  root.querySelector("#joySaveBtn")?.addEventListener("click", async () => {
+    await saveMapping();
+  });
+
+  root.querySelector("#joyEnabledToggle")?.addEventListener("change", (e) => {
+    joystickState.enabled = !!e.target.checked;
+  });
+
+  root.querySelectorAll("[data-action='toggle-axis-dir']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const idx = Number(btn.dataset.axisIndex);
+      const row = joystickState.axisConfig[idx];
+      if (!row) return;
+
+      row.direction = row.direction === "↔" ? "↕" : "↔";
+
+      const oldMin = row.min;
+      row.min = row.max;
+      row.max = oldMin;
+
+      rerender();
+    });
+  });
+
+  root.querySelectorAll("[data-axis-index][data-field]").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const idx = Number(el.dataset.axisIndex);
+      const field = el.dataset.field;
+      const row = joystickState.axisConfig[idx];
+      if (!row) return;
+
+      if (field === "assigned") {
+        row.assigned = e.target.value;
+      } else if (field === "min" || field === "max") {
+        row[field] = Number(e.target.value);
+      }
+    });
+  });
+
+  root.querySelectorAll("[data-joy-view]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      visualMode = btn.dataset.joyView === "table" ? "table" : "visual";
+      rerender();
+    });
+  });
+
+  root.querySelectorAll("[data-joy-layer]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      mappingLayer = btn.dataset.joyLayer === "shift" ? "shift" : "regular";
+      rerender();
+    });
+  });
+
+  root.querySelector("#joyShiftButtonSelect")?.addEventListener("change", (e) => {
+    joystickState.shiftButton = Number(e.target.value);
+    rerender();
+  });
+
+  root.querySelectorAll("[data-btn-layer][data-btn-index][data-field]").forEach((el) => {
+    el.addEventListener("change", (e) => {
+      const layer = el.dataset.btnLayer;
+      const idx = Number(el.dataset.btnIndex);
+      const field = el.dataset.field;
+
+      const rows = joystickState.buttonConfig?.[layer];
+      if (!rows || !rows[idx]) return;
+
+      if (field === "action") {
+        rows[idx].action = e.target.value;
+      } else if (field === "button") {
+        rows[idx].button = Number(e.target.value);
+      } else if (field === "mode") {
+        rows[idx].mode = e.target.value === "hold" ? "hold" : "toggle";
+      }
+    });
+  });
+}
+
+/* ========================= SAVE ========================= */
+
+function saveMapping() {
+  try {
+    const payload = getJoystickConfigPayload();
+
+    if (!window.ws || window.ws.readyState !== WebSocket.OPEN) {
+      throw new Error("WebSocket not connected");
     }
 
-    requestAnimationFrame(loop);
-  };
+    window.ws.send(JSON.stringify({
+      type: "joystick_config_save",
+      data: payload,
+    }));
 
-  requestAnimationFrame(loop);
+    flashSaveState("Saving...");
+  } catch (err) {
+    console.error("[joystick] save failed:", err);
+    flashSaveState("Save failed", true);
+  }
 }
 
-export function handleJoystickConfigMessage(data) {
-  window.dispatchEvent(
-    new CustomEvent("hydro-joystick-config", { detail: data })
-  );
+function flashSaveState(text, isError = false) {
+  const btn = root?.querySelector("#joySaveBtn");
+  if (!btn) return;
+
+  const old = btn.textContent;
+  btn.textContent = text;
+  btn.classList.toggle("is-error", !!isError);
+
+  setTimeout(() => {
+    btn.textContent = old || "Save Mapping";
+    btn.classList.remove("is-error");
+  }, 1400);
 }
+
+/* ========================= LIVE PATCH ========================= */
+
+function patchLiveJoystickUI() {
+  if (!root) return;
+
+  // device card
+  const nameEl = root.querySelector(".joy-device-card__name");
+  const subEl = root.querySelector(".joy-device-card__sub");
+  const cardEl = root.querySelector(".joy-device-card");
+
+  if (nameEl) {
+    nameEl.textContent = joystickState.controllerName || "Unknown controller";
+  }
+  if (subEl) {
+    subEl.textContent = joystickState.connected ? "Connected" : "Disconnected";
+  }
+  if (cardEl) {
+    cardEl.classList.toggle("is-connected", !!joystickState.connected);
+    cardEl.classList.toggle("is-disconnected", !joystickState.connected);
+  }
+
+  // axis preview live
+  const axisRows = root.querySelectorAll(".joy-axis-table tbody tr");
+  axisRows.forEach((tr, idx) => {
+    const row = joystickState.axisConfig[idx];
+    if (!row) return;
+
+    const raw = joystickState.rawAxes[idx] ?? 0;
+    const val = axisPreviewValue(raw, row);
+    const barStyle = axisBarStyle(val);
+
+    const valueEl = tr.querySelector(".joy-axis-value");
+    const subValueEl = tr.querySelector(".joy-axis-sub");
+    const barEl = tr.querySelector(".joy-axis-bar");
+
+    if (valueEl) valueEl.textContent = val.toFixed(2);
+    if (subValueEl) subValueEl.textContent = (val * 1000).toFixed(2);
+    if (barEl) barEl.style.cssText = barStyle;
+  });
+
+  // layer state + tester live
+  const activeLayer = getActiveButtonLayerName();
+  const layerCards = root.querySelectorAll(".joy-layer-card");
+
+  layerCards.forEach((card) => {
+    const titleEl = card.querySelector(".joy-layer-card__title");
+    const stateEl = card.querySelector(".joy-layer-card__state");
+    if (!titleEl) return;
+
+    const title = titleEl.textContent.trim().toUpperCase();
+    const layer = title === "SHIFT" ? "shift" : "regular";
+    const isRuntimeActive = activeLayer === layer;
+    const rows = joystickState.buttonConfig?.[layer] || [];
+
+    card.classList.toggle("is-runtime-active", isRuntimeActive);
+    card.classList.toggle("is-runtime-inactive", !isRuntimeActive);
+
+    if (stateEl) {
+      stateEl.textContent = isRuntimeActive ? "ACTIVE" : "STANDBY";
+    }
+
+    const trs = card.querySelectorAll("tbody tr");
+    trs.forEach((tr, idx) => {
+      const row = rows[idx];
+      if (!row) return;
+
+      const pressed = isRuntimeActive ? getButtonPressed(row.button) : false;
+      const val = isRuntimeActive ? getButtonValue(row.button) : 0;
+
+      tr.classList.toggle("is-active", pressed);
+
+      const tester = tr.querySelector(".joy-tester");
+      if (tester) {
+        tester.classList.toggle("is-active", pressed);
+        tester.classList.toggle("is-dim", !isRuntimeActive);
+      }
+
+      const textEl = tr.querySelector(".joy-tester__text");
+      if (textEl) {
+        textEl.innerHTML = `
+          ${isRuntimeActive ? (pressed ? "Pressed" : "Idle") : "Standby"}
+          <small>${isRuntimeActive ? val.toFixed(2) : "0.00"}</small>
+        `;
+      }
+    });
+  });
+}
+
+/* ========================= RENDER LOOP ========================= */
+
+function rerender() {
+  if (!root) return;
+  root.innerHTML = renderLayout();
+  bindEvents();
+}
+
+function tick() {
+  updateJoystickStateFromGamepad();
+  patchLiveJoystickUI();
+  rafId = requestAnimationFrame(tick);
+}
+
+/* ========================= STYLES ========================= */
 
 function injectJoystickStyles() {
   if (document.getElementById("joystick-page-styles")) return;
@@ -431,372 +821,632 @@ function injectJoystickStyles() {
   const style = document.createElement("style");
   style.id = "joystick-page-styles";
   style.textContent = `
-    .joypage {
-      width: 100%;
-      min-height: 100%;
-      padding: 0;
-      box-sizing: border-box;
+        .page--joystick,
+    .page[data-page="joystick"]{
+      height:100%;
+      min-height:0;
+      overflow:auto !important;
     }
 
-    .joypanel {
-      width: 100%;
-      min-height: calc(100vh - 255px);
-      box-sizing: border-box;
-      padding: 18px 18px 22px;
-      display: flex;
-      flex-direction: column;
-      gap: 18px;
+    .page--joystick .grid,
+    .page[data-page="joystick"] .grid{
+      display:block !important;
+      min-height:max-content;
     }
 
-    .joypanel__head {
-      display: flex;
-      justify-content: space-between;
-      align-items: flex-start;
-      gap: 20px;
-      flex-wrap: wrap;
-      margin-bottom: 4px;
+    .page--joystick .panel,
+    .page[data-page="joystick"] .panel{
+      min-height:max-content;
+      overflow:visible !important;
     }
 
-    .joypanel__title {
-      margin: 6px 0 6px;
-      font-size: 24px;
-      font-weight: 800;
-      color: #f4f8ff;
-      letter-spacing: 0.2px;
-      line-height: 1.15;
+    .joy-page{
+      display:flex;
+      flex-direction:column;
+      gap:14px;
+      min-height:max-content;
+      overflow:visible !important;
+      padding-bottom:22px;
     }
 
-    .joypanel__subtitle {
-      margin: 0;
-      color: #9cb6cc;
-      font-size: 14px;
-      line-height: 1.45;
-    }
-
-    .joycontroller {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 12px 16px;
-      min-width: 320px;
-      max-width: 100%;
-      border-radius: 14px;
-      background: rgba(14, 34, 56, 0.55);
-      border: 1px solid rgba(53, 111, 164, 0.35);
-      color: #d7e7f5;
-      font-size: 14px;
-      font-weight: 600;
-      box-sizing: border-box;
-    }
-
-    .joycontroller__dot {
-      width: 10px;
-      height: 10px;
-      border-radius: 50%;
-      background: #29d3ff;
-      box-shadow: 0 0 12px rgba(41, 211, 255, 0.6);
-      flex: 0 0 auto;
-    }
-
-    .joytoolbar{
+    .joy-page__head{
       display:flex;
       justify-content:space-between;
-      align-items:center;
-      gap:16px;
+      align-items:flex-start;
+      gap:14px;
       flex-wrap:wrap;
-      margin-top:-2px;
+      padding:0 2px;
     }
 
-    .joytoolbar__left,
-    .joytoolbar__right{
+    .joy-page__title{
+      margin:4px 0 4px;
+      font-size:21px;
+      line-height:1.08;
+      color:#eaf3ff;
+      font-weight:800;
+      letter-spacing:-.02em;
+    }
+
+    .joy-page__desc{
+      margin:0;
+      color:#98b8cf;
+      font-size:12px;
+    }
+
+    .joy-kicker{
+      display:inline-block;
+      font-size:10px;
+      letter-spacing:.24em;
+      text-transform:uppercase;
+      color:#42d8ff;
+      font-weight:800;
+    }
+
+    .joy-head-actions{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+
+    .joy-device-card{
+      min-width:240px;
       display:flex;
       align-items:center;
       gap:12px;
-      flex-wrap:wrap;
+      padding:12px 14px;
+      border-radius:14px;
+      border:1px solid rgba(66,216,255,.18);
+      background:linear-gradient(180deg, rgba(18,37,63,.82), rgba(16,31,53,.86));
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
     }
 
-    .joyactionBtn{
-      height:40px;
-      padding:0 16px;
-      border-radius:12px;
-      border:1px solid rgba(53,111,164,.35);
-      background:rgba(14,34,56,.55);
-      color:#eaf4ff;
+    .joy-device-card__dot{
+      width:12px;
+      height:12px;
+      border-radius:50%;
+      background:#ff6f7b;
+      box-shadow:0 0 12px rgba(255,111,123,.45);
+      flex:0 0 auto;
+    }
+
+    .joy-device-card.is-connected .joy-device-card__dot{
+      background:#65f18a;
+      box-shadow:0 0 12px rgba(101,241,138,.45);
+    }
+
+    .joy-device-card__name{
+      color:#eef5ff;
+      font-weight:800;
       font-size:14px;
-      font-weight:700;
+      line-height:1.2;
+    }
+
+    .joy-device-card__sub{
+      color:#a9bfd4;
+      font-size:12px;
+      margin-top:2px;
+    }
+
+    .joy-save-btn{
+      height:38px;
+      padding:0 14px;
+      border:none;
+      border-radius:12px;
       cursor:pointer;
-      transition:.18s ease;
+      background:linear-gradient(180deg, #1f8bd0, #186ca6);
+      color:#f7fbff;
+      font-weight:800;
+      font-size:12px;
+      box-shadow:0 8px 18px rgba(16,92,148,.22), inset 0 1px 0 rgba(255,255,255,.12);
     }
 
-    .joyactionBtn:hover{
-      border-color:rgba(77,169,255,.5);
-      color:#fff;
-    }
+    .joy-save-btn:hover{filter:brightness(1.06)}
+    .joy-save-btn.is-error{background:linear-gradient(180deg, #d24d63, #9f3245)}
 
-    .joyactionBtn--primary{
-      background:linear-gradient(180deg, rgba(30,116,182,.85), rgba(20,83,140,.9));
-      border-color:rgba(73,170,255,.45);
-      color:#fff;
-    }
-
-    .joyenabled{
+    .joy-enable-toggle{
       display:flex;
       align-items:center;
       gap:8px;
-      color:#d7e7f5;
+      color:#e5efff;
+      font-weight:700;
+      font-size:12px;
+      user-select:none;
+    }
+
+    .joy-enable-toggle input{
+      width:16px;
+      height:16px;
+      accent-color:#22b0ff;
+    }
+
+    .joy-card{
+  background:linear-gradient(180deg, rgba(24,43,69,.92), rgba(20,36,59,.95));
+  border:1px solid rgba(80,142,198,.16);
+  border-radius:16px;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+  overflow:visible;
+}
+
+    .joy-card__head{
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-start;
+      gap:14px;
+      padding:14px 16px 0;
+      flex-wrap:wrap;
+    }
+
+    .joy-card__title{
+      margin:4px 0 0;
+      font-size:16px;
+      line-height:1.1;
+      color:#eef5ff;
+      font-weight:800;
+    }
+
+    /* ===== axis table ===== */
+    .joy-axis-table-wrap{
+      padding:12px 0 0;
+      overflow:auto;
+    }
+
+    .joy-axis-table{
+      width:100%;
+      border-collapse:collapse;
+      min-width:820px;
+    }
+
+    .joy-axis-table thead th{
+      text-align:left;
+      color:#6fd8ff;
+      font-size:11px;
+      letter-spacing:.18em;
+      text-transform:uppercase;
+      font-weight:800;
+      padding:10px 12px;
+      border-top:1px solid rgba(93,141,184,.16);
+      border-bottom:1px solid rgba(93,141,184,.16);
+      background:rgba(8,18,31,.16);
+    }
+
+    .joy-axis-table tbody td{
+      padding:10px 12px;
+      border-bottom:1px solid rgba(93,141,184,.12);
+      vertical-align:middle;
+      color:#edf5ff;
+    }
+
+    .joy-axis-name{
       font-size:14px;
-      font-weight:600;
+      font-weight:800;
+      color:#eef5ff;
+      white-space:nowrap;
     }
 
-    .joysaveStatus{
-      color:#9cb6cc;
-      font-size:13px;
+    .joy-axis-preview{
+      min-width:200px;
     }
 
-    .joytable__wrap {
-      width: 100%;
-      flex: 1;
-      overflow: auto;
-      border: 1px solid rgba(39, 84, 126, 0.45);
-      border-radius: 18px;
-      background: rgba(9, 25, 42, 0.22);
+    .joy-axis-value{
+      font-size:14px;
+      font-weight:800;
+      color:#eef5ff;
+      margin-bottom:6px;
+      text-align:center;
     }
 
-    .joytable__table {
-      width: 100%;
-      min-width: 1120px;
-      border-collapse: collapse;
-      table-layout: fixed;
-      color: #eaf4ff;
-      font-size: 13px;
+    .joy-axis-sub{
+      font-size:11px;
+      color:#8fb1ca;
+      margin-top:5px;
+      text-align:center;
     }
 
-    .joytable__table thead th {
-      padding: 15px 12px;
-      font-size: 12px;
-      font-weight: 700;
-      letter-spacing: 0.14em;
-      text-transform: uppercase;
-      color: #73cfff;
-      border-bottom: 1px solid rgba(39, 84, 126, 0.45);
-      text-align: center;
-      white-space: nowrap;
+    .joy-axis-track{
+      position:relative;
+      height:10px;
+      border-radius:999px;
+      background:rgba(7,18,31,.55);
+      border:1px solid rgba(63,108,149,.24);
+      overflow:hidden;
     }
 
-    .joytable__table tbody td {
-      padding: 14px 12px;
-      border-bottom: 1px solid rgba(39, 84, 126, 0.28);
-      vertical-align: middle;
-      text-align: center;
+    .joy-axis-track__zero{
+      position:absolute;
+      left:50%;
+      top:0;
+      bottom:0;
+      width:2px;
+      transform:translateX(-50%);
+      background:rgba(210,235,255,.20);
     }
 
-    .joytable__table tbody tr:last-child td {
-      border-bottom: none;
+    .joy-axis-bar{
+      position:absolute;
+      top:1px;
+      bottom:1px;
+      border-radius:999px;
+      background:linear-gradient(90deg, #2a9fe1, #3dd8ff);
+      box-shadow:0 0 12px rgba(54,188,255,.18);
     }
 
-    .col-name {
-      width: 12%;
-      text-align: left !important;
+    .joy-mini-btn{
+      min-width:48px;
+      height:36px;
+      border-radius:12px;
+      border:1px solid rgba(63,121,171,.30);
+      background:rgba(17,34,56,.78);
+      color:#8ad8ff;
+      font-size:18px;
+      cursor:pointer;
     }
 
-    .col-preview {
-      width: 24%;
+    .joy-mini-btn:hover{filter:brightness(1.08)}
+
+    .joy-input,
+    .joy-select{
+      width:100%;
+      height:36px;
+      border-radius:12px;
+      border:1px solid rgba(63,121,171,.30);
+      background:rgba(12,26,45,.86);
+      color:#eef5ff;
+      padding:0 12px;
+      font-size:12px;
+      outline:none;
     }
 
-    .col-dir {
-      width: 10%;
+    .joy-input:focus,
+    .joy-select:focus{
+      border-color:rgba(74,188,255,.6);
+      box-shadow:0 0 0 3px rgba(43,166,255,.14);
     }
 
-    .col-min {
-      width: 14%;
+    .joy-input--num{
+      text-align:center;
+      min-width:88px;
     }
 
-    .col-axis {
-      width: 24%;
+    /* ===== button mapping ===== */
+    .joy-card__head--buttonmap{
+      padding-bottom:12px;
+      border-bottom:1px solid rgba(93,141,184,.12);
     }
 
-    .col-max {
-      width: 14%;
+    .joy-tabs-wrap{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      align-items:center;
     }
 
-    .joyrow__name {
-      color: #f4f8ff;
-      font-size: 14px;
-      text-transform: lowercase;
-      font-weight: 600;
-      white-space: nowrap;
+    .joy-tabs{
+      display:inline-flex;
+      gap:6px;
+      padding:4px;
+      border-radius:12px;
+      background:rgba(8,18,31,.22);
+      border:1px solid rgba(70,117,157,.18);
     }
 
-    .joypreview {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      gap: 6px;
+    .joy-tab{
+      height:34px;
+      padding:0 14px;
+      border:none;
+      border-radius:10px;
+      background:transparent;
+      color:#9eb7cb;
+      font-size:11px;
+      letter-spacing:.14em;
+      font-weight:800;
+      cursor:pointer;
+      text-transform:uppercase;
     }
 
-    .joypreview__value {
-      font-size: 15px;
-      font-weight: 700;
-      color: #f4f8ff;
-      line-height: 1;
+    .joy-tab.is-active{
+      background:linear-gradient(180deg, rgba(40,157,224,.28), rgba(20,94,154,.28));
+      color:#f2f8ff;
+      box-shadow:inset 0 0 0 1px rgba(78,197,255,.22);
     }
 
-    .joypreview__bar {
-      position: relative;
-      width: 100%;
-      max-width: 180px;
-      height: 10px;
-      border-radius: 999px;
-      background: rgba(7, 19, 33, 0.75);
-      border: 1px solid rgba(45, 100, 155, 0.35);
-      overflow: hidden;
+    .joy-button-content{
+      padding:12px 14px 14px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
     }
 
-    .joypreview__zero {
-      position: absolute;
-      left: 50%;
-      top: 0;
-      transform: translateX(-50%);
-      width: 2px;
-      height: 100%;
-      background: rgba(180, 220, 255, 0.7);
-      box-shadow: 0 0 8px rgba(120, 200, 255, 0.35);
-      z-index: 2;
+    .joy-shift-box{
+      min-width:150px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      align-items:flex-end;
     }
 
-    .joypreview__fill {
-      position: absolute;
-      top: 0;
-      height: 100%;
-      width: 0%;
-      background: linear-gradient(90deg, #1aa8ff 0%, #3bd3ff 100%);
-      box-shadow: 0 0 12px rgba(36, 186, 255, 0.45);
-      transition: width 0.05s linear;
+    .joy-shift-box--inline{
+      min-width:150px;
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+      align-items:flex-end;
     }
 
-    .joypreview__fill--neg {
-      right: 50%;
-      border-radius: 999px 0 0 999px;
+    .joy-select--shift{
+      width:132px;
     }
 
-    .joypreview__fill--pos {
-      left: 50%;
-      border-radius: 0 999px 999px 0;
+    /* ===== dual regular / shift mapping ===== */
+    .joy-dual-grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:12px;
+      align-items:start;
     }
 
-    .joypreview__sub {
-      font-size: 11px;
-      color: #9cb6cc;
-      line-height: 1;
+    .joy-layer-card{
+  border:1px solid rgba(80,142,198,.14);
+  border-radius:14px;
+  background:rgba(8,18,31,.14);
+  overflow:visible;
+  position:relative;
+  z-index:1;
+}
+
+    .joy-layer-card.is-runtime-active{
+      border-color:rgba(72,186,255,.28);
+      box-shadow:0 0 0 1px rgba(72,186,255,.08) inset;
     }
 
-    .joydirBtn {
-      width: 50px;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(53, 111, 164, 0.35);
-      background: rgba(14, 34, 56, 0.55);
-      color: #73cfff;
-      font-size: 18px;
-      cursor: pointer;
-      transition: 0.18s ease;
+    .joy-layer-card.is-runtime-inactive{
+      opacity:.92;
     }
 
-    .joydirBtn:hover {
-      border-color: rgba(77, 169, 255, 0.5);
-      color: #b9ebff;
+    .joy-layer-card__head{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      padding:10px 12px;
+      border-bottom:1px solid rgba(93,141,184,.12);
+      background:rgba(8,18,31,.16);
     }
 
-    .joynum {
-      width: 100%;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(53, 111, 164, 0.35);
-      background: rgba(14, 34, 56, 0.55);
-      color: #f4f8ff;
-      text-align: center;
-      font-size: 14px;
-      outline: none;
-      padding: 0 10px;
-      box-sizing: border-box;
+    .joy-layer-card__title{
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:.18em;
+      color:#eaf3ff;
     }
 
-    .joynum:focus {
-      border-color: rgba(77, 169, 255, 0.55);
-      box-shadow: 0 0 0 2px rgba(24, 163, 255, 0.12);
+    .joy-layer-card__state{
+      font-size:10px;
+      font-weight:800;
+      letter-spacing:.18em;
+      color:#8fb1ca;
     }
 
-    .joynum::-webkit-outer-spin-button,
-    .joynum::-webkit-inner-spin-button {
-      -webkit-appearance: none;
-      margin: 0;
+    .joy-layer-card.is-runtime-active .joy-layer-card__state{
+      color:#55dfff;
     }
 
-    .joynum[type="number"] {
-      -moz-appearance: textfield;
+    /* ===== button table ===== */
+    .joy-table-card{
+  border-radius:14px;
+  border:1px solid rgba(80,142,198,.14);
+  background:rgba(10,21,36,.18);
+  overflow:visible;
+  position:relative;
+  z-index:2;
+}
+
+    .joy-table-card--compact{
+      margin-top:0;
     }
 
-    .joyselectWrap {
-      position: relative;
-      width: 100%;
+    .joy-table-card--layer{
+      border:none;
+      border-radius:0;
+      background:transparent;
     }
 
-    .joyselect {
-      width: 100%;
-      height: 40px;
-      border-radius: 12px;
-      border: 1px solid rgba(53, 111, 164, 0.35);
-      background: rgba(14, 34, 56, 0.55);
-      color: #f4f8ff;
-      font-size: 14px;
-      padding: 0 38px 0 14px;
-      appearance: none;
-      outline: none;
-      cursor: pointer;
+    .joy-button-table{
+      width:100%;
+      min-width:620px;
+      border-collapse:collapse;
     }
 
-    .joyselect:focus {
-      border-color: rgba(77, 169, 255, 0.55);
-      box-shadow: 0 0 0 2px rgba(24, 163, 255, 0.12);
+    .joy-button-table thead th{
+      text-align:left;
+      color:#6fd8ff;
+      font-size:10px;
+      letter-spacing:.14em;
+      text-transform:uppercase;
+      font-weight:800;
+      padding:8px 10px;
+      border-bottom:1px solid rgba(93,141,184,.14);
+      background:rgba(8,18,31,.18);
     }
 
-    .joyselect option {
-      background: #122338;
-      color: #f4f8ff;
+    .joy-button-table tbody td{
+      padding:6px 8px;
+      border-bottom:1px solid rgba(93,141,184,.10);
+      vertical-align:middle;
     }
 
-    .joyselectArrow {
-      position: absolute;
-      right: 14px;
-      top: 50%;
-      transform: translateY(-50%);
-      color: #a7d8f4;
-      pointer-events: none;
-      font-size: 13px;
+    .joy-button-table tbody tr.is-active{
+      background:rgba(36,115,176,.08);
     }
 
-    @media (max-width: 1100px) {
-      .joypanel__head {
-        flex-direction: column;
-        align-items: flex-start;
+    .joy-button-table--compact{
+      min-width:100%;
+    }
+
+    .joy-button-table--compact thead th{
+      font-size:10px;
+      letter-spacing:.14em;
+      padding:8px 10px;
+    }
+
+    .joy-button-table--compact tbody td{
+      padding:6px 8px;
+    }
+
+    .joy-select--compact{
+      height:34px;
+      font-size:12px;
+      padding:0 10px;
+      border-radius:10px;
+    }
+
+    .joy-select--btn{
+      min-width:96px;
+    }
+
+    .joy-select--mode{
+      min-width:88px;
+    }
+
+    .joy-button-table--compact .joy-select--btn{
+      min-width:96px;
+    }
+
+    .joy-button-table--compact .joy-select--mode{
+      min-width:88px;
+    }
+
+    .joy-tester{
+      display:inline-flex;
+      align-items:center;
+      gap:8px;
+      min-width:88px;
+      padding:5px 8px;
+      border-radius:10px;
+      border:1px solid rgba(69,112,150,.18);
+      background:rgba(8,18,31,.22);
+      color:#a7bfd2;
+      font-size:11px;
+      font-weight:700;
+    }
+
+    .joy-tester__lamp{
+      width:8px;
+      height:8px;
+      border-radius:50%;
+      background:#5d7082;
+      box-shadow:none;
+      flex:0 0 auto;
+    }
+
+    .joy-tester small{
+      display:block;
+      font-size:10px;
+      color:#84a3bd;
+      margin-top:1px;
+    }
+
+    .joy-tester.is-active{
+      color:#eff8ff;
+      border-color:rgba(72,186,255,.34);
+      background:rgba(26,94,145,.16);
+    }
+
+    .joy-tester.is-active .joy-tester__lamp{
+      background:#4be0ff;
+      box-shadow:0 0 12px rgba(75,224,255,.40);
+    }
+
+    .joy-tester.is-dim{
+      opacity:.62;
+    }
+
+    /* ===== responsive ===== */
+    @media (max-width: 1100px){
+      .joy-dual-grid{
+        grid-template-columns:1fr;
       }
-
-      .joycontroller {
-        min-width: unset;
-        width: 100%;
-      }
-
-      .joytoolbar{
-        flex-direction:column;
-        align-items:flex-start;
-      }
-
-      .joytoolbar__right{
-        width:100%;
-        justify-content:space-between;
-      }
     }
+
+    @media (max-width: 780px){
+      .joy-page__title{font-size:19px}
+      .joy-device-card{min-width:unset;width:100%}
+      .joy-head-actions{width:100%}
+      .joy-save-btn{width:100%}
+      .joy-tabs-wrap{width:100%}
+      .joy-tabs{width:100%;justify-content:flex-start;overflow:auto}
+    }
+
+    .joy-button-table td,
+.joy-button-table th{
+  overflow:visible;
+}
+
+.joy-select{
+  position:relative;
+  z-index:5;
+}
   `;
 
   document.head.appendChild(style);
+}
+
+/* ========================= PUBLIC API ========================= */
+
+export const joystickPage = {
+  init(container) {
+    root = container;
+    injectJoystickStyles();
+    updateJoystickStateFromGamepad();
+    rerender();
+  },
+
+  onShow() {
+    if (!rafId) {
+      tick();
+    }
+  },
+
+  onHide() {
+    if (rafId) {
+      cancelAnimationFrame(rafId);
+      rafId = null;
+    }
+  },
+
+  onTelemetry(_data) {
+    // tidak dipakai sekarang
+  },
+};
+
+export function handleJoystickConfigMessage(msg) {
+  if (!msg || typeof msg !== "object") return;
+
+  // kalau server kirim config joystick terbaru
+  if (msg.enabled !== undefined) {
+    joystickState.enabled = !!msg.enabled;
+  }
+
+  if (Array.isArray(msg.axisConfig)) {
+    joystickState.axisConfig = msg.axisConfig.map((row, i) => ({
+      input: row?.input ?? `axis ${i}`,
+      assigned: row?.assigned ?? "No function",
+      min: Number.isFinite(Number(row?.min)) ? Number(row.min) : -1000,
+      max: Number.isFinite(Number(row?.max)) ? Number(row.max) : 1000,
+      direction: row?.direction === "↕" ? "↕" : "↔",
+    }));
+  }
+
+  if (msg.buttonConfig && typeof msg.buttonConfig === "object") {
+    joystickState.buttonConfig = {
+      regular: Array.isArray(msg.buttonConfig.regular) ? msg.buttonConfig.regular : (joystickState.buttonConfig?.regular || []),
+      shift: Array.isArray(msg.buttonConfig.shift) ? msg.buttonConfig.shift : (joystickState.buttonConfig?.shift || []),
+    };
+  }
+
+  if (Number.isInteger(msg.shiftButton)) {
+    joystickState.shiftButton = msg.shiftButton;
+  }
+
+  if (root) rerender();
 }
