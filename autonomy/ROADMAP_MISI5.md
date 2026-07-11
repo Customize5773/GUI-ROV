@@ -153,11 +153,14 @@ Dikerjakan paralel, tidak menunggu fase hardware:
       Label warna per proses di satu terminal; Ctrl+C / crash satu proses mematikan
       semua dgn rapi. Diuji: 13 test (`tests/test_launch_sitl.py`, murni argparse+plan
       tanpa spawn nyata) + smoke test nyata (mock terhubung ke rov_link, heartbeat OK).
-- [ ] **Mode logging visi** di `servo_webcam_test.py` / `pose_webcam_test.py`
-      — rekam laju deteksi + error pose ke CSV, berguna saat tuning Fase 3.
-- [ ] Checklist verifikasi tanda/arah yang bisa dicentang (perluasan
-      `VERIFIKASI_ARDUSUB.md`) — dipakai ulang tiap kali mounting kamera/ROV
-      berubah.
+- [x] **Mode logging visi** di `servo_webcam_test.py` / `pose_webcam_test.py`
+      (`--csv` + `tools/detection_log.py`) — rekam detection-rate + pose/servo per
+      frame ke CSV + ringkasan saat keluar. Berguna diagnosa isu QR & tuning Fase 3.
+      Sekalian: kedua tool kini pakai `decode_qr()` (preprocessing CLAHE+upscale) &
+      opsi `--cam-width/height`. (Robustness deteksi QR — perbaikan isu Fase 0.)
+- [x] **Checklist verifikasi tanda/arah** — dibuat sbg run-book operasional
+      `PERSIAPAN_FASE2-4.md` (bisa dicentang, merujuk `VERIFIKASI_ARDUSUB.md`),
+      plus backlog `PR-AUTONOMY.md` (analisis gap Fase 0–4 + isu tertunda).
 
 ---
 
@@ -165,7 +168,8 @@ Dikerjakan paralel, tidak menunggu fase hardware:
 
 | Fase | Dokumen terkait |
 |---|---|
-| 0 | `VERIFIKASI_ARDUSUB.md`, `tests/test_mission5.py` |
-| 1 | `SITL_SETUP.md`, `README_SETUP_C.md` |
-| 2, 3 | `VERIFIKASI_ARDUSUB.md` |
+| 0 | `VERIFIKASI_ARDUSUB.md`, `tests/test_mission5.py`, `tests/test_qr_detect.py` |
+| 1 | `SITL_SETUP.md`, `README_SETUP_C.md`, `tools/launch_sitl.py` |
+| 2, 3, 4 | `PERSIAPAN_FASE2-4.md` (run-book operasional), `VERIFIKASI_ARDUSUB.md` |
+| Backlog | `PR-AUTONOMY.md` (gap analysis Fase 0–4 + isu tertunda spt QR-01) |
 | Semua | `../README.md` §"Autonomy (Python, opsional)", `tests/evaluate_mission5.py` |
