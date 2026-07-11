@@ -200,22 +200,26 @@ autonomy/
 ├─ tools/
 │  ├─ calibrate_camera.py     # kalibrasi kamera via checkerboard -> intrinsics .npz
 │  ├─ make_checkerboard.py    # cetak papan kalibrasi
-│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo pd QR payload dgn webcam
-│  ├─ servo_webcam_test.py    # tes docking QR (IBVS/PBVS) dgn webcam
+│  ├─ pose_webcam_test.py     # tes solvePnP + PoseServo pd QR payload dgn webcam (+--csv)
+│  ├─ servo_webcam_test.py    # tes docking QR (IBVS/PBVS) dgn webcam (+--csv/--cam-width)
+│  ├─ detection_log.py        # logger CSV deteksi QR (detection-rate + pose) utk tuning
 │  ├─ run_sitl.sh             # launch ArduSub SITL (WSL2) -> host Windows:14555
 │  └─ launch_sitl.py          # peluncur SATU-PERINTAH: vehicle(mock/SITL) -> rov_link -> GUI(-> FSM)
 ├─ tests/                    # tes-nilai-evaluasi misi 5 (closed-loop, tanpa hardware)
 │  ├─ sim_plant.py            # simulator ROV+payload in-process (fisika + geometri QR)
 │  ├─ evaluate_mission5.py    # harness skor rubrik + evaluasi mutu docking (CLI/JSON)
-│  └─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
+│  ├─ test_mission5.py        # pytest: unit (PID/servo) + integrasi misi 1→5
+│  └─ test_qr_detect.py       # pytest: decode_qr preprocessing (CLAHE/upscale/rescale)
 ├─ config/                   # tuning misi 5 TANPA edit kode (--config di mission5.py)
 │  ├─ loader.py                # baca .yaml/.yml/.json -> override konstanta modul
 │  └─ mission5.example.yaml    # contoh lengkap (salin -> mission5.local.yaml, gitignored)
 ├─ requirements.txt
 ├─ README_SETUP_C.md        # panduan integrasi GUI <-> rov_link.py <-> mock/SITL
 ├─ SITL_SETUP.md            # instalasi ArduSub SITL di WSL2 + routing MAVLink
-├─ VERIFIKASI_ARDUSUB.md    # checklist yang wajib dicek saat naik ke ArduSub asli
-└─ ROADMAP_MISI5.md         # peta jalan lengkap: meja -> SITL -> hardware -> kolam -> lomba
+├─ VERIFIKASI_ARDUSUB.md    # checklist teknis #1-7 (hardware) & M1-M8 (kolam)
+├─ ROADMAP_MISI5.md         # peta jalan lengkap: meja -> SITL -> hardware -> kolam -> lomba
+├─ PERSIAPAN_FASE2-4.md     # run-book operasional Fase 2 (bench) / 3 (kolam) / 4 (lomba)
+└─ PR-AUTONOMY.md           # backlog & analisis gap Fase 0-4 + isu tertunda (mis. QR jarak/cahaya)
 ```
 
 Setup singkat (Python 3.12 + venv):
@@ -293,3 +297,27 @@ Format `.yaml`/`.yml` (butuh `pip install pyyaml`, sudah ada di `requirements.tx
 memakai default di kode. Lihat `config/mission5.example.yaml` untuk daftar lengkap +
 penjelasan tiap parameter, dan `autonomy/ROADMAP_MISI5.md` Fase 3 untuk urutan tuning
 di kolam yang disarankan.
+
+### Deteksi QR robust + diagnosa (`decode_qr` & `--csv`)
+
+Deteksi QR (`vision/qr_detect.py`) memakai **`decode_qr()`** — preprocessing berjenjang
+yang hanya mengeskalasi saat perlu: frame mentah → grayscale+**CLAHE** (cahaya tak
+rata/glare) → **upscale 2×** (QR kecil/jauh) → fallback `cv2.QRCodeDetector`. Ini menjawab
+gejala umum "QR terbaca hanya jarak dekat / sensitif cahaya".
+
+Untuk **mengukur** batas deteksi (mis. saat tuning kolam), tool webcam bisa merekam CSV
+per-frame + resolusi kamera lebih tinggi:
+```bash
+python tools/servo_webcam_test.py --device 0 --csv run.csv --cam-width 1280 --cam-height 720
+```
+Saat keluar dicetak **detection-rate %** + rentang jarak/area terdeteksi. Analisis lengkap
+isu deteksi ada di `autonomy/PR-AUTONOMY.md` (QR-01), prosedur tuning di
+`autonomy/PERSIAPAN_FASE2-4.md` Fase 3.
+
+### Persiapan hardware & lomba (Fase 2–4)
+
+Karena Fase 2–4 butuh hardware/kolam, langkah operasionalnya disiapkan sebagai run-book
+yang bisa dicentang di lapangan: **`autonomy/PERSIAPAN_FASE2-4.md`** (Fase 2 bring-up
+bench · Fase 3 tuning kolam + worksheet parameter · Fase 4 run-book hari-H + scoresheet),
+merujuk checklist teknis `VERIFIKASI_ARDUSUB.md`. Backlog & analisis apa yang masih kurang
+tiap fase ada di **`autonomy/PR-AUTONOMY.md`**.

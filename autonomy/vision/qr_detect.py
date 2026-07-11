@@ -92,6 +92,80 @@ except ImportError:
 # (isi QR sesuai panduan KKI 2026 hal. 52; toleran terhadap prefiks/sufiks).
 
 
+# ── Decode QR robust (preprocessing berjenjang) ───────────────────────────────
+# Isu lapangan (Fase 0): QR terdeteksi hanya jarak dekat / sensitif cahaya. Sebab:
+# frame mentah dikirim langsung ke pyzbar tanpa perbaikan kontras/skala. decode_qr()
+# mengeskalasi preprocessing HANYA bila langkah sebelumnya gagal → jalur cepat tetap
+# cepat saat QR jelas, tapi QR jauh/kontras-rendah masih terbaca.
+CLAHE_CLIP   = 2.0     # kekuatan penyetaraan kontras lokal (CLAHE) — lawan glare/cahaya tak rata
+CLAHE_TILE   = 8       # ukuran grid CLAHE (tile CLAHE_TILE×CLAHE_TILE)
+UPSCALE      = 2.0     # faktor perbesaran saat QR terlalu kecil utk pyzbar
+
+
+def _to_gray_clahe(frame):
+    """BGR/gray → grayscale dgn CLAHE (kontras lokal). Bantu cahaya tak merata & glare."""
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=(CLAHE_TILE, CLAHE_TILE))
+    return clahe.apply(gray)
+
+
+def _pyzbar_qr(img, scale=1.0):
+    """Decode QR dgn pyzbar; kembalikan list {data, pts} dgn pts di koordinat frame ASLI
+    (dibagi `scale` bila img sudah diperbesar). Hanya simbol tipe QRCODE."""
+    out = []
+    for obj in pyzbar.decode(img):
+        if getattr(obj, 'type', 'QRCODE') != 'QRCODE':
+            continue
+        # JANGAN .upper() — isi QR payload = JSON (key/nilai case-sensitive).
+        data = obj.data.decode('utf-8', 'ignore').strip()
+        pts = np.array([[p.x / scale, p.y / scale] for p in obj.polygon], dtype=np.float32)
+        out.append({'data': data, 'pts': pts})
+    return out
+
+
+def decode_qr(frame, enhance=True):
+    """Deteksi QR robust dari 1 frame. Kembalikan list {'data': str,
+    'pts': ndarray(N,2) koordinat frame ASLI}.
+
+    Jenjang (berhenti di jenjang pertama yang berhasil):
+      1. pyzbar pada frame mentah (cepat, kasus QR jelas).
+      2. pyzbar pada grayscale + CLAHE (cahaya tak rata / glare).
+      3. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
+      4. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
+    enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B)."""
+    if not CV2_OK:
+        return []
+    if PYZBAR_OK:
+        res = _pyzbar_qr(frame, 1.0)
+        if res or not enhance:
+            return res
+        gray_clahe = _to_gray_clahe(frame)
+        res = _pyzbar_qr(gray_clahe, 1.0)
+        if res:
+            return res
+        big = cv2.resize(gray_clahe, None, fx=UPSCALE, fy=UPSCALE,
+                         interpolation=cv2.INTER_CUBIC)
+        res = _pyzbar_qr(big, UPSCALE)
+        if res:
+            return res
+    # Fallback: detektor QR bawaan OpenCV (kadang berhasil di mana pyzbar gagal, & sebaliknya)
+    if enhance and hasattr(cv2, 'QRCodeDetector'):
+        try:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+            ok, decoded, points, _ = cv2.QRCodeDetector().detectAndDecodeMulti(gray)
+            if ok and points is not None:
+                out = []
+                for data, quad in zip(decoded, points):
+                    if data:
+                        out.append({'data': str(data).strip(),
+                                    'pts': np.asarray(quad, dtype=np.float32).reshape(-1, 2)})
+                if out:
+                    return out
+        except cv2.error:
+            pass
+    return []
+
+
 class VisionPipeline:
     """
     Pipeline deteksi QR payload untuk misi ROV KKI 2026.
@@ -246,22 +320,19 @@ class VisionPipeline:
                 time.sleep(0.5)
                 continue
 
-            # Deteksi QR code
-            if PYZBAR_OK:
-                for obj in pyzbar.decode(frame):
-                    # JANGAN .upper() — isi QR payload = JSON (key/nilai case-sensitive).
-                    # wall_from_qr/parse_payload menangani huruf besar-kecil sendiri.
-                    data = obj.data.decode('utf-8').strip()
-                    pts = np.array([[p.x, p.y] for p in obj.polygon])
-                    center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
-                    area = float(cv2.contourArea(pts.reshape(-1, 1, 2)))
-                    frame = self._annotate(frame, data, center, pts)
-                    result = self._build_result(data, center, area, frame)
-                    # PBVS: pose 3D QR via solvePnP (butuh kalibrasi + 4 sudut terurut)
-                    if self._K is not None and len(pts) >= 4:
-                        ordered = self._order_corners(pts)
-                        result['pose'] = self._estimate_pose_pts(ordered, self.qr_length)
-                    self._dispatch(result)
+            # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
+            for det in decode_qr(frame):
+                data = det['data']          # sudah di-strip, TANPA .upper() (jaga JSON payload)
+                pts = det['pts']
+                center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
+                area = float(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32)))
+                frame = self._annotate(frame, data, center, pts.astype(int))
+                result = self._build_result(data, center, area, frame)
+                # PBVS: pose 3D QR via solvePnP (butuh kalibrasi + 4 sudut terurut)
+                if self._K is not None and len(pts) >= 4:
+                    ordered = self._order_corners(pts)
+                    result['pose'] = self._estimate_pose_pts(ordered, self.qr_length)
+                self._dispatch(result)
 
             elapsed = time.time() - t_start
             sleep_t = max(0, interval - elapsed)
