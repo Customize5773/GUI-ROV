@@ -343,8 +343,12 @@ wss.on("connection", (ws, req) => {
         if (e) console.warn("[UDP] gagal kirim command:", e.message);
       });
 
-      console.log(`[CMD] ${msg.name} = ${msg.value} -> ${RPI_ADDR}:${UDP_OUT}`);
-      return;
+      const prettyValue =
+       typeof msg.value === "object"
+       ? JSON.stringify(msg.value)
+      : String(msg.value);
+
+      console.log(`[CMD] ${msg.name} = ${prettyValue} -> ${RPI_ADDR}:${UDP_OUT}`);
     }
   });
 

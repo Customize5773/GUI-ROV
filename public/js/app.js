@@ -823,12 +823,25 @@ case "mode_depth_hold": {
   }
 }
 
+function executeJoystickRelease(action) {
+  if (!action || action === "no_function") return;
+
+  switch (action) {
+    case "mount_tilt_up":
+    case "mount_tilt_down":
+      sendCmd("mount_tilt", { dir: "stop" });
+      return;
+
+    case "actuator1_inc":
+    case "actuator1_dec":
+      sendCmd("actuator1", { dir: "stop" });
+      return;
+  }
+}
+
 function processMappedGamepadButtons() {
   const layerName = getActiveButtonLayerName();
   const rows = joystickState.buttonConfig?.[layerName] || [];
-
-  // tombol yang sedang dipakai di layer aktif
-  const usedButtons = new Set();
 
   for (const row of rows) {
     if (!row) continue;
@@ -836,29 +849,45 @@ function processMappedGamepadButtons() {
     const btnIndex = Number(row.button);
     if (!Number.isInteger(btnIndex) || btnIndex < 0) continue;
 
-    usedButtons.add(btnIndex);
-
     const current = !!joystickState.rawButtons?.[btnIndex]?.pressed;
+
+    if (current) {
+  console.log(
+    "[JOY]",
+    "layer =", layerName,
+    "button =", btnIndex,
+    "action =", row.action,
+    "mode =", row.mode
+  );
+}
+
     const prev = !!gpBtnPrev[btnIndex];
+
     const rising = current && !prev;
+    const falling = !current && prev;
 
     if (row.mode === "hold") {
-      if (current) {
-        executeJoystickAction(row.action, "hold");
-      }
-    } else {
+  // selama tombol ditekan, kirim terus command hold
+  if (current) {
+    executeJoystickAction(row.action, "hold");
+  }
+
+  // saat tombol dilepas, kirim stop sekali
+  if (falling) {
+    executeJoystickRelease(row.action);
+  }
+} else {
+      // toggle = sekali saat rising edge
       if (rising) {
         executeJoystickAction(row.action, "toggle");
       }
     }
   }
 
-  // update cache tombol fisik
+  // update cache tombol fisik setelah semua aksi diproses
   (joystickState.rawButtons || []).forEach((b, idx) => {
     gpBtnPrev[idx] = !!(b && b.pressed);
   });
-
-  return usedButtons;
 }
 
 function pollGamepad() {
