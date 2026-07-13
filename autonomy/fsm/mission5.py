@@ -106,6 +106,25 @@ TIMEOUT_FALLBACK   = 30.0     # detik max jalur timed (degraded, tanpa visual)
 # singkat "dead-reckon hold", baru menyapu TERARAH ke sisi QR terakhir terlihat.
 M5_LOCK_GRACE_T    = 0.6      # detik hold saat dropout sesaat sebelum mulai menyapu
 
+# ── Misi 3b (HANG) & Misi 4 (DOCK): docking closed-loop ke HOOK (CAM WALL) ────
+# Target visual = hook PVC ¾" (25mm) ujung-U di dinding — TANPA QR/marker sendiri.
+# Deteksi geometrik (vision/hook_detect.py). Servo reuse VisualServo/PoseServo (spt QR).
+# Primary = closed-loop visual; timed lama disimpan sbg fallback degradasi eksplisit
+# (pola sama _state_m5_dock → M5_FALLBACK).
+HOOK_TARGET_AREA   = 3000.0   # IBVS: luas hook (px^2) saat jarak docking (TUNE di kolam)
+HOOK_TARGET_DIST   = 0.30     # PBVS: jarak docking ke hook (m) — payload/gripper mencapai hook
+HOOK_LOCK_GRACE_T  = 0.6      # detik dead-reckon hold saat deteksi hook dropout sesaat
+HOOK_ACQUIRE_T     = 8.0      # detik max cari/akuisisi hook sblm degradasi ke jalur timed
+HOOK_MIN_AREA      = 150.0    # luas contour minimum (px^2) kandidat hook (diteruskan ke detect_hook)
+HOOK_PIPE_DIAM_M   = 0.025    # diameter pipa hook fisik (m) — ¾" PVC, utk estimasi jarak
+HOOK_COLOR_HSV_RANGE = None   # [[h,s,v],[h,s,v]] opsional — JANGAN andalkan warna (warna PVC belum pasti)
+DOCK_APPROACH_SPEED = 20      # % surge mendekati dinding (surface docking & seating hang)
+
+# Fase mekanis lepas payload ke hook pasca-align visual (misi 3b) — TUNE di kolam
+HANG_SEAT_T        = 1.5      # detik dorong halus dudukkan lubang payload ke ujung hook
+HANG_OPEN_T        = 1.5      # detik buka gripper (payload tergantung)
+HANG_BACK_T        = 2.0      # detik mundur agar lubang bebas dari hook
+
 
 # ── State machine states ───────────────────────────────────────────────────────
 class State(Enum):
@@ -227,6 +246,14 @@ class Mission5FSM:
         self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
                                     kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
                                     kp_vert=PBVS_KP_VERT, **SERVO_INVERT)        # PBVS (meter)
+        # Servo docking ke HOOK (misi 3b HANG + misi 4 DOCK). Gain sama spt docking QR
+        # (reuse kelas yang sama), hanya target area/jarak khusus hook.
+        self.hook_servo      = VisualServo(target_area=HOOK_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
+                                           kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
+                                           kp_vert=IBVS_KP_VERT, **SERVO_INVERT)   # IBVS (piksel)
+        self.hook_pose_servo = PoseServo(target_dist=HOOK_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
+                                         kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
+                                         kp_vert=PBVS_KP_VERT, **SERVO_INVERT)     # PBVS (meter)
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
@@ -237,6 +264,15 @@ class Mission5FSM:
         # Loss-of-lock tracker untuk docking misi 5 (M5_DOCK / M5_ENGAGE)
         self._m5_last_det_t  = 0.0     # waktu terakhir QR payload terlihat
         self._m5_search_dir  = 1       # arah sapu reacquire = sisi QR terakhir (+kanan/−kiri)
+        # Loss-of-lock tracker untuk docking HOOK (HANG misi 3b / DOCK misi 4)
+        self._hook_last_det_t = 0.0    # waktu terakhir hook terlihat
+        self._hook_search_dir = 1      # arah sapu reacquire = sisi hook terakhir
+        # Sub-fase & degradasi HANG/DOCK (None = belum aktif)
+        self._hang_release_t   = None  # timestamp mulai fase lepas payload pasca-align
+        self._hang_fallback_t  = None  # timestamp mulai jalur timed HANG (degradasi)
+        self._dock_fallback_t  = None  # timestamp mulai jalur timed DOCK (degradasi)
+        self._hang_used_fallback = False  # instrumentasi: HANG jatuh ke fallback timed?
+        self._dock_used_fallback = False  # instrumentasi: DOCK jatuh ke fallback timed?
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -438,33 +474,98 @@ class Mission5FSM:
             self._transition(State.HANG)
 
     def _state_hang(self, telem):
-        """Misi 3b: gantungkan payload ke hook di dinding."""
-        elapsed = self._elapsed()
-        if elapsed > TIMEOUT_HANG:
-            log.error("[FSM] HANG timeout!")
-            self._transition(State.ABORT)
+        """Misi 3b: gantungkan payload ke hook — CLOSED-LOOP servo visual ke hook (CAM WALL).
+
+        Primary: servo (PBVS/IBVS) mendekati & mensejajarkan payload ke hook terdeteksi,
+        lalu lepas gripper (fase mekanis pendek). Dropout deteksi sesaat ditutup dead-reckon
+        hold (HOOK_LOCK_GRACE_T). Fallback: jalur timed lama (degradasi eksplisit) bila hook
+        tak pernah ter-lock — pola sama _state_m5_dock → M5_FALLBACK."""
+        # Fase pasca-align: dudukkan lubang ke hook → buka gripper → mundur (mekanis, timed pendek)
+        if self._hang_release_t is not None:
+            self._hang_release(telem)
+            return
+        # Jalur degradasi timed penuh (hook tak pernah ter-lock)
+        if self._hang_used_fallback:
+            self._hang_fallback(telem)
             return
 
-        # Phase 1: naik sedikit agar payload sejajar hook (0-5s)
-        if elapsed < 5.0:
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_HANG:
+            log.warning("[FSM] HANG timeout — degradasi ke jalur timed (tanpa lock hook)")
+            self._enter_hang_fallback()
+            return
+
+        det = self._fresh_hook(0.5)
+        if det is None:
+            since = time.time() - self._hook_last_det_t
+            if since < HOOK_LOCK_GRACE_T:
+                self.cmd.send(surge=0, sway=0, vert=0, gripper=1)  # dropout sesaat → hold
+                log.debug("[FSM] HANG hook dropout %.2fs — dead-reckon hold", since)
+            elif elapsed > HOOK_ACQUIRE_T:
+                log.warning("[FSM] HANG hook tak terakuisisi %.1fs — degradasi timed", elapsed)
+                self._enter_hang_fallback()
+            else:
+                # Cari hook: naik ke level hook (0.45m) sambil sapu terarah ke sisi terakhir
+                depth = telem.get('depth', 0.0)
+                vert = ASCEND_SPEED if depth > HOOK_DEPTH + DEPTH_TOLERANCE else 0
+                self.cmd.send(vert=vert, yaw=YAW_SPEED * self._hook_search_dir, gripper=1)
+                log.debug("[FSM] HANG cari hook depth=%.2f dir=%+d", depth, self._hook_search_dir)
+            return
+
+        self._note_hook(det)
+        out, mode = self._hook_servo_step(det)
+        self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert, gripper=1)
+        if out.aligned:
+            log.info("[FSM] ✓ Hook ALIGNED (%s) — mulai lepas payload ke hook", mode)
+            self.cmd.stop_all()
+            self._hang_release_t = time.time()
+
+    def _hang_release(self, telem):
+        """Fase mekanis pasca-align (misi 3b): dudukkan lubang payload ke ujung hook,
+        buka gripper (gantung), lalu mundur agar lubang bebas. Timed pendek & deterministik
+        — analog M5_ENGAGE yang menjalankan mekanis pasca-align M5_DOCK."""
+        dt = time.time() - self._hang_release_t
+        if dt < HANG_SEAT_T:
+            self.cmd.send(surge=DOCK_APPROACH_SPEED, gripper=1)      # dorong halus dudukkan
+            log.debug("[FSM] HANG dudukkan lubang payload ke hook")
+        elif dt < HANG_SEAT_T + HANG_OPEN_T:
+            self.cmd.send(surge=0, gripper=0)                        # buka gripper → gantung
+            log.debug("[FSM] HANG buka gripper — payload tergantung")
+        elif dt < HANG_SEAT_T + HANG_OPEN_T + HANG_BACK_T:
+            self.cmd.send(surge=-20, gripper=0)                      # mundur bebas dari hook
+            log.debug("[FSM] HANG mundur")
+        else:
+            self.cmd.stop_all()
+            self._score['m3'] = 15
+            log.info("[FSM] ✓ Misi 3 selesai (+15 poin) — payload tergantung di wall %s (visual)",
+                     self._target_wall)
+            self._transition(State.SURFACE)
+
+    def _enter_hang_fallback(self):
+        """Aktifkan jalur timed HANG (degradasi) — dipakai bila hook tak ter-lock."""
+        self._hang_used_fallback = True
+        self._hang_fallback_t = time.time()
+
+    def _hang_fallback(self, telem):
+        """Jalur DEGRADED timed misi 3 (tanpa lock hook) — perilaku lama sbg jaring pengaman.
+        Tetap autonomous, reliabilitas rendah (buta terhadap posisi hook sebenarnya)."""
+        dt = time.time() - self._hang_fallback_t
+        if dt > TIMEOUT_HANG:
+            log.error("[FSM] HANG fallback timeout!")
+            self._transition(State.ABORT)
+            return
+        if dt < 5.0:                                # naik ke posisi hook
             self.cmd.send(vert=ASCEND_SPEED, gripper=1)
-            log.debug("[FSM] HANG naik ke posisi hook")
-        # Phase 2: tekan ke dinding (5-8s)
-        elif elapsed < 8.0:
-            self.cmd.send(surge=20, vert=0, gripper=1)
-            log.debug("[FSM] HANG mendekati hook")
-        # Phase 3: buka gripper untuk gantung (8-11s)
-        elif elapsed < 11.0:
+        elif dt < 8.0:                              # tekan ke dinding
+            self.cmd.send(surge=DOCK_APPROACH_SPEED, vert=0, gripper=1)
+        elif dt < 11.0:                             # buka gripper — gantung
             self.cmd.send(surge=0, gripper=0)
-            log.debug("[FSM] HANG buka gripper — gantung payload")
-        # Phase 4: mundur sedikit, konfirmasi
-        elif elapsed < 13.0:
+        elif dt < 13.0:                             # mundur konfirmasi
             self.cmd.send(surge=-20, gripper=0)
         else:
             self.cmd.stop_all()
             self._score['m3'] = 15
-            log.info("[FSM] ✓ Misi 3 selesai (+15 poin) — payload tergantung di wall %s",
-                     self._target_wall)
+            log.warning("[FSM] Misi 3 selesai via FALLBACK timed (degraded, tanpa lock hook)")
             self._transition(State.SURFACE)
 
     def _state_surface(self, telem):
@@ -486,22 +587,68 @@ class Mission5FSM:
             log.debug("[FSM] SURFACE naik depth=%.2f target=%.2f", depth, DEPTH_TARGET_SURFACE)
 
     def _state_dock(self, telem):
-        """Misi 4b: bersandar di sisi dinding payload (surface docking)."""
-        elapsed = self._elapsed()
-        if elapsed > TIMEOUT_DOCK:
-            log.error("[FSM] DOCK timeout!")
-            self._transition(State.ABORT)
+        """Misi 4b: surface docking — CLOSED-LOOP servo visual ke hook sisi target (CAM WALL).
+
+        Primary: servo mendekati hook sampai jarak/pose docking wajar (aligned), baru berhenti.
+        Dropout deteksi ditutup dead-reckon hold. Fallback: jalur timed lama (degradasi eksplisit)
+        bila hook tak pernah ter-lock — pola sama _state_m5_dock → M5_FALLBACK."""
+        if self._dock_used_fallback:
+            self._dock_fallback(telem)
             return
 
-        # Maju perlahan ke dinding sambil di permukaan
-        if elapsed < 8.0:
-            self.cmd.send(surge=20)
-            log.debug("[FSM] DOCK mendekati dinding")
+        elapsed = self._elapsed()
+        if elapsed > TIMEOUT_DOCK:
+            log.warning("[FSM] DOCK timeout — degradasi ke jalur timed (tanpa lock hook)")
+            self._enter_dock_fallback()
+            return
+
+        det = self._fresh_hook(0.5)
+        if det is None:
+            since = time.time() - self._hook_last_det_t
+            if since < HOOK_LOCK_GRACE_T:
+                self.cmd.stop_all()                 # dropout sesaat → hold, jangan overshoot
+                log.debug("[FSM] DOCK hook dropout %.2fs — dead-reckon hold", since)
+            elif elapsed > HOOK_ACQUIRE_T:
+                log.warning("[FSM] DOCK hook tak terakuisisi %.1fs — degradasi timed", elapsed)
+                self._enter_dock_fallback()
+            else:
+                # Cari hook: merayap pelan ke dinding sambil sapu terarah ke sisi terakhir
+                self.cmd.send(surge=int(DOCK_APPROACH_SPEED * 0.5),
+                              yaw=YAW_SPEED * self._hook_search_dir)
+                log.debug("[FSM] DOCK cari hook dir=%+d", self._hook_search_dir)
+            return
+
+        self._note_hook(det)
+        out, mode = self._hook_servo_step(det)
+        self.cmd.send(surge=out.surge, sway=out.sway, yaw=out.yaw, vert=out.vert)
+        if out.aligned:
+            self.cmd.stop_all()
+            self._score['m4'] = 15
+            log.info("[FSM] ✓ Misi 4 selesai (+15 poin) — surface docking wall %s (visual)",
+                     self._target_wall)
+            self.servo.reset()
+            self.pose_servo.reset()
+            self._transition(State.M5_REDIVE)
+
+    def _enter_dock_fallback(self):
+        """Aktifkan jalur timed DOCK (degradasi) — dipakai bila hook tak ter-lock."""
+        self._dock_used_fallback = True
+        self._dock_fallback_t = time.time()
+
+    def _dock_fallback(self, telem):
+        """Jalur DEGRADED timed misi 4 (tanpa lock hook) — perilaku lama (maju buta ke dinding)."""
+        dt = time.time() - self._dock_fallback_t
+        if dt > TIMEOUT_DOCK:
+            log.error("[FSM] DOCK fallback timeout!")
+            self._transition(State.ABORT)
+            return
+        if dt < 8.0:
+            self.cmd.send(surge=DOCK_APPROACH_SPEED)
+            log.debug("[FSM] DOCK fallback mendekati dinding")
         else:
             self.cmd.stop_all()
             self._score['m4'] = 15
-            log.info("[FSM] ✓ Misi 4 selesai (+15 poin) — docking di sisi wall %s",
-                     self._target_wall)
+            log.warning("[FSM] Misi 4 selesai via FALLBACK timed (degraded, tanpa lock hook)")
             self.servo.reset()
             self.pose_servo.reset()
             self._transition(State.M5_REDIVE)
@@ -521,6 +668,37 @@ class Mission5FSM:
         log.debug("[FSM] servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
                   out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
         return out, 'IBVS'
+
+    def _hook_servo_step(self, det):
+        """Satu langkah visual servo dari deteksi HOOK. PBVS (pose 3D) bila ada, IBVS bila tidak.
+        Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Reuse VisualServo/PoseServo — hanya instans &
+        target khusus hook (lihat _servo_step untuk versi QR)."""
+        pose = det.get('pose')
+        if pose is not None:                       # PBVS — pose 3D (m) bila kamera terkalibrasi
+            out = self.hook_pose_servo.step(pose['x'], pose['y'], pose['z'],
+                                            pose.get('yaw_deg', 0.0), dt=0.1)
+            log.debug("[FSM] hook_servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
+                      pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
+            return out, 'PBVS'
+        cx, cy = det['center']                     # IBVS — fallback error piksel
+        out = self.hook_servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+        log.debug("[FSM] hook_servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
+                  out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
+        return out, 'IBVS'
+
+    def _fresh_hook(self, max_age=0.5):
+        """Deteksi hook terbaru yang masih segar (else None). Tak butuh validasi payload
+        seperti QR — hook adalah target geometrik tunggal di dinding."""
+        return self.vision.latest_hook(max_age=max_age)
+
+    def _note_hook(self, det):
+        """Catat deteksi hook segar: perbarui timer lock + arah sapu reacquire (sisi lateral
+        hook terakhir), agar bila lock hilang ROV menyapu MENUJU hook, bukan menjauh."""
+        self._hook_last_det_t = time.time()
+        pose = det.get('pose')
+        lat = pose['x'] if pose is not None else (det['center'][0] - det['frame_w'] / 2.0)
+        if abs(lat) > 1e-6:
+            self._hook_search_dir = 1 if lat > 0 else -1
 
     def _state_m5_redive(self, telem):
         """Misi 5a: dari permukaan, selam ulang ke kedalaman hook sambil akuisisi QR payload."""
@@ -698,6 +876,20 @@ class Mission5FSM:
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
         if new_state in (State.M5_DOCK, State.M5_ENGAGE):
             self._m5_last_det_t = self._state_t
+        # Reset tracker & servo hook saat masuk HANG (misi 3b) / DOCK (misi 4)
+        if new_state == State.HANG:
+            self._hook_last_det_t = self._state_t
+            self._hang_release_t = None
+            self._hang_fallback_t = None
+            self._hang_used_fallback = False
+            self.hook_servo.reset()
+            self.hook_pose_servo.reset()
+        elif new_state == State.DOCK:
+            self._hook_last_det_t = self._state_t
+            self._dock_fallback_t = None
+            self._dock_used_fallback = False
+            self.hook_servo.reset()
+            self.hook_pose_servo.reset()
 
     def _is_target_payload(self, det) -> bool:
         """True bila deteksi QR adalah payload misi ini. QR JSON terstruktur divalidasi
@@ -810,7 +1002,9 @@ def main():
     telem = TelemetryReceiver(port=args.telem_port)
     cam   = VisionPipeline(source=args.vision, device=args.device,
                            rtsp_url=args.rtsp,
-                           calib_file=args.calib, qr_length=args.qr_size)
+                           calib_file=args.calib, qr_length=args.qr_size,
+                           hook_hsv_range=HOOK_COLOR_HSV_RANGE,
+                           hook_min_area=HOOK_MIN_AREA, hook_pipe_diam=HOOK_PIPE_DIAM_M)
     log.info("[main] Mode visi: %s", "PBVS (solvePnP)" if args.calib else "IBVS (piksel)")
 
     telem.start()

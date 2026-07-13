@@ -56,6 +56,30 @@ docking:
   servo_kp_yaw: 0.0          # >0 → ROV squaring tegak lurus dinding (aktifkan stlh verifikasi)
   lock_grace_t: 0.6          # detik hold saat QR dropout sesaat sblm mulai menyapu cari
 
+# ── Docking berbasis HOOK — misi 3b (HANG) & misi 4 (surface DOCK) ────────────
+# Target = hook PVC ujung-U di dinding (TANPA QR). Servo reuse VisualServo/PoseServo.
+hook_docking:
+  target_area: 3000.0     # IBVS: luas hook (px^2) saat jarak docking (TUNE di kolam)
+  target_dist: 0.30       # PBVS: jarak docking ke hook (m)
+  lock_grace_t: 0.6       # detik dead-reckon hold saat deteksi hook dropout sesaat
+  acquire_t: 8.0          # detik max cari/akuisisi hook sblm degradasi ke jalur timed
+  approach_speed: 20      # % surge mendekati dinding (surface docking & seating hang)
+
+# ── Deteksi hook (vision/hook_detect.py) — WAJIB divalidasi warna PVC & exposure venue ─
+hook_detect:
+  min_area: 150.0         # luas contour minimum (px^2) kandidat hook
+  pipe_diam_m: 0.025      # diameter pipa hook fisik (m) — ¾" PVC = 25 mm (estimasi jarak)
+  # JANGAN andalkan warna sbg satu-satunya jalur (warna PVC belum pasti). Biarkan null →
+  # deteksi pakai jalur non-warna (contour/edge). Isi [[h,s,v],[h,s,v]] HANYA stlh warna
+  # PVC asli & kontrasnya terhadap dinding kolam terukur di venue.
+  color_hsv_range: null
+
+# ── Fase mekanis lepas payload ke hook (misi 3b, pasca-align visual) — detik ──
+hang:
+  seat_t: 1.5     # dorong halus dudukkan lubang payload ke ujung hook
+  open_t: 1.5     # buka gripper (payload tergantung)
+  back_t: 2.0     # mundur agar lubang bebas dari hook
+
 # ── Arah sumbu servo — VERIFIKASI di kolam, balik jika error MEMBESAR ─────────
 # (lihat VERIFIKASI_ARDUSUB.md utk prosedur cek tanda tiap sumbu)
 invert:
