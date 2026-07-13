@@ -4,6 +4,7 @@ import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, 
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
+import { replayPage } from "./pages/replay.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
@@ -42,6 +43,7 @@ const pages = {
   telemetry: $("page-telemetry"),
   setup: $("page-setup"),
   joystick: $("page-joystick"),
+  replay: $("page-replay"),
 };
 
 const navLinks = document.querySelectorAll(".sidebar__link");
@@ -53,6 +55,7 @@ const pageModules = {
   telemetry: telemetryPage,
   setup: setupPage,
   joystick: joystickPage,
+  replay: replayPage,
 };
 const initedModules = new Set();
 let activeModule = null;
@@ -351,6 +354,11 @@ function connect() {
     handleJoystickConfigMessage(msg.data);
     log("Joystick config diterima dari server", "ok");
   }
+  else if (msg.type === "record_status") {
+    // status rekaman server → halaman Replay (jika sudah di-init). Aman walau
+    // halaman Replay belum pernah dibuka.
+    try { if (replayPage.onRecordStatus) replayPage.onRecordStatus(msg.data); } catch (e) {}
+  }
 };
 }
 
@@ -367,8 +375,8 @@ function sendCmd(name, value, quiet = false) {
   if (!quiet) log(`CMD ${name} = ${value}`);
 }
 
-// sediakan log & sendCmd untuk modul halaman
-setServices({ log, sendCmd });
+// sediakan log, sendCmd & send (WS mentah) untuk modul halaman
+setServices({ log, sendCmd, send });
 function setLatency(ms) { els.lat.textContent = Math.round(ms); }
 
 // ping berkala untuk ukur latency

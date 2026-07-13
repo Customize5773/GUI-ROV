@@ -17,6 +17,7 @@ const dgram = require("dgram");
 const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
+const recording = require("./recording");
 
 const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
 const UDP_IN   = parseInt(process.env.UDP_IN   || "14551", 10); // telemetry dari ROV
@@ -180,6 +181,7 @@ const MIME = {
   ".html": "text/html", ".css": "text/css", ".js": "text/javascript",
   ".json": "application/json", ".glb": "model/gltf-binary",
   ".fbx": "application/octet-stream", ".png": "image/png", ".svg": "image/svg+xml",
+  ".jsonl": "application/x-ndjson",
 };
 
 // Host tujuan yang boleh di-proxy (umbilical LAN). Cegah open-proxy ke internet.
@@ -234,6 +236,52 @@ const httpServer = http.createServer((req, res) => {
     return;
   }
 
+  // ================= PLAYBACK / REPLAY (HTTP) =================
+  // Data replay bersifat historis & akses-acak (daftar sesi, log trajectory,
+  // frame video per-timestamp) → cocok dengan pola HTTP static/endpoint yang
+  // sudah ada (server ini memang meng-serve file & mem-proxy /cam via HTTP).
+  // WebSocket dipakai untuk push live; replay TIDAK lewat WS agar tak bercampur.
+
+  // Daftar sesi rekaman (id, tanggal, durasi, ukuran, kamera).
+  if (urlPath === "/api/recordings") {
+    const list = recording.listSessions();
+    res.writeHead(200, { "Content-Type": "application/json" });
+    return res.end(JSON.stringify(list));
+  }
+
+  // Satu frame JPEG dari sesi: /replay/frame?session=<id>&cam=<bottom|wall>&i=<idx>
+  if (urlPath === "/replay/frame") {
+    const q = new URL(req.url, `http://localhost:${WS_PORT}`).searchParams;
+    const id = q.get("session");
+    const cam = (q.get("cam") || "").toLowerCase();
+    const idx = parseInt(q.get("i") || "0", 10);
+    recording.getFrame(id, cam, idx, (err, buf) => {
+      if (err || !buf) { res.writeHead(404); return res.end("frame tidak ada"); }
+      res.writeHead(200, { "Content-Type": "image/jpeg", "Cache-Control": "no-store" });
+      res.end(buf);
+    });
+    return;
+  }
+
+  // File data sesi (meta.json / trajectory.jsonl / commands.jsonl / *.index.jsonl):
+  //   /recordings/<id>/<file>
+  if (urlPath.startsWith("/recordings/")) {
+    const rest = urlPath.slice("/recordings/".length);
+    const slash = rest.indexOf("/");
+    const id = slash < 0 ? rest : rest.slice(0, slash);
+    const name = slash < 0 ? "" : rest.slice(slash + 1);
+    const filePath = recording.resolveSessionFile(id, name);
+    if (!filePath) { res.writeHead(400); return res.end("permintaan tidak valid"); }
+    return fs.readFile(filePath, (err, data) => {
+      if (err) { res.writeHead(404); return res.end("Not found"); }
+      res.writeHead(200, {
+        "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream",
+        "Cache-Control": "no-store",
+      });
+      res.end(data);
+    });
+  }
+
   if (urlPath === "/") urlPath = "/index.html";
 
   const filePath = path.join(PUBLIC, path.normalize(urlPath));
@@ -260,10 +308,17 @@ const wss = new WebSocketServer({ server: httpServer });
 const clients = new Set();
 
 function broadcast(obj) {
+  // Tap telemetry untuk rekaman trajectory (bila sesi rekam aktif). Ini hanya
+  // "menguping" — tidak mengubah/menghambat aliran telemetry ke dashboard.
+  if (obj && obj.type === "telemetry") recording.onTelemetry(obj.data);
   const s = JSON.stringify(obj);
   for (const c of clients) {
     if (c.readyState === 1) c.send(s);
   }
+}
+
+function broadcastRecordStatus() {
+  broadcast({ type: "record_status", data: recording.status() });
 }
 
 wss.on("connection", (ws, req) => {
@@ -283,6 +338,9 @@ wss.on("connection", (ws, req) => {
     type: "joystick_config",
     data: joystickConfig,
   }));
+
+  // kirim status rekaman saat ini agar dashboard baru langsung sinkron
+  ws.send(JSON.stringify({ type: "record_status", data: recording.status() }));
 
   ws.on("message", (raw) => {
     let msg;
@@ -336,6 +394,45 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    // ================= RECORD START (fitur Replay) =================
+    // Message type khusus — SENGAJA bukan "cmd" sehingga tidak pernah
+    // diteruskan ke UDP/ROV. Rekaman murni sisi server (telemetry + video tap).
+    if (msg.type === "record_start") {
+      if (recording.isRecording()) {
+        ws.send(JSON.stringify({ type: "event", text: "Rekaman sudah berjalan", level: "warn" }));
+        broadcastRecordStatus();
+        return;
+      }
+      try {
+        const meta = recording.startSession(msg.cameras, {
+          allowHost: isAllowedCamHost,
+          label: msg.label,
+          onWarn: (m) => { console.warn("[REC]", m); broadcast({ type: "event", text: `Rekam: ${m}`, level: "warn" }); },
+          onStatus: () => { broadcastRecordStatus(); broadcast({ type: "event", text: "Rekaman auto-stop (batas durasi)", level: "warn" }); },
+        });
+        console.log(`[REC] sesi dimulai: ${meta.id} (kamera: ${meta.cameras.map((c) => c.role).join(",") || "—"})`);
+        broadcast({ type: "event", text: `Rekaman sesi dimulai: ${meta.id}`, level: "ok" });
+        broadcastRecordStatus();
+      } catch (err) {
+        console.warn("[REC] gagal mulai:", err.message);
+        ws.send(JSON.stringify({ type: "event", text: `Gagal mulai rekam: ${err.message}`, level: "err" }));
+      }
+      return;
+    }
+
+    // ================= RECORD STOP =================
+    if (msg.type === "record_stop") {
+      if (!recording.isRecording()) {
+        broadcastRecordStatus();
+        return;
+      }
+      const meta = recording.stopSession("manual");
+      if (meta) console.log(`[REC] sesi berhenti: ${meta.id} (${meta.duration_ms} ms, ${meta.trajectory_samples} sampel)`);
+      broadcast({ type: "event", text: `Rekaman dihentikan: ${meta ? meta.id : ""}`, level: "ok" });
+      broadcastRecordStatus();
+      return;
+    }
+
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
       // Jangan percaya input klien mentah-mentah: clamp axis kontrol manual
@@ -344,6 +441,10 @@ wss.on("connection", (ws, req) => {
       if (MOTION_AXES.has(msg.name)) {
         msg.value = clampPercent(msg.value);
       }
+
+      // Tap command relevan-trajectory untuk rekaman (surge/sway/dll). Hanya
+      // menguping nilai yang lewat — tidak mengubah routing command ke ROV.
+      recording.onCommand(msg.name, msg.value);
 
       // di mode SIM, pantulkan status perintah agar tombol header berefek nyata
       if (SIM) applySimCommand(msg.name, msg.value);
