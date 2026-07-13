@@ -26,6 +26,15 @@ const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 
+/* Axis kontrol manual (persen -100..100). Divalidasi ulang sebelum diteruskan
+   ke Pi supaya input klien tidak bisa mengirim nilai di luar rentang. */
+const MOTION_AXES = new Set(["surge", "sway", "yaw", "heave"]);
+function clampPercent(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return Math.max(-100, Math.min(100, Math.round(n)));
+}
+
 /* ======================= JOYSTICK CONFIG FILE ======================= */
 const CONFIG_DIR = path.join(__dirname, "config");
 const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
@@ -329,6 +338,13 @@ wss.on("connection", (ws, req) => {
 
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
+      // Jangan percaya input klien mentah-mentah: clamp axis kontrol manual
+      // (surge/sway/yaw/heave) ke rentang persen valid -100..100 sebelum
+      // diteruskan. Pi yang mengubahnya ke MANUAL_CONTROL (-1000..1000 / 0..1000).
+      if (MOTION_AXES.has(msg.name)) {
+        msg.value = clampPercent(msg.value);
+      }
+
       // di mode SIM, pantulkan status perintah agar tombol header berefek nyata
       if (SIM) applySimCommand(msg.name, msg.value);
 

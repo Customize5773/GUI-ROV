@@ -198,3 +198,56 @@ permukaan. Bernilai **40% jika full-autonomous**, hanya **10% jika dilakukan rem
 - **Gripper:** tombol **OPEN/CLOSE** sudah ada di halaman Control (juga keyboard **H**/**G**)
   dan mengirim command `gripper` — dipakai Tahap 2, 3 & 5.
 - **Replay camera & trajectory** (fitur opsional KKI) belum diimplementasikan.
+
+## 7. Joystick manual control (Gamepad → MANUAL_CONTROL)
+
+Kontrol manual ROV memakai joystick fisik yang dicolok ke komputer operator (browser),
+melalui jalur existing: **Browser → WebSocket → Node.js server → UDP → Raspberry Pi → Pixhawk**.
+
+**Cara pakai:**
+1. Colok joystick ke laptop, buka dashboard, tekan satu tombol joystick agar terdeteksi
+   (`gamepadconnected`).
+2. Di panel **Controller**, pilih tab **Gamepad** (default Keyboard). Badge menampilkan status.
+3. Pastikan mode kontrol = **MANUAL** (toggle Manual/Autonomous di header) — joystick **tidak**
+   berefek saat Autonomous.
+4. Halaman **Joystick** menyediakan mapping axis/tombol (disimpan ke `server/config/joystick-profile.json`).
+
+**Mapping axis (GUI persen −100..100 → MANUAL_CONTROL):**
+
+| Axis GUI | Gerak            | Field MANUAL_CONTROL | Rentang        |
+|----------|------------------|----------------------|----------------|
+| surge    | maju/mundur      | `x`                  | −1000..1000    |
+| sway     | lateral kiri/kanan | `y`                | −1000..1000    |
+| yaw      | rotasi           | `r`                  | −1000..1000    |
+| heave    | throttle naik/turun | `z`               | 0..1000 (netral **500**) |
+
+- **Deadzone** & remap di browser (`GP_DEADZONE = 0.12`, `public/js/app.js`).
+- **Throttle pengiriman ~15 Hz**: axis di-resend berkala walau ditahan konstan, supaya Pi
+  menerima MANUAL_CONTROL berkelanjutan (tidak masuk fail-safe timeout).
+- **Validasi ulang di server** (`server/server.js`): axis di-clamp ke −100..100 sebelum
+  diteruskan (tidak percaya input klien).
+- **Encoding MANUAL_CONTROL** di sisi Pi (`rov_agent.py` + `manual_control.py`, via `pymavlink`
+  `manual_control_send`). Node server **tidak** meng-encode MAVLink — ia hanya meneruskan JSON,
+  konsisten dengan pola command lain (arm/light/stop).
+
+**Kenapa MANUAL_CONTROL, bukan RC_CHANNELS_OVERRIDE:** MANUAL_CONTROL adalah cara standar ArduSub
+menerima kontrol manual dari ground station (4 sumbu + bitmask tombol). Tidak menimpa channel RC
+fisik, jadi aman berdampingan dengan konfigurasi channel/servo di Pixhawk (scope Devanka).
+
+**Safety / fallback:**
+- **Joystick disconnect** (`gamepaddisconnected`) → axis dinetralkan (x=y=r=0, z=500).
+- **E-Stop / Spasi** → joystick **terkunci** sampai operator ARM ulang; tidak bisa override E-Stop.
+- **Mode Autonomous** → joystick otomatis nonaktif (otoritas GUI vs FSM, mirip prinsip gripper).
+- **Fail-safe Pi**: jika tak ada axis baru > 0.5 s, Pi mengirim satu perintah netral lalu berhenti
+  (command terakhir tidak "nyangkut", tidak mengganggu mode autonomous).
+
+**Testing:**
+- Unit test mapping (pure function, tanpa hardware): `python3 -m unittest test_manual_control -v`.
+- Manual test verifikasi command sampai UDP:
+  1. `cd server && node server.js --sim` (atau `hydroship` di launch.json).
+  2. Buka dashboard, pilih Gamepad + mode Manual, gerakkan stick.
+  3. Amati log server `[CMD] surge = ... -> <RPI>:14550` (nilai sudah ter-clamp −100..100).
+  4. Di Pi, jalankan `rov_agent.py`; amati log `[MANUAL]` dan MANUAL_CONTROL terkirim ke Pixhawk.
+
+**Tombol joystick:** untuk task ini `buttons` MANUAL_CONTROL masih **placeholder = 0** (TODO).
+Aksi tombol (arm/mode/mount/light) sudah ditangani terpisah lewat command GUI existing.

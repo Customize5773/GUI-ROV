@@ -452,9 +452,17 @@ window.addEventListener("hydroship:camera-url", applyControlCamera);
 
 /*  kontrol UI  */
 els.btnLight.onclick = () => { const v = !state.light; reflectLight(v); markPending("light", v); sendCmd("light", v); };
-els.btnArm.onclick = () => { const v = !state.armed; reflectArm(v); markPending("arm", v); sendCmd("arm", v); };
+els.btnArm.onclick = () => {
+  const v = !state.armed;
+  // arming ulang melepas kunci E-Stop sehingga joystick boleh aktif lagi
+  if (v) estopLatched = false;
+  reflectArm(v); markPending("arm", v); sendCmd("arm", v);
+};
 els.btnStop.onclick = () => {
+  // E-Stop mengunci joystick: tidak boleh meng-override sampai operator arm ulang
+  estopLatched = true;
   sendCmd("stop", true); reflectArm(false); markPending("arm", false);
+  neutralizeGamepadAxes();
   ["surge", "sway", "yaw", "heave"].forEach((a) => setAxis(a, 0));
   log("⏹ STOP — semua thruster netral", "err");
 };
@@ -710,6 +718,16 @@ function logGamepadStatus() {
 
 const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
 
+/* E-Stop mengunci joystick sampai operator arm ulang (lihat btnStop/btnArm). */
+let estopLatched = false;
+
+/* Throttle pengiriman axis ke server ~15 Hz. Meski axis ditahan konstan,
+   kita tetap resend supaya Pi menerima MANUAL_CONTROL berkelanjutan dan tidak
+   masuk fail-safe timeout. */
+const GP_SEND_HZ = 15;
+const GP_SEND_INTERVAL = 1000 / GP_SEND_HZ;
+let gpLastSent = 0;
+
 // status tombol fisik frame sebelumnya
 const gpBtnPrev = {};
 
@@ -901,6 +919,16 @@ function pollGamepad() {
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
 
+  /* Otoritas GUI vs FSM (mirip prinsip gripper): joystick HANYA boleh
+     menggerakkan ROV saat mode kontrol = Manual dan E-Stop tidak aktif.
+     Saat autonomous / E-Stop, pastikan axis dinetralkan sekali lalu diam. */
+  if (controlMode !== "manual" || estopLatched) {
+    if (gpLast.surge || gpLast.sway || gpLast.yaw || gpLast.heave) {
+      neutralizeGamepadAxes();
+    }
+    return;
+  }
+
   /* ================= AXIS ================= */
   const next = {
     surge: axisToPercent(joystickState.mapped.surge),
@@ -909,11 +937,22 @@ function pollGamepad() {
     heave: axisToPercent(joystickState.mapped.heave),
   };
 
+  let changed = false;
   for (const a of ["surge", "sway", "yaw", "heave"]) {
     if (next[a] !== gpLast[a]) {
       gpLast[a] = next[a];
       setAxis(a, next[a], true);
-      sendCmd(a, next[a], true);
+      changed = true;
+    }
+  }
+
+  // Kirim saat berubah, ATAU secara periodik (~15 Hz) walau axis ditahan,
+  // agar MANUAL_CONTROL di Pi terus mengalir dan tidak masuk fail-safe.
+  const nowT = performance.now();
+  if (changed || nowT - gpLastSent >= GP_SEND_INTERVAL) {
+    gpLastSent = nowT;
+    for (const a of ["surge", "sway", "yaw", "heave"]) {
+      sendCmd(a, gpLast[a], true);
     }
   }
 
