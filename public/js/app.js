@@ -456,7 +456,10 @@ function syncControlCameraButton() {
   if (!els.btnCamSwitch) return;
   const sources = getControlCameraSources();
   const canSwitch = sources.length > 1;
-  els.btnCamSwitch.style.display = canSwitch ? "inline-flex" : "none";
+  // Visibilitas dikontrol CSS: tampil HANYA saat fullscreen DAN ada >1 kamera
+  // (.cam:fullscreen .cam__switch.is-multi). Jangan set display inline agar
+  // tidak menimpa aturan fullscreen tsb.
+  els.btnCamSwitch.classList.toggle("is-multi", canSwitch);
   els.btnCamSwitch.textContent = canSwitch ? `CAM ${controlCamIndex + 1}` : "CAM 1";
 }
 
@@ -582,7 +585,9 @@ const pilotFs = makeFullscreen(els.pilotPanel, {
 });
 els.btnPilotFull.onclick = () => pilotFs.toggle();
 
-/* tampilkan feed kamera live di PiP saat kamera Control fullscreen */
+/* Saat LIVE CAMERA fullscreen, operator tak lagi melihat digital twin (pilot).
+   PiP di pojok menampilkan mirror scene 3D ROV Control (pilot) supaya attitude
+   ROV tetap terpantau sambil menonton kamera layar penuh. */
 let controlCamPiPRaf = null;
 function renderControlCamPiP(on) {
   const cv = document.getElementById("ctrlCamPipCanvas");
@@ -598,8 +603,10 @@ function renderControlCamPiP(on) {
       if (cv.width !== w) cv.width = w;
       if (cv.height !== h) cv.height = h;
       ctx.clearRect(0, 0, cv.width, cv.height);
-      if (els.camImg && els.camImg.complete && els.camImg.naturalWidth) {
-        try { ctx.drawImage(els.camImg, 0, 0, cv.width, cv.height); } catch (e) {}
+      // sumber = canvas WebGL digital twin (RovScene, render kontinu di scene.js)
+      const src = scene && scene.renderer && scene.renderer.domElement;
+      if (src && src.width && src.height) {
+        try { ctx.drawImage(src, 0, 0, cv.width, cv.height); } catch (e) {}
         if (no) no.style.display = "none";
       } else if (no) {
         no.style.display = "flex";
