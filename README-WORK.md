@@ -64,9 +64,11 @@ ROLL · PITCH · TEMP · VOLT · LATENCY. Readout DEPTH **berkedip merah + alarm
 | `pool_depth` | meter | Setup → Test Pool |
 | `viewer_access` | true/false | Setup → Mobile Companion |
 
-> **Kontrol gripper** belum punya tombol khusus di GUI. Rekomendasi: tambahkan tombol
-> Open/Close gripper yang mengirim command `gripper` (mis. nilai "open"/"close") —
-> dipakai pada Tahap 2 & 5. Lihat §6 Checklist.
+| `gripper` | "open" / "close" | tombol **Gripper OPEN/CLOSE** (Control) / keyboard **H** (buka) & **G** (tutup) |
+
+> **Kontrol gripper** sudah tersedia di halaman **Control**: tombol **OPEN**/**CLOSE**
+> (`public/index.html` `#btnGripOpen`/`#btnGripClose`, handler di `public/js/app.js`)
+> mengirim command `gripper` ("open"/"close") — dipakai pada Tahap 2, 3 & 5.
 
 ---
 
@@ -115,6 +117,15 @@ Total bobot misi 100% (autonomous Tahap 5 bernilai paling besar).
 **Indikator sukses:** payload tergantung di sisi yang benar (terlihat di CAM 2 — WALL).
 **Dinilai:** 15 jika 1× percobaan, 10 jika 2×, 5 jika >2×.
 
+> **Docking autonomous ke hook (baru).** State `HANG` di `fsm/mission5.py` kini
+> **closed-loop**: mendeteksi hook PVC ujung-U di dinding via **CAM WALL**
+> (`vision/hook_detect.py` — contour/edge, tak bergantung warna PVC yang belum pasti),
+> lalu men-servo ROV (`VisualServo`/`PoseServo`, sama seperti docking misi 5) hingga
+> payload sejajar hook baru **melepas gripper**. Deteksi dropout sesaat ditutup
+> *dead-reckon hold*; bila hook tak pernah ter-lock, sistem **degradasi ke urutan
+> timed lama** (jaring pengaman, bukan jalur utama). Operator cukup **memantau** —
+> gerak halus ini berjalan onboard saat mode autonomous.
+
 ### Tahap 4 — Surface Docking (15%)
 **Tujuan:** ROV mengapung ke permukaan dan bersandar (docking) di sisi dinding payload.
 
@@ -126,6 +137,13 @@ Total bobot misi 100% (autonomous Tahap 5 bernilai paling besar).
 
 **Indikator sukses:** ROV mengapung dan docking di sisi yang benar.
 **Dinilai:** 15 jika docking di sisi seharusnya, 5 jika sisi salah, 0 jika gagal mengapung.
+
+> **Surface docking autonomous (baru).** State `DOCK` di `fsm/mission5.py` juga
+> **closed-loop**: setelah mengapung, ROV men-servo ke hook sisi target (CAM WALL)
+> sampai berada dalam jarak/pose docking wajar, baru berhenti — menggantikan "maju
+> `surge=20` selama 8 detik" yang buta. Guard `TIMEOUT_DOCK` + fallback timed tetap
+> ada sebagai degradasi terakhir. Parameter deteksi & docking dapat di-tuning lewat
+> `config/mission5.example.yaml` (grup `hook_docking:` & `hook_detect:`).
 
 ### Tahap 5 — Autonomous Payload Release (40% / 10%) ⭐
 **Tujuan:** ROV menjalankan **program autonomous** untuk melepas payload lalu naik ke
@@ -177,6 +195,6 @@ permukaan. Bernilai **40% jika full-autonomous**, hanya **10% jika dilakukan rem
 - **QR & CORS:** decode QR memakai `getImageData`. Untuk stream MJPEG lintas-asal,
   server kamera harus mengirim header CORS; bila tidak, pakai tombol **"Scan dari gambar"**
   di panel QR. `jsQR` sudah di-vendor (`public/vendor/jsqr.min.js`) agar jalan offline.
-- **Gripper:** belum ada tombol khusus — tambahkan command `gripper` (Open/Close) untuk
-  Tahap 2 & 5 agar alur misi lengkap sepenuhnya dari GUI.
+- **Gripper:** tombol **OPEN/CLOSE** sudah ada di halaman Control (juga keyboard **H**/**G**)
+  dan mengirim command `gripper` — dipakai Tahap 2, 3 & 5.
 - **Replay camera & trajectory** (fitur opsional KKI) belum diimplementasikan.

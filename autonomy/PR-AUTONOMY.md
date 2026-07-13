@@ -4,8 +4,9 @@ Catatan pekerjaan yang **ditunda / belum tuntas** untuk otonomi ROV KKI 2026,
 plus analisis apa yang masih kurang di tiap fase (Fase 0–4, lihat `ROADMAP_MISI5.md`).
 Dokumen hidup: perbarui status saat item dikerjakan.
 
-> Ringkas status: kode logika (FSM, servo, deteksi QR, simulator, evaluasi) **matang &
-> teruji** (63 pytest hijau). Yang tersisa mayoritas **butuh hardware/kolam** — tak bisa
+> Ringkas status: kode logika (FSM, servo, deteksi QR & hook, docking closed-loop misi
+> 3b/4/5, simulator, evaluasi) **matang & teruji** (83 pytest hijau). Yang tersisa
+> mayoritas **butuh hardware/kolam** — tak bisa
 > diselesaikan tanpa perangkat. Item yang bisa dikerjakan tanpa hardware sudah/akan dibuat
 > (config tunable, launch_sitl, CSV logging, preprocessing QR, run-book).
 
@@ -48,6 +49,41 @@ Referensi: `vision/qr_detect.py` (`decode_qr`, `_run_camera`), `VERIFIKASI_ARDUS
 Yaw dari 1 QR planar ambigu (dua solusi IPPE). Squaring tegak-lurus dinding saat ini
 mengandalkan heading-hold ArduSub. **Backlog**: bila perlu squaring aktif, verifikasi
 stabilitas tanda yaw di kolam dulu (`VERIFIKASI_ARDUSUB.md` M7), baru naikkan `SERVO_KP_YAW`.
+
+### HOOK-01 — Deteksi hook PVC untuk docking misi 3b (HANG) & misi 4 (DOCK)
+**Konteks**: hook = pipa PVC ¾" (25 mm) ujung-U di dinding, **tanpa QR/marker sendiri**;
+posisi sisi (A/B/C/D) diacak tiap run. `_state_hang` & `_state_dock` dulu **murni timed**
+(gerak buta berbasis detik), tanpa umpan balik visual.
+
+**Sudah ditangani di PR ini** (level algoritma & closed-loop, teruji di simulator):
+- `vision/hook_detect.py` → `detect_hook()` **berjenjang** (pola `decode_qr`): color mask
+  (opsional) → grayscale+CLAHE→Canny contour (jalur utama non-warna) → HoughCircles
+  (lengkung-U/lubang) fallback. Kembalikan center/area/bbox/confidence + estimasi jarak
+  (proxy diameter pipa 25 mm bila `focal_px` ada). Hasil kompatibel `_hook_servo_step()`.
+- `_state_hang`/`_state_dock` jadi **closed-loop**: reuse `VisualServo`/`PoseServo`
+  (instans `hook_servo`/`hook_pose_servo`), dead-reckon hold saat dropout
+  (`HOOK_LOCK_GRACE_T`), dan **degradasi eksplisit** ke urutan timed lama bila hook tak
+  ter-lock (`HOOK_ACQUIRE_T`/`TIMEOUT_*`) — pola sama `M5_DOCK → M5_FALLBACK`.
+- Config tunable (`hook_docking:`/`hook_detect:`/`hang:` di `mission5.example.yaml`,
+  `config/loader.py`) + model hook di `tests/sim_plant.py` + test unit/integrasi
+  (`test_hook_detect.py`, `test_mission5.py` termasuk loss-of-lock).
+
+**Sisa backlog (butuh venue/hardware, tak bisa tanpa perangkat):**
+- [ ] **Warna PVC asli** vs latar dinding kolam belum pasti (Panduan tak menyebut). Ukur
+      di venue; isi `hook_detect.color_hsv_range` HANYA bila kontras warna terbukti andal —
+      jangan jadikan warna satu-satunya jalur (default tetap contour/edge).
+- [ ] **Exposure/gain/fokus CAM WALL** di pencahayaan venue + air keruh/glare → tuning ulang
+      `HOOK_MIN_AREA` & ambang Canny; ukur detection-rate vs jarak (analog QR-01).
+- [ ] **Estimasi jarak hook** (`width_px`→z) masih proxy KASAR: pada bentuk-U `minAreaRect`
+      cenderung menangkap lebar-U, bukan diameter pipa 25 mm → kalibrasi/koreksi di air, atau
+      andalkan `HOOK_TARGET_AREA` (IBVS) bila pose tak stabil.
+- [ ] Verifikasi kamera mana yang dipakai HANG vs DOCK di hardware (WALL cam tunggal vs
+      pipeline terpisah) & arah sumbu servo hook (`invert_*`) di kolam.
+- [ ] Uji kokoh HoughCircles terhadap **lubang payload Ø3 cm** vs lengkung-U (bisa saling
+      keliru) — putuskan urutan jenjang setelah rekaman air nyata.
+
+Referensi: `vision/hook_detect.py`, `fsm/mission5.py` (`_state_hang`/`_state_dock`,
+`_hook_servo_step`), `tests/sim_plant.py` (model hook), `VERIFIKASI_ARDUSUB.md` M3/M7.
 
 ---
 

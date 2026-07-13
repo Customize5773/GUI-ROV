@@ -58,6 +58,21 @@ _SCALAR_MAP = {
     ('docking', 'servo_kp_yaw'):      'SERVO_KP_YAW',
     ('docking', 'lock_grace_t'):      'M5_LOCK_GRACE_T',
 
+    # ── Misi 3b (HANG) & Misi 4 (DOCK): docking berbasis deteksi hook ──
+    ('hook_docking', 'target_area'):  'HOOK_TARGET_AREA',
+    ('hook_docking', 'target_dist'):  'HOOK_TARGET_DIST',
+    ('hook_docking', 'lock_grace_t'): 'HOOK_LOCK_GRACE_T',
+    ('hook_docking', 'acquire_t'):    'HOOK_ACQUIRE_T',
+    ('hook_docking', 'approach_speed'): 'DOCK_APPROACH_SPEED',
+    # deteksi hook (diteruskan ke vision.hook_detect.detect_hook)
+    ('hook_detect', 'min_area'):        'HOOK_MIN_AREA',
+    ('hook_detect', 'pipe_diam_m'):     'HOOK_PIPE_DIAM_M',
+    ('hook_detect', 'color_hsv_range'): 'HOOK_COLOR_HSV_RANGE',   # [[h,s,v],[h,s,v]] atau null
+    # fase mekanis lepas payload ke hook (misi 3b, pasca-align)
+    ('hang', 'seat_t'): 'HANG_SEAT_T',
+    ('hang', 'open_t'): 'HANG_OPEN_T',
+    ('hang', 'back_t'): 'HANG_BACK_T',
+
     ('pid_ibvs', 'kp_sway'):  'IBVS_KP_SWAY',
     ('pid_ibvs', 'kp_surge'): 'IBVS_KP_SURGE',
     ('pid_ibvs', 'kp_vert'):  'IBVS_KP_VERT',

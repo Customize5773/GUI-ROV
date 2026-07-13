@@ -38,6 +38,8 @@ import logging
 from typing import Callable, Optional
 import numpy as np
 
+from vision.hook_detect import detect_hook
+
 log = logging.getLogger(__name__)
 
 # QR payload KKI 2026 = JSON terstruktur, mis:
@@ -189,6 +191,9 @@ class VisionPipeline:
         fps: int = 10,
         calib_file: Optional[str] = None,
         qr_length: float = 0.04,
+        hook_hsv_range=None,
+        hook_min_area: float = 150.0,
+        hook_pipe_diam: float = 0.025,
     ):
         """
         Parameters
@@ -200,6 +205,10 @@ class VisionPipeline:
         fps        : target frame-rate capture
         calib_file : .npz kalibrasi kamera → aktifkan PBVS (solvePnP). None → IBVS.
         qr_length  : sisi fisik QR payload (m) utk solvePnP — KKI 2026 = 0.04 (4×4 cm)
+        hook_hsv_range : [[h,s,v],[h,s,v]] opsional utk deteksi hook berbasis warna
+                     (None → jalur non-warna/contour; JANGAN andalkan warna, lihat hook_detect.py)
+        hook_min_area  : luas contour minimum (px^2) kandidat hook
+        hook_pipe_diam : diameter pipa hook fisik (m) — KKI 2026 ¾" = 0.025 (estimasi jarak)
         """
         self.source = source
         self.device = device
@@ -211,6 +220,11 @@ class VisionPipeline:
         self._cap = None
         self._last_result: Optional[dict] = None
         self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
+        self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
+        # Parameter deteksi hook (CAM WALL) — semua tunable di kolam (lihat hook_detect.py)
+        self.hook_hsv_range = hook_hsv_range
+        self.hook_min_area = hook_min_area
+        self.hook_pipe_diam = hook_pipe_diam
 
         # Kalibrasi kamera utk PBVS (solvePnP). Bila tak ada → pose=None (fallback IBVS).
         self.qr_length = qr_length
@@ -297,6 +311,20 @@ class VisionPipeline:
                 result['pose'] = {'x': 0.18 * err, 'y': 0.12 * err, 'z': z,
                                   'dist': z, 'yaw_deg': 10.0 * err}
             self._dispatch(result)
+
+            # Mock hook (CAM WALL) — konvergen seiring `err` meluruh spt QR, agar HANG/DOCK
+            # closed-loop bisa dijalankan tanpa kamera (uji launch_sitl --vision mock).
+            hcx, hcy = int(320 + 130 * err), int(240 - 100 * err)   # hook di atas → naik ke tengah
+            harea = self.MOCK_TARGET_AREA * (1.0 - 0.6 * err)
+            self._last_hook = {
+                'type': 'hook', 'center': (hcx, hcy), 'bbox': (hcx - 15, hcy - 40, 30, 80),
+                'area': harea, 'width_px': 30.0 * (1.0 - 0.5 * err), 'confidence': 0.9,
+                'method': 'mock', 'frame_w': 640, 'frame_h': 480, 'pose': None,
+                'timestamp': time.time(),
+            }
+            if self._K is not None:
+                zz = self.MOCK_TARGET_DIST + 0.5 * err
+                self._last_hook['pose'] = {'x': 0.16 * err, 'y': -0.14 * err, 'z': zz, 'dist': zz}
             time.sleep(1.0 / self.fps)
 
     def _run_camera(self):
@@ -334,6 +362,17 @@ class VisionPipeline:
                     result['pose'] = self._estimate_pose_pts(ordered, self.qr_length)
                 self._dispatch(result)
 
+            # Deteksi hook (CAM WALL) — target geometrik non-QR utk HANG (misi 3b) & DOCK (misi 4).
+            # focal_px dari kalibrasi (bila ada) → detect_hook mengisi pose (PBVS), else IBVS.
+            focal = float(self._K[0, 0]) if self._K is not None else None
+            hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
+                               min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
+                               focal_px=focal)
+            if hook is not None:
+                self._last_hook = hook
+                log.debug("[vision] Deteksi hook center=%s area=%.0f conf=%.2f method=%s",
+                          hook['center'], hook['area'], hook['confidence'], hook['method'])
+
             elapsed = time.time() - t_start
             sleep_t = max(0, interval - elapsed)
             time.sleep(sleep_t)
@@ -362,6 +401,16 @@ class VisionPipeline:
     def latest_qr(self, max_age=1.0) -> Optional[dict]:
         """Deteksi QR terakhir bila masih segar (hindari transisi dari deteksi basi)."""
         r = self._last_qr
+        if not r or (time.time() - r['timestamp']) > max_age:
+            return None
+        return r
+
+    def latest_hook(self, max_age=1.0) -> Optional[dict]:
+        """Deteksi hook terakhir bila masih segar (dipakai HANG misi 3b & DOCK misi 4).
+
+        Antarmuka sengaja dibuat seragam dgn latest_qr agar FSM memakai pola loss-of-lock
+        yang sama untuk kedua target (QR & hook)."""
+        r = self._last_hook
         if not r or (time.time() - r['timestamp']) > max_age:
             return None
         return r
