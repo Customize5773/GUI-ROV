@@ -39,10 +39,11 @@ DOCK_TOL_DIST = 0.06   # m — sisa error jarak thd SERVO_TARGET_DIST
 
 
 def run_scenario(start_state=State.DIVE, provide_pose=True, target_wall='C',
-                 dropout=None):
+                 dropout=None, hook_dropout=None):
     """Jalankan satu skenario misi di simulator, kembalikan dict hasil evaluasi.
 
-    dropout : predikat(count)->bool utk mensimulasikan QR hilang sesaat (uji loss-of-lock).
+    dropout      : predikat(count)->bool utk mensimulasikan QR hilang sesaat (loss-of-lock).
+    hook_dropout : idem utk deteksi HOOK (misi 3b HANG / misi 4 DOCK).
     """
     clock  = FakeClock()
     plant  = SimPlant(target_wall=target_wall, target_dist=m5.SERVO_TARGET_DIST,
@@ -51,7 +52,8 @@ def run_scenario(start_state=State.DIVE, provide_pose=True, target_wall='C',
 
     cmd    = SimCommandLink(plant)
     telem  = SimTelemetry(plant)
-    vision = SimVision(plant, clock, provide_pose=provide_pose, dropout=dropout)
+    vision = SimVision(plant, clock, provide_pose=provide_pose, dropout=dropout,
+                       hook_dropout=hook_dropout)
 
     # Pasang jam virtual pada modul FSM (mission5 pakai time.time()/time.sleep()).
     original_time = install_fake_time(m5, clock)
@@ -100,12 +102,19 @@ def _evaluate(fsm, plant, clock, transitions, dock_error, provide_pose,
     def chk(name, ok, detail=''):
         checks.append({'name': name, 'ok': bool(ok), 'detail': detail})
 
+    hang_visual = full_run and not fsm._hang_used_fallback
+    dock_visual = full_run and not fsm._dock_used_fallback
+
     chk('Mencapai DONE (tanpa ABORT)', final == 'DONE', f'state akhir={final}')
     if full_run:
         chk('Misi 1 Scan QR (+15)',  score['m1'] == 15, f"m1={score['m1']}")
         chk('Misi 2 Grab (+15)',     score['m2'] == 15, f"m2={score['m2']}")
         chk('Misi 3 Hang (+15)',     score['m3'] == 15, f"m3={score['m3']}")
         chk('Misi 4 Surface Dock (+15)', score['m4'] == 15, f"m4={score['m4']}")
+        chk('Misi 3 Hang via jalur VISUAL (bukan fallback timed)',
+            hang_visual, f'hang_fallback={fsm._hang_used_fallback}')
+        chk('Misi 4 Dock via jalur VISUAL (bukan fallback timed)',
+            dock_visual, f'dock_fallback={fsm._dock_used_fallback}')
     chk('Misi 5 Auto-Release penuh (+40)', score['m5'] == 40, f"m5={score['m5']}")
     chk('Docking via jalur VISUAL (bukan fallback timed)',
         used_visual and not used_fallback,
@@ -141,6 +150,8 @@ def _evaluate(fsm, plant, clock, transitions, dock_error, provide_pose,
         'jalur': {
             'used_visual_dock': used_visual,
             'used_fallback': used_fallback,
+            'hang_used_fallback': fsm._hang_used_fallback,
+            'dock_used_fallback': fsm._dock_used_fallback,
         },
         'akurasi_docking': (
             {'rx': round(dock_error['rx'], 4), 'ry': round(dock_error['ry'], 4),
@@ -148,6 +159,7 @@ def _evaluate(fsm, plant, clock, transitions, dock_error, provide_pose,
             if dock_error else None
         ),
         'payload': {'grabbed': plant.grabbed, 'unhooked': not plant.hooked,
+                    'hung': plant.hung, 'docked': plant.docked,
                     'depth_akhir': round(plant.s.depth, 4)},
         'evaluasi': checks,
         'evaluasi_lulus': passed,

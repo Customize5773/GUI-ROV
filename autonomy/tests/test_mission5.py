@@ -183,6 +183,67 @@ def test_docking_survives_intermittent_dropout():
     assert rep['jalur']['used_fallback'] is False
 
 
+# ── Integrasi: HANG (misi 3b) & DOCK (misi 4) closed-loop ke HOOK ────────────
+@pytest.mark.parametrize('provide_pose,label', [(True, 'PBVS'), (False, 'IBVS')])
+def test_hang_dock_use_visual_hook_path(provide_pose, label):
+    """Misi 3b & 4 mencapai skor via jalur VISUAL hook (bukan timer buta) — closed-loop
+    jadi primary. Instrumentasi sim mengonfirmasi payload tergantung & ROV bersandar."""
+    rep = run_scenario(start_state=State.DIVE, provide_pose=provide_pose)
+    assert rep['state_akhir'] == 'DONE', f'{label}: {rep["transitions"]}'
+    assert rep['skor']['m3'] == 15 and rep['skor']['m4'] == 15, label
+    assert rep['jalur']['hang_used_fallback'] is False, f'{label}: HANG jatuh ke fallback'
+    assert rep['jalur']['dock_used_fallback'] is False, f'{label}: DOCK jatuh ke fallback'
+    assert rep['payload']['hung'] is True, f'{label}: payload tak tergantung ke hook'
+    assert rep['payload']['docked'] is True, f'{label}: ROV tak bersandar saat dock'
+
+
+def test_hang_dock_survive_intermittent_hook_dropout():
+    """Dropout deteksi hook sesaat (2 dari tiap 6 frame ≈ 0.2s < grace 0.6s) ditutup
+    dead-reckon hold → HANG/DOCK tetap konvergen visual tanpa jatuh ke fallback timed."""
+    rep = run_scenario(start_state=State.DIVE, provide_pose=True,
+                       hook_dropout=lambda c: (c % 6) < 2)
+    assert rep['state_akhir'] == 'DONE'
+    assert rep['skor']['m3'] == 15 and rep['skor']['m4'] == 15
+    assert rep['jalur']['hang_used_fallback'] is False
+    assert rep['jalur']['dock_used_fallback'] is False
+
+
+def test_hang_dock_degrade_to_timed_when_hook_never_locks():
+    """Hook TAK PERNAH terdeteksi → HANG & DOCK degradasi eksplisit ke jalur timed
+    (jaring pengaman), misi tetap selesai. Membuktikan fallback = degradasi, bukan primary."""
+    rep = run_scenario(start_state=State.DIVE, provide_pose=True,
+                       hook_dropout=lambda c: True)
+    assert rep['state_akhir'] == 'DONE'
+    assert rep['skor']['m3'] == 15 and rep['skor']['m4'] == 15
+    assert rep['jalur']['hang_used_fallback'] is True
+    assert rep['jalur']['dock_used_fallback'] is True
+
+
+def test_hook_servo_step_pbvs_and_ibvs_selection():
+    """_hook_servo_step memilih PBVS bila det punya pose, IBVS (piksel) bila tidak —
+    reuse VisualServo/PoseServo yang sama seperti servo QR."""
+    fsm = _make_fsm()
+    det_ibvs = {'center': (400, 200), 'area': 1000.0, 'frame_w': 640, 'frame_h': 480,
+                'pose': None}
+    out, mode = fsm._hook_servo_step(det_ibvs)
+    assert mode == 'IBVS'
+    assert out.sway != 0.0 and out.surge != 0.0       # ada koreksi geser & maju
+    det_pbvs = dict(det_ibvs, pose={'x': 0.2, 'y': 0.1, 'z': 0.9})
+    out, mode = fsm._hook_servo_step(det_pbvs)
+    assert mode == 'PBVS'
+    assert out.surge > 0                               # z>target → maju
+
+
+def test_note_hook_sets_search_direction():
+    """_note_hook mengambil arah sapu reacquire dari sisi lateral hook terakhir
+    (agar bila lock hilang ROV menyapu MENUJU hook)."""
+    fsm = _make_fsm()
+    fsm._note_hook({'center': (500, 240), 'frame_w': 640, 'frame_h': 480, 'pose': None})
+    assert fsm._hook_search_dir == 1                   # hook di kanan → sapu +
+    fsm._note_hook({'center': (100, 240), 'frame_w': 640, 'frame_h': 480, 'pose': None})
+    assert fsm._hook_search_dir == -1                  # hook di kiri → sapu −
+
+
 # ── Real decode: QR JSON via pyzbar + pose solvePnP (skip bila lib tak ada) ──
 def test_real_qr_json_decode_and_pose():
     cv2 = pytest.importorskip("cv2")
@@ -295,7 +356,10 @@ def test_config_example_yaml_loads_and_covers_expected_constants():
     cfg = load_config(example)
     for attr in ('HOOK_DEPTH', 'SERVO_TARGET_DIST', 'SERVO_TARGET_AREA',
                 'IBVS_KP_SWAY', 'PBVS_KP_SWAY', 'M5_LOCK_GRACE_T',
-                'PAYLOAD_MISSION', 'PAYLOAD_TYPE'):
+                'PAYLOAD_MISSION', 'PAYLOAD_TYPE',
+                'HOOK_TARGET_AREA', 'HOOK_TARGET_DIST', 'HOOK_LOCK_GRACE_T',
+                'HOOK_ACQUIRE_T', 'DOCK_APPROACH_SPEED', 'HOOK_MIN_AREA',
+                'HOOK_PIPE_DIAM_M', 'HANG_SEAT_T', 'HANG_OPEN_T', 'HANG_BACK_T'):
         assert attr in cfg, f"{attr} hilang dari contoh config"
     assert cfg['_WALL_HEADING_MERGE'] == {'A': 270, 'B': 90, 'C': 0, 'D': 180}
     assert set(cfg['_SERVO_INVERT_MERGE'].keys()) == {
