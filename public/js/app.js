@@ -27,6 +27,7 @@ const els = {
   armLabel: $("armLabel"),
   btnMode: $("btnMode"), modeLabel: $("modeLabel"), btnMute: $("btnMute"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
+  btnCamSwitch: $("btnCamSwitch"),
   camStage: $("camStage"), btnCamFull: $("btnCamFull"), camFullLabel: $("camFullLabel"),
   pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
   pilotPipImg: $("pilotPipImg"), pilotPipNo: $("pilotPipNo"),
@@ -440,21 +441,66 @@ els.camImg.onload = () => {
 };
 els.camImg.onerror = () => { els.camNoSignal.style.display = "flex"; els.camTag.textContent = "RTSP / MJPEG"; };
 
+let controlCamIndex = 0;
+
+function getControlCameraSources() {
+  const urls = [];
+  (CONFIG.CAMERAS || []).forEach((cam) => {
+    if (cam && cam.url) urls.push(cam.url);
+  });
+  if (CONFIG.CAMERA_URL) urls.push(CONFIG.CAMERA_URL);
+  return urls.filter((url, idx, arr) => url && arr.indexOf(url) === idx);
+}
+
+function syncControlCameraButton() {
+  if (!els.btnCamSwitch) return;
+  const sources = getControlCameraSources();
+  const canSwitch = sources.length > 1;
+  // Visibilitas dikontrol CSS: tampil HANYA saat fullscreen DAN ada >1 kamera
+  // (.cam:fullscreen .cam__switch.is-multi). Jangan set display inline agar
+  // tidak menimpa aturan fullscreen tsb.
+  els.btnCamSwitch.classList.toggle("is-multi", canSwitch);
+  els.btnCamSwitch.textContent = canSwitch ? `CAM ${controlCamIndex + 1}` : "CAM 1";
+}
+
 // (re)arahkan feed kamera Control ke CONFIG.CAMERA_URL saat ini. Dipanggil di
 // awal dan setiap URL diubah (Setup/Camera) via event 'hydroship:camera-url'.
 function applyControlCamera() {
-  const url = CONFIG.CAMERA_URL;
-  if (!url) {
+  const sources = getControlCameraSources();
+  if (!sources.length) {
     els.camImg.removeAttribute("src");
     els.camNoSignal.style.display = "flex";
     els.camTag.textContent = "RTSP / MJPEG";
     if (els.camRes) els.camRes.textContent = "—";
+    syncControlCameraButton();
     return;
   }
+
+  const matchIdx = sources.indexOf(CONFIG.CAMERA_URL);
+  if (matchIdx >= 0) controlCamIndex = matchIdx;
+  else if (controlCamIndex >= sources.length) controlCamIndex = 0;
+
+  const url = sources[controlCamIndex] || sources[0];
+  CONFIG.CAMERA_URL = url;
+  els.camTag.textContent = `CAM ${controlCamIndex + 1}`;
+
   // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
   const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
   els.camImg.src = camProxy(bust);
+  syncControlCameraButton();
 }
+
+if (els.btnCamSwitch) {
+  els.btnCamSwitch.onclick = () => {
+    const sources = getControlCameraSources();
+    if (sources.length < 2) return;
+    controlCamIndex = (controlCamIndex + 1) % sources.length;
+    CONFIG.CAMERA_URL = sources[controlCamIndex];
+    applyControlCamera();
+    log(`Kamera kontrol: ${controlCamIndex + 1}`, "ok");
+  };
+}
+
 applyControlCamera();
 window.addEventListener("hydroship:camera-url", applyControlCamera);
 
@@ -539,27 +585,39 @@ const pilotFs = makeFullscreen(els.pilotPanel, {
 });
 els.btnPilotFull.onclick = () => pilotFs.toggle();
 
-/* mirror viewport pilot/digital-twin ke PiP saat kamera Control fullscreen */
-let pilotMirrorRaf = null;
-function pilotMirror(on) {
+/* Saat LIVE CAMERA fullscreen, operator tak lagi melihat digital twin (pilot).
+   PiP di pojok menampilkan mirror scene 3D ROV Control (pilot) supaya attitude
+   ROV tetap terpantau sambil menonton kamera layar penuh. */
+let controlCamPiPRaf = null;
+function renderControlCamPiP(on) {
   const cv = document.getElementById("ctrlCamPipCanvas");
+  const no = document.getElementById("ctrlCamPipNo");
+  if (!cv) return;
+
   if (on) {
-    if (!cv || !scene) return;
     const ctx = cv.getContext("2d");
-    const src = scene.renderer.domElement;
     const loop = () => {
-      pilotMirrorRaf = requestAnimationFrame(loop);
+      controlCamPiPRaf = requestAnimationFrame(loop);
       const w = cv.clientWidth, h = cv.clientHeight;
       if (!w || !h) return;
       if (cv.width !== w) cv.width = w;
       if (cv.height !== h) cv.height = h;
-      try { ctx.drawImage(src, 0, 0, cv.width, cv.height); } catch (e) {}
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      // sumber = canvas WebGL digital twin (RovScene, render kontinu di scene.js)
+      const src = scene && scene.renderer && scene.renderer.domElement;
+      if (src && src.width && src.height) {
+        try { ctx.drawImage(src, 0, 0, cv.width, cv.height); } catch (e) {}
+        if (no) no.style.display = "none";
+      } else if (no) {
+        no.style.display = "flex";
+      }
     };
     loop();
-  } else if (pilotMirrorRaf) {
-    cancelAnimationFrame(pilotMirrorRaf);
-    pilotMirrorRaf = null;
+  } else if (controlCamPiPRaf) {
+    cancelAnimationFrame(controlCamPiPRaf);
+    controlCamPiPRaf = null;
   }
+  if (!on && no) no.style.display = "none";
 }
 
 /* Full Screen toggle untuk LIVE CAMERA di halaman Control */
@@ -567,7 +625,7 @@ const camFs = makeFullscreen(els.camStage, {
   onToggle: (fs) => {
     els.camFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
     els.btnCamFull.setAttribute("aria-pressed", String(fs));
-    pilotMirror(fs);
+    renderControlCamPiP(fs);
   },
 });
 els.btnCamFull.onclick = () => camFs.toggle();
