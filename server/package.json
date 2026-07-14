@@ -5,7 +5,8 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "sim": "node server.js --sim"
+    "sim": "node server.js --sim",
+    "test": "node test/recording.test.js"
   },
   "dependencies": {
     "ws": "^8.18.0"

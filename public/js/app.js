@@ -4,6 +4,7 @@ import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, 
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
+import { replayPage } from "./pages/replay.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
@@ -26,6 +27,7 @@ const els = {
   armLabel: $("armLabel"),
   btnMode: $("btnMode"), modeLabel: $("modeLabel"), btnMute: $("btnMute"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
+  btnCamSwitch: $("btnCamSwitch"),
   camStage: $("camStage"), btnCamFull: $("btnCamFull"), camFullLabel: $("camFullLabel"),
   pilotPanel: $("pilotPanel"), btnPilotFull: $("btnPilotFull"), pilotFullLabel: $("pilotFullLabel"),
   pilotPipImg: $("pilotPipImg"), pilotPipNo: $("pilotPipNo"),
@@ -42,6 +44,7 @@ const pages = {
   telemetry: $("page-telemetry"),
   setup: $("page-setup"),
   joystick: $("page-joystick"),
+  replay: $("page-replay"),
 };
 
 const navLinks = document.querySelectorAll(".sidebar__link");
@@ -53,6 +56,7 @@ const pageModules = {
   telemetry: telemetryPage,
   setup: setupPage,
   joystick: joystickPage,
+  replay: replayPage,
 };
 const initedModules = new Set();
 let activeModule = null;
@@ -351,6 +355,11 @@ function connect() {
     handleJoystickConfigMessage(msg.data);
     log("Joystick config diterima dari server", "ok");
   }
+  else if (msg.type === "record_status") {
+    // status rekaman server → halaman Replay (jika sudah di-init). Aman walau
+    // halaman Replay belum pernah dibuka.
+    try { if (replayPage.onRecordStatus) replayPage.onRecordStatus(msg.data); } catch (e) {}
+  }
 };
 }
 
@@ -367,8 +376,8 @@ function sendCmd(name, value, quiet = false) {
   if (!quiet) log(`CMD ${name} = ${value}`);
 }
 
-// sediakan log & sendCmd untuk modul halaman
-setServices({ log, sendCmd });
+// sediakan log, sendCmd & send (WS mentah) untuk modul halaman
+setServices({ log, sendCmd, send });
 function setLatency(ms) { els.lat.textContent = Math.round(ms); }
 
 // ping berkala untuk ukur latency
@@ -432,29 +441,82 @@ els.camImg.onload = () => {
 };
 els.camImg.onerror = () => { els.camNoSignal.style.display = "flex"; els.camTag.textContent = "RTSP / MJPEG"; };
 
+let controlCamIndex = 0;
+
+function getControlCameraSources() {
+  const urls = [];
+  (CONFIG.CAMERAS || []).forEach((cam) => {
+    if (cam && cam.url) urls.push(cam.url);
+  });
+  if (CONFIG.CAMERA_URL) urls.push(CONFIG.CAMERA_URL);
+  return urls.filter((url, idx, arr) => url && arr.indexOf(url) === idx);
+}
+
+function syncControlCameraButton() {
+  if (!els.btnCamSwitch) return;
+  const sources = getControlCameraSources();
+  const canSwitch = sources.length > 1;
+  // Visibilitas dikontrol CSS: tampil HANYA saat fullscreen DAN ada >1 kamera
+  // (.cam:fullscreen .cam__switch.is-multi). Jangan set display inline agar
+  // tidak menimpa aturan fullscreen tsb.
+  els.btnCamSwitch.classList.toggle("is-multi", canSwitch);
+  els.btnCamSwitch.textContent = canSwitch ? `CAM ${controlCamIndex + 1}` : "CAM 1";
+}
+
 // (re)arahkan feed kamera Control ke CONFIG.CAMERA_URL saat ini. Dipanggil di
 // awal dan setiap URL diubah (Setup/Camera) via event 'hydroship:camera-url'.
 function applyControlCamera() {
-  const url = CONFIG.CAMERA_URL;
-  if (!url) {
+  const sources = getControlCameraSources();
+  if (!sources.length) {
     els.camImg.removeAttribute("src");
     els.camNoSignal.style.display = "flex";
     els.camTag.textContent = "RTSP / MJPEG";
     if (els.camRes) els.camRes.textContent = "—";
+    syncControlCameraButton();
     return;
   }
+
+  const matchIdx = sources.indexOf(CONFIG.CAMERA_URL);
+  if (matchIdx >= 0) controlCamIndex = matchIdx;
+  else if (controlCamIndex >= sources.length) controlCamIndex = 0;
+
+  const url = sources[controlCamIndex] || sources[0];
+  CONFIG.CAMERA_URL = url;
+  els.camTag.textContent = `CAM ${controlCamIndex + 1}`;
+
   // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
   const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
   els.camImg.src = camProxy(bust);
+  syncControlCameraButton();
 }
+
+if (els.btnCamSwitch) {
+  els.btnCamSwitch.onclick = () => {
+    const sources = getControlCameraSources();
+    if (sources.length < 2) return;
+    controlCamIndex = (controlCamIndex + 1) % sources.length;
+    CONFIG.CAMERA_URL = sources[controlCamIndex];
+    applyControlCamera();
+    log(`Kamera kontrol: ${controlCamIndex + 1}`, "ok");
+  };
+}
+
 applyControlCamera();
 window.addEventListener("hydroship:camera-url", applyControlCamera);
 
 /*  kontrol UI  */
 els.btnLight.onclick = () => { const v = !state.light; reflectLight(v); markPending("light", v); sendCmd("light", v); };
-els.btnArm.onclick = () => { const v = !state.armed; reflectArm(v); markPending("arm", v); sendCmd("arm", v); };
+els.btnArm.onclick = () => {
+  const v = !state.armed;
+  // arming ulang melepas kunci E-Stop sehingga joystick boleh aktif lagi
+  if (v) estopLatched = false;
+  reflectArm(v); markPending("arm", v); sendCmd("arm", v);
+};
 els.btnStop.onclick = () => {
+  // E-Stop mengunci joystick: tidak boleh meng-override sampai operator arm ulang
+  estopLatched = true;
   sendCmd("stop", true); reflectArm(false); markPending("arm", false);
+  neutralizeGamepadAxes();
   ["surge", "sway", "yaw", "heave"].forEach((a) => setAxis(a, 0));
   log("⏹ STOP — semua thruster netral", "err");
 };
@@ -523,27 +585,39 @@ const pilotFs = makeFullscreen(els.pilotPanel, {
 });
 els.btnPilotFull.onclick = () => pilotFs.toggle();
 
-/* mirror viewport pilot/digital-twin ke PiP saat kamera Control fullscreen */
-let pilotMirrorRaf = null;
-function pilotMirror(on) {
+/* Saat LIVE CAMERA fullscreen, operator tak lagi melihat digital twin (pilot).
+   PiP di pojok menampilkan mirror scene 3D ROV Control (pilot) supaya attitude
+   ROV tetap terpantau sambil menonton kamera layar penuh. */
+let controlCamPiPRaf = null;
+function renderControlCamPiP(on) {
   const cv = document.getElementById("ctrlCamPipCanvas");
+  const no = document.getElementById("ctrlCamPipNo");
+  if (!cv) return;
+
   if (on) {
-    if (!cv || !scene) return;
     const ctx = cv.getContext("2d");
-    const src = scene.renderer.domElement;
     const loop = () => {
-      pilotMirrorRaf = requestAnimationFrame(loop);
+      controlCamPiPRaf = requestAnimationFrame(loop);
       const w = cv.clientWidth, h = cv.clientHeight;
       if (!w || !h) return;
       if (cv.width !== w) cv.width = w;
       if (cv.height !== h) cv.height = h;
-      try { ctx.drawImage(src, 0, 0, cv.width, cv.height); } catch (e) {}
+      ctx.clearRect(0, 0, cv.width, cv.height);
+      // sumber = canvas WebGL digital twin (RovScene, render kontinu di scene.js)
+      const src = scene && scene.renderer && scene.renderer.domElement;
+      if (src && src.width && src.height) {
+        try { ctx.drawImage(src, 0, 0, cv.width, cv.height); } catch (e) {}
+        if (no) no.style.display = "none";
+      } else if (no) {
+        no.style.display = "flex";
+      }
     };
     loop();
-  } else if (pilotMirrorRaf) {
-    cancelAnimationFrame(pilotMirrorRaf);
-    pilotMirrorRaf = null;
+  } else if (controlCamPiPRaf) {
+    cancelAnimationFrame(controlCamPiPRaf);
+    controlCamPiPRaf = null;
   }
+  if (!on && no) no.style.display = "none";
 }
 
 /* Full Screen toggle untuk LIVE CAMERA di halaman Control */
@@ -551,7 +625,7 @@ const camFs = makeFullscreen(els.camStage, {
   onToggle: (fs) => {
     els.camFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
     els.btnCamFull.setAttribute("aria-pressed", String(fs));
-    pilotMirror(fs);
+    renderControlCamPiP(fs);
   },
 });
 els.btnCamFull.onclick = () => camFs.toggle();
@@ -709,6 +783,16 @@ function logGamepadStatus() {
 }
 
 const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
+
+/* E-Stop mengunci joystick sampai operator arm ulang (lihat btnStop/btnArm). */
+let estopLatched = false;
+
+/* Throttle pengiriman axis ke server ~15 Hz. Meski axis ditahan konstan,
+   kita tetap resend supaya Pi menerima MANUAL_CONTROL berkelanjutan dan tidak
+   masuk fail-safe timeout. */
+const GP_SEND_HZ = 15;
+const GP_SEND_INTERVAL = 1000 / GP_SEND_HZ;
+let gpLastSent = 0;
 
 // status tombol fisik frame sebelumnya
 const gpBtnPrev = {};
@@ -901,6 +985,16 @@ function pollGamepad() {
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
 
+  /* Otoritas GUI vs FSM (mirip prinsip gripper): joystick HANYA boleh
+     menggerakkan ROV saat mode kontrol = Manual dan E-Stop tidak aktif.
+     Saat autonomous / E-Stop, pastikan axis dinetralkan sekali lalu diam. */
+  if (controlMode !== "manual" || estopLatched) {
+    if (gpLast.surge || gpLast.sway || gpLast.yaw || gpLast.heave) {
+      neutralizeGamepadAxes();
+    }
+    return;
+  }
+
   /* ================= AXIS ================= */
   const next = {
     surge: axisToPercent(joystickState.mapped.surge),
@@ -909,11 +1003,22 @@ function pollGamepad() {
     heave: axisToPercent(joystickState.mapped.heave),
   };
 
+  let changed = false;
   for (const a of ["surge", "sway", "yaw", "heave"]) {
     if (next[a] !== gpLast[a]) {
       gpLast[a] = next[a];
       setAxis(a, next[a], true);
-      sendCmd(a, next[a], true);
+      changed = true;
+    }
+  }
+
+  // Kirim saat berubah, ATAU secara periodik (~15 Hz) walau axis ditahan,
+  // agar MANUAL_CONTROL di Pi terus mengalir dan tidak masuk fail-safe.
+  const nowT = performance.now();
+  if (changed || nowT - gpLastSent >= GP_SEND_INTERVAL) {
+    gpLastSent = nowT;
+    for (const a of ["surge", "sway", "yaw", "heave"]) {
+      sendCmd(a, gpLast[a], true);
     }
   }
 

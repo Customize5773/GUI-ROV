@@ -197,4 +197,142 @@ permukaan. Bernilai **40% jika full-autonomous**, hanya **10% jika dilakukan rem
   di panel QR. `jsQR` sudah di-vendor (`public/vendor/jsqr.min.js`) agar jalan offline.
 - **Gripper:** tombol **OPEN/CLOSE** sudah ada di halaman Control (juga keyboard **H**/**G**)
   dan mengirim command `gripper` — dipakai Tahap 2, 3 & 5.
-- **Replay camera & trajectory** (fitur opsional KKI) belum diimplementasikan.
+- **Replay camera & trajectory** (fitur **nilai tambah**, di luar komponen wajib
+  §4.7.3) **sudah diimplementasikan** — lihat §8.
+
+## 7. Joystick manual control (Gamepad → MANUAL_CONTROL)
+
+Kontrol manual ROV memakai joystick fisik yang dicolok ke komputer operator (browser),
+melalui jalur existing: **Browser → WebSocket → Node.js server → UDP → Raspberry Pi → Pixhawk**.
+
+**Cara pakai:**
+1. Colok joystick ke laptop, buka dashboard, tekan satu tombol joystick agar terdeteksi
+   (`gamepadconnected`).
+2. Di panel **Controller**, pilih tab **Gamepad** (default Keyboard). Badge menampilkan status.
+3. Pastikan mode kontrol = **MANUAL** (toggle Manual/Autonomous di header) — joystick **tidak**
+   berefek saat Autonomous.
+4. Halaman **Joystick** menyediakan mapping axis/tombol (disimpan ke `server/config/joystick-profile.json`).
+
+**Mapping axis (GUI persen −100..100 → MANUAL_CONTROL):**
+
+| Axis GUI | Gerak            | Field MANUAL_CONTROL | Rentang        |
+|----------|------------------|----------------------|----------------|
+| surge    | maju/mundur      | `x`                  | −1000..1000    |
+| sway     | lateral kiri/kanan | `y`                | −1000..1000    |
+| yaw      | rotasi           | `r`                  | −1000..1000    |
+| heave    | throttle naik/turun | `z`               | 0..1000 (netral **500**) |
+
+- **Deadzone** & remap di browser (`GP_DEADZONE = 0.12`, `public/js/app.js`).
+- **Throttle pengiriman ~15 Hz**: axis di-resend berkala walau ditahan konstan, supaya Pi
+  menerima MANUAL_CONTROL berkelanjutan (tidak masuk fail-safe timeout).
+- **Validasi ulang di server** (`server/server.js`): axis di-clamp ke −100..100 sebelum
+  diteruskan (tidak percaya input klien).
+- **Encoding MANUAL_CONTROL** di sisi Pi (`rov_agent.py` + `manual_control.py`, via `pymavlink`
+  `manual_control_send`). Node server **tidak** meng-encode MAVLink — ia hanya meneruskan JSON,
+  konsisten dengan pola command lain (arm/light/stop).
+
+**Kenapa MANUAL_CONTROL, bukan RC_CHANNELS_OVERRIDE:** MANUAL_CONTROL adalah cara standar ArduSub
+menerima kontrol manual dari ground station (4 sumbu + bitmask tombol). Tidak menimpa channel RC
+fisik, jadi aman berdampingan dengan konfigurasi channel/servo di Pixhawk (scope Devanka).
+
+**Safety / fallback:**
+- **Joystick disconnect** (`gamepaddisconnected`) → axis dinetralkan (x=y=r=0, z=500).
+- **E-Stop / Spasi** → joystick **terkunci** sampai operator ARM ulang; tidak bisa override E-Stop.
+- **Mode Autonomous** → joystick otomatis nonaktif (otoritas GUI vs FSM, mirip prinsip gripper).
+- **Fail-safe Pi**: jika tak ada axis baru > 0.5 s, Pi mengirim satu perintah netral lalu berhenti
+  (command terakhir tidak "nyangkut", tidak mengganggu mode autonomous).
+
+**Testing:**
+- Unit test mapping (pure function, tanpa hardware): `python3 -m unittest test_manual_control -v`.
+- Manual test verifikasi command sampai UDP:
+  1. `cd server && node server.js --sim` (atau `hydroship` di launch.json).
+  2. Buka dashboard, pilih Gamepad + mode Manual, gerakkan stick.
+  3. Amati log server `[CMD] surge = ... -> <RPI>:14550` (nilai sudah ter-clamp −100..100).
+  4. Di Pi, jalankan `rov_agent.py`; amati log `[MANUAL]` dan MANUAL_CONTROL terkirim ke Pixhawk.
+
+**Tombol joystick:** untuk task ini `buttons` MANUAL_CONTROL masih **placeholder = 0** (TODO).
+Aksi tombol (arm/mode/mount/light) sudah ditangani terpisah lewat command GUI existing.
+
+## 8. Replay Camera & Trajectory (nilai tambah, bukan §4.7.3 wajib)
+
+Fitur untuk **merekam** satu run misi lalu **memutar ulang** video 2 kamera + posisi
+ROV di scene 3D **secara tersinkron**. Berguna sebagai bukti & bahan analisis pasca-run.
+Ini **nilai tambah** (opsional), terpisah penuh dari jalur kontrol live — tidak pernah
+bisa mengirim perintah ke ROV.
+
+### Cara pakai
+1. Buka halaman **Replay** (sidebar). Pastikan URL kamera BOTTOM/WALL sudah diisi di
+   **Setup → Camera Stream** bila ingin ikut merekam video (opsional; trajectory tetap
+   terekam walau tanpa kamera).
+2. Tekan **● Start Recording** tepat sebelum/di awal run misi. Badge berubah **REC ●**.
+   Rekaman berjalan **sepenuhnya di server** — tak masalah halaman mana yang dibuka.
+3. Jalankan misi seperti biasa (Manual/Autonomous). Server mencatat tiap sampel
+   telemetry + command gerak (surge/sway) dan men-tap frame kedua kamera.
+4. Tekan **■ Stop Recording** di akhir run. Sesi baru muncul di daftar **SESI TERSIMPAN**.
+5. Klik sesi → video + lintasan termuat. Pakai **scrubber/timeline** (play/pause/seek):
+   video kedua kamera **dan** posisi ROV di scene 3D bergerak bersama sesuai timestamp.
+
+### Command / message baru (tidak mengubah command existing §3)
+| Message WS | Arah | Fungsi |
+|---|---|---|
+| `record_start` | GUI→server | mulai rekam (kirim daftar `cameras:[{role,url}]`) |
+| `record_stop` | GUI→server | hentikan rekam |
+| `record_status` | server→GUI | status rekam (broadcast + saat connect) |
+
+> Ini **message type tersendiri**, sengaja **bukan** `type:"cmd"`, sehingga **tidak
+> pernah** diteruskan ke UDP/ROV. Mode Replay tak punya jalur ke kontrol ROV.
+
+### Playback API (HTTP — konsisten dgn static server & proxy `/cam` existing)
+| Endpoint | Fungsi |
+|---|---|
+| `GET /api/recordings` | daftar sesi (id, tanggal, durasi, ukuran, kamera) |
+| `GET /recordings/<id>/meta.json` | metadata sesi (termasuk `session_start_time`) |
+| `GET /recordings/<id>/trajectory.jsonl` | log telemetry berstempel waktu |
+| `GET /recordings/<id>/commands.jsonl` | log command gerak berstempel waktu |
+| `GET /replay/frame?session=<id>&cam=<bottom\|wall>&i=<idx>` | 1 frame JPEG dari mjpeg |
+
+Data replay bersifat historis/akses-acak → HTTP (bukan WebSocket) dipilih agar sejalan
+dengan pola server yang sudah meng-serve file & mem-proxy kamera lewat HTTP; WS tetap
+khusus push live sehingga live & replay tak bercampur.
+
+### Penyimpanan (`server/recordings/<session_id>/`)
+```
+meta.json            session_start_time (acuan sync), durasi, ukuran, jumlah sampel
+trajectory.jsonl     {t, heading, depth, roll, pitch}   (append sinkron → durable)
+commands.jsonl       {t, name, value}   (hanya surge/sway/yaw/heave/control_mode/set_surface)
+bottom.mjpeg / wall.mjpeg          frame JPEG mentah disambung
+bottom.index.jsonl / wall.index.jsonl   {t, off, len} per frame → seek per timestamp
+```
+Folder `server/recordings/` **tidak di-commit** (ada `.gitignore` di dalamnya).
+
+### Keputusan teknis
+- **Video = frame store (JPEG + index), bukan .webm.** Stream kamera aktual = **MJPEG**
+  (mjpg-streamer `?action=stream`). ffmpeg tidak tersedia di server, jadi encoding webm
+  butuh dependency berat + kurang presisi sinkron. Frame store: **nol dependency baru**,
+  sinkron **frame-accurate** (browser tinggal tukar `<img>.src` per waktu scrubber).
+- **Posisi x,y direkonstruksi di browser saat replay.** Server hanya punya heading/depth
+  (x,y adalah dead-reckoning di `mission.js`). Maka server merekam telemetry **+** command
+  surge/sway; halaman Replay merekonstruksi lintasan dengan integrator **identik**
+  `mission.js` (`VEL_SCALE`, `DEPTH_SCALE`, konvensi heading) → lintasan replay sepadan live.
+- **Sinkronisasi** memakai satu clock server: `session_start_time` (meta.json) + timestamp
+  tiap sampel/frame. Scrubber menghitung `tc = session_start_time + posisi_slider`, lalu
+  memilih pose 3D & frame video dengan `t <= tc` (binary search).
+
+### Batas durasi/ukuran
+Auto-stop di **`MAX_RECORD_MIN` menit (default 15)**, configurable via env:
+`MAX_RECORD_MIN=10 node server.js`. Run KKI ~maks 20 menit (5 siap+10 misi+5 evakuasi),
+15 menit cukup untuk fase misi+evakuasi. Saat auto-stop, server memberi warning ke log &
+event dashboard.
+
+### Testing
+- **Unit test server** (start/stop, tulis trajectory, tap command, listing, guard path,
+  baca frame): `cd server && npm test` (tanpa framework/dependency tambahan).
+- **Manual test sinkron video+trajectory** (sinkronisasi visual sulit di-assert otomatis):
+  1. `cd server && node server.js --sim` (atau `hydroship` di launch.json).
+  2. Buka dashboard → halaman **Replay** → **Start Recording**.
+  3. Di halaman **Control**, gerakkan ROV (W/S/A/D) beberapa detik agar trajectory bergerak.
+     Untuk video nyata, isi URL kamera dan pastikan feed tampil di halaman Camera.
+  4. **Stop Recording** → klik sesi di daftar → tekan **play**.
+  5. **Verifikasi:** garis lintasan & marker ROV bergerak; DENGAN kamera nyata, frame kedua
+     video maju seiring posisi ROV pada timestamp yang sama (geser scrubber untuk cek titik
+     tertentu). Bandingkan momen kunci (mis. saat gripper menutup) di video vs posisi 3D.
