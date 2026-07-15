@@ -15,27 +15,19 @@ if _AUTONOMY not in sys.path:
     sys.path.insert(0, _AUTONOMY)
 
 
+# Helper render/tempel QR kini dipakai bersama tests/test_qr_underwater.py dan
+# harness dataset → dipindah ke tests/underwater_sim.py (perilaku identik).
+# Wrapper tipis ini menjaga pemanggilan lama (cv2, np, segno dioper) tetap apa adanya.
 def _render_qr_bgr(cv2, np, segno, text, module_px, border=4):
     """Render QR -> gambar BGR, ukuran modul = module_px piksel/modul."""
-    import io
-    png = io.BytesIO()
-    segno.make(text, error='m').save(png, kind='png', scale=module_px, border=border)
-    png.seek(0)
-    gray = cv2.imdecode(np.frombuffer(png.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
-    return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+    from tests.underwater_sim import render_qr_bgr
+    return render_qr_bgr(text, module_px=module_px, border=border, segno=segno)
 
 
 def _place_on_canvas(cv2, np, qr_bgr, canvas_wh=(640, 480), contrast=1.0, offset=(0, 0)):
     """Tempel QR di kanvas abu-abu; contrast<1 menurunkan kontras (mensimulasi cahaya buruk)."""
-    W, H = canvas_wh
-    frame = np.full((H, W, 3), 128, np.uint8)
-    h, w = qr_bgr.shape[:2]
-    if contrast < 1.0:                       # tekan ke arah abu-abu 128 → kontras rendah
-        qr_bgr = (128 + (qr_bgr.astype(np.float32) - 128) * contrast).astype(np.uint8)
-    y0 = (H - h) // 2 + offset[1]
-    x0 = (W - w) // 2 + offset[0]
-    frame[y0:y0 + h, x0:x0 + w] = qr_bgr
-    return frame, (x0, y0, w, h)
+    from tests.underwater_sim import place_on_canvas
+    return place_on_canvas(qr_bgr, canvas_wh=canvas_wh, contrast=contrast, offset=offset)
 
 
 def test_decode_qr_clear_uses_fast_path():
