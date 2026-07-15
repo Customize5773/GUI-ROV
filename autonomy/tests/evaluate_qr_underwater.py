@@ -165,8 +165,19 @@ def _row(params, level_name, module_px, qr_px, idx, qr_id, payload, path, verdic
     return row
 
 
-def run_dataset(args, levels, payload, qr_id, effects, write_images=True):
-    """Bangun (opsional tulis) dataset & verifikasi tiap varian. → list baris metadata."""
+def run_dataset(args, levels, targets, effects, write_images=True):
+    """Bangun (opsional tulis) dataset & verifikasi tiap varian. → list baris metadata.
+
+    targets : [(qr_id, payload), ...] — tiap sisi kolam (A/B/C/D) jadi kelas tersendiri;
+              `qr_id` di metadata = label training.
+    """
+    rows = []
+    for qr_id, payload in targets:
+        rows.extend(_run_one_target(args, levels, payload, qr_id, effects, write_images))
+    return rows
+
+
+def _run_one_target(args, levels, payload, qr_id, effects, write_images=True):
     rows = []
     for module_px in args.module_px:
         clean, (x0, y0, qr_w, qr_h) = _clean_frame(args, payload, module_px)
@@ -186,8 +197,11 @@ def run_dataset(args, levels, payload, qr_id, effects, write_images=True):
             for idx in range(args.samples):
                 # Seed per-varian → dataset reproducible PERSIS dari --seed, dan tiap
                 # sample tetap berbeda (fase riak + jitter).
+                # qr_id ikut di-seed → tiap sisi kolam dapat realisasi riak/jitter
+                # sendiri (variasi utk training), tapi tetap reproducible dari --seed.
                 rng = np.random.default_rng(
-                    [args.seed, module_px, int(round(depth * 1000)), idx])
+                    [args.seed, sum(ord(c) for c in qr_id), module_px,
+                     int(round(depth * 1000)), idx])
                 out, params = simulate_underwater(clean, depth, rng=rng,
                                                  jitter=args.jitter, effects=effects)
                 rel = os.path.join(level_name,
@@ -274,6 +288,15 @@ def _print_report(rows, summ, args, effects):
             print(f"    {s:<14}: {stage_tot[s]:>4} varian")
     print(f"    → {summ['rescued']} varian DISELAMATKAN eskalasi (raw gagal, enhance berhasil)")
 
+    ids = sorted({r['qr_id'] for r in rows})
+    if len(ids) > 1:
+        print('-' * 78)
+        print('  PER SISI KOLAM (label kelas dataset) — harusnya setara; timpang = curiga:')
+        for i in ids:
+            sub = [r for r in rows if r['qr_id'] == i]
+            enh = sum(bool(r['decode_enhance_ok']) for r in sub)
+            print(f"    id={i}: {enh}/{len(sub)} terbaca   payload={sub[0]['payload_groundtruth']!r}")
+
     print('-' * 78)
     print('  AMBANG:')
     rb, eb, ed = summ['raw_break'], summ['enh_break'], summ['enh_dead']
@@ -286,7 +309,7 @@ def _print_report(rows, summ, args, effects):
     print('=' * 78)
 
 
-def _write_metadata(args, rows, summ, payload, effects):
+def _write_metadata(args, rows, summ, targets, effects):
     csv_path = os.path.join(args.outdir, 'metadata.csv')
     with open(csv_path, 'w', newline='', encoding='utf-8') as f:
         w = csv.DictWriter(f, fieldnames=CSV_FIELDS)
@@ -296,7 +319,8 @@ def _write_metadata(args, rows, summ, payload, effects):
 
     json_path = os.path.join(args.outdir, 'metadata.json')
     meta = {
-        'payload_groundtruth': payload,
+        'payload_template': args.payload,
+        'targets': {qid: pl for qid, pl in targets},   # label kelas → payload groundtruth
         'effects': sorted(effects),
         'module_px': args.module_px,
         'samples_per_level': args.samples,
@@ -345,9 +369,13 @@ def main():
     ap = argparse.ArgumentParser(
         description='Dataset + evaluasi robustness decode_qr() pada simulasi bawah air')
     src = ap.add_argument_group('sumber QR')
-    src.add_argument('--payload',
-                     default='{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}',
-                     help='isi QR JSON = groundtruth; dirender segno bila --input kosong')
+    src.add_argument('--payload', default='HYDROSHIP-M5-{id}',
+                     help='isi QR = groundtruth; "{id}" diganti tiap --ids. Default = '
+                          'format yang BENAR-BENAR tercetak di PDF payload tim '
+                          '(terverifikasi via decode). Pakai JSON penuh bila QR dicetak ulang.')
+    src.add_argument('--ids', default='A,B,C,D',
+                     help='daftar sisi kolam yang digenerate (default A,B,C,D). '
+                          'Jadi kolom `qr_id` di metadata = label kelas utk training.')
     src.add_argument('--input', help='PNG QR bersih milik sendiri (segno tak diperlukan)')
     src.add_argument('--canvas', type=int, nargs=2, default=[640, 480],
                      metavar=('W', 'H'), help='ukuran kanvas frame (default 640 480)')
@@ -388,14 +416,26 @@ def main():
               f"(ukuran QR mengikuti PNG). Pakai --payload bila ingin menyapu jarak.")
         args.module_px = args.module_px[:1]
 
-    payload = args.payload
-    qr_id = 'X'
-    try:
-        parsed = json.loads(payload)
-        if isinstance(parsed, dict) and isinstance(parsed.get('id'), str):
-            qr_id = parsed['id']
-    except ValueError:
-        pass   # payload non-JSON tetap boleh (groundtruth = string apa adanya)
+    # Bangun target: satu per sisi kolam. '{id}' di --payload diganti tiap ids →
+    # kolom `qr_id` (A/B/C/D) jadi label kelas dataset.
+    ids = [s.strip() for s in args.ids.split(',') if s.strip()]
+    if '{id}' in args.payload:
+        targets = [(i, args.payload.replace('{id}', i)) for i in ids]
+    else:
+        # payload literal (tanpa placeholder) → satu target; id diambil dari JSON bila ada.
+        qr_id = 'X'
+        try:
+            parsed = json.loads(args.payload)
+            if isinstance(parsed, dict) and isinstance(parsed.get('id'), str):
+                qr_id = parsed['id']
+        except ValueError:
+            pass   # payload non-JSON tetap boleh (groundtruth = string apa adanya)
+        targets = [(qr_id, args.payload)]
+
+    if args.input and len(targets) > 1:
+        raise SystemExit(
+            "--input hanya memuat SATU gambar QR, tapi --ids meminta beberapa "
+            f"({', '.join(ids)}). Pakai --payload agar tiap id dirender, atau --ids <satu>.")
 
     if args.sweep:
         levels = _parse_sweep(args.sweep)
@@ -409,11 +449,11 @@ def main():
     if write:
         os.makedirs(args.outdir, exist_ok=True)
 
-    rows = run_dataset(args, levels, payload, qr_id, effects, write_images=write)
+    rows = run_dataset(args, levels, targets, effects, write_images=write)
     summ = summarize(rows)
 
     if write:
-        csv_path, json_path = _write_metadata(args, rows, summ, payload, effects)
+        csv_path, json_path = _write_metadata(args, rows, summ, targets, effects)
 
     if args.json:
         print(json.dumps({

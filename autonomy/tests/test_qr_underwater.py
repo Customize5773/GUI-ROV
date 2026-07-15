@@ -194,6 +194,37 @@ def test_simulate_underwater_rejects_unknown_effect():
 
 # ── Lapis 2: robustness decode_qr() ───────────────────────────────────────────
 
+def test_render_qr_never_emits_micro_qr():
+    """Regresi: segno memilih Micro QR (M1-M4) utk teks pendek, dan pyzbar TIDAK BISA
+    membacanya sama sekali → QR bersih pun gagal decode & seluruh dataset jadi 0%.
+    Payload sungguhan tim ('HYDROSHIP-M5-A') cukup pendek untuk memicu ini."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    segno = pytest.importorskip("segno")
+    pytest.importorskip("pyzbar")
+    from tests.underwater_sim import place_on_canvas, render_qr_bgr
+    from vision.qr_detect import decode_qr
+
+    for text in ('HYDROSHIP-M5-A', 'A', PAYLOAD):
+        qr = render_qr_bgr(text, module_px=8, segno=segno)
+        frame, _ = place_on_canvas(qr)
+        res = decode_qr(frame)
+        assert res, f"QR BERSIH {text!r} harus terbaca (Micro QR bocor ke render?)"
+        assert res[0]['data'] == text, f"isi QR {text!r} harus utuh"
+
+
+def test_printed_payload_format_maps_to_wall():
+    """QR yang tim CETAK berisi string biasa 'HYDROSHIP-M5-A' (terverifikasi decode dari
+    PDF), BUKAN JSON. Pastikan format itu tetap memetakan ke sisi kolam A/B/C/D lewat
+    jalur regex legacy — kalau ini putus, misi 1 (SCAN_QR) gagal di kolam."""
+    from vision.qr_detect import parse_payload, wall_from_qr
+    for wall in ('A', 'B', 'C', 'D'):
+        data = f'HYDROSHIP-M5-{wall}'
+        assert parse_payload(data) is None, "payload cetak memang bukan JSON"
+        assert wall_from_qr(data) == wall, f"{data} harus memetakan ke sisi {wall}"
+
+
+
 def test_shallow_still_decodes():
     """Regression guard: air dangkal TIDAK boleh mematahkan pipeline."""
     cv2 = pytest.importorskip("cv2")

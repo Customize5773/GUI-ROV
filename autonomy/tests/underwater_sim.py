@@ -256,13 +256,20 @@ def render_qr_bgr(text, module_px=8, border=4, segno=None, error='m'):
 
     `segno` boleh dioper (pola lama `pytest.importorskip`) atau dibiarkan None
     untuk diimpor di sini.
+
+    micro=False WAJIB: untuk teks pendek (mis. 'HYDROSHIP-M5-A') segno otomatis
+    memilih Micro QR (versi M1-M4) yang TIDAK BISA dibaca pyzbar sama sekali — QR
+    bersih pun gagal decode. QR payload yang tim cetak adalah QR biasa (3 finder
+    pattern), jadi render harus dipaksa ke QR biasa agar dataset merepresentasikan
+    barang aslinya.
     """
     import io
     if segno is None:
         import segno as segno_mod
         segno = segno_mod
     png = io.BytesIO()
-    segno.make(text, error=error).save(png, kind='png', scale=module_px, border=border)
+    segno.make(text, error=error, micro=False).save(png, kind='png', scale=module_px,
+                                                    border=border)
     png.seek(0)
     gray = cv2.imdecode(np.frombuffer(png.read(), np.uint8), cv2.IMREAD_GRAYSCALE)
     return cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
