@@ -194,6 +194,9 @@ class VisionPipeline:
         hook_hsv_range=None,
         hook_min_area: float = 150.0,
         hook_pipe_diam: float = 0.025,
+        wall_cnn=None,
+        wall_cnn_votes: int = 3,
+        wall_cnn_min_conf: float = 0.8,
     ):
         """
         Parameters
@@ -209,6 +212,12 @@ class VisionPipeline:
                      (None → jalur non-warna/contour; JANGAN andalkan warna, lihat hook_detect.py)
         hook_min_area  : luas contour minimum (px^2) kandidat hook
         hook_pipe_diam : diameter pipa hook fisik (m) — KKI 2026 ¾" = 0.025 (estimasi jarak)
+        wall_cnn   : aktifkan fallback tebak sisi kolam saat decode_qr() GAGAL.
+                     True → bobot bawaan (vision/wall_cnn.npz); str → path .npz;
+                     None/False → nonaktif (default). Hasilnya TIDAK masuk latest_qr()
+                     — ambil lewat latest_wall_hint(). Lihat vision/wall_cnn.py.
+        wall_cnn_votes    : jumlah frame berturut-turut yang harus sepakat (WallVoter)
+        wall_cnn_min_conf : confidence minimum agar sebuah tebakan dihitung
         """
         self.source = source
         self.device = device
@@ -221,6 +230,23 @@ class VisionPipeline:
         self._last_result: Optional[dict] = None
         self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
         self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
+        self._last_wall_hint: Optional[dict] = None   # tebakan CNN saat decode GAGAL (opt-in)
+
+        # Fallback sisi kolam (opsional). Dimuat malas & gagal-lunak: ROV tetap terbang
+        # walau bobot belum diekspor — QR normal tak boleh ikut mati gara-gara ini.
+        self._wall_clf = None
+        self._wall_voter = None
+        if wall_cnn:
+            try:
+                from vision.wall_cnn import WallClassifier, WallVoter
+                self._wall_clf = WallClassifier(
+                    None if wall_cnn is True else wall_cnn)
+                self._wall_voter = WallVoter(need=wall_cnn_votes,
+                                             min_conf=wall_cnn_min_conf)
+                log.info("[vision] Fallback wall-CNN AKTIF (butuh %d frame sepakat, conf>=%.2f)",
+                         wall_cnn_votes, wall_cnn_min_conf)
+            except (ImportError, FileNotFoundError) as e:
+                log.warning("[vision] Fallback wall-CNN nonaktif: %s", e)
         # Parameter deteksi hook (CAM WALL) — semua tunable di kolam (lihat hook_detect.py)
         self.hook_hsv_range = hook_hsv_range
         self.hook_min_area = hook_min_area
@@ -349,7 +375,13 @@ class VisionPipeline:
                 continue
 
             # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
-            for det in decode_qr(frame):
+            dets = decode_qr(frame)
+            if not dets:
+                self._try_wall_fallback(frame)
+            elif self._wall_voter is not None:
+                self._wall_voter.reset()      # decode sungguhan jalan lagi → mulai dari nol
+                self._last_wall_hint = None
+            for det in dets:
                 data = det['data']          # sudah di-strip, TANPA .upper() (jaga JSON payload)
                 pts = det['pts']
                 center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
@@ -401,6 +433,46 @@ class VisionPipeline:
     def latest_qr(self, max_age=1.0) -> Optional[dict]:
         """Deteksi QR terakhir bila masih segar (hindari transisi dari deteksi basi)."""
         r = self._last_qr
+        if not r or (time.time() - r['timestamp']) > max_age:
+            return None
+        return r
+
+    def _try_wall_fallback(self, frame):
+        """decode_qr() gagal → coba tebak SISI KOLAM saja lewat CNN (vision/wall_cnn.py).
+
+        Sengaja TIDAK memanggil _dispatch()/_build_result(): hasil ini tak punya payload,
+        dan Mission5FSM._is_target_payload() menerima apa saja yang payload-nya None —
+        jadi menyusupkannya ke latest_qr() akan membuat FSM men-servo/GRAB berdasarkan
+        tebakan tak tervalidasi. Konsumen harus meminta eksplisit via latest_wall_hint().
+        """
+        if self._wall_clf is None:
+            return
+        try:
+            out = self._wall_clf.predict_frame(frame)
+        except Exception as e:            # fallback tak boleh menjatuhkan loop kamera
+            log.debug("[vision] wall-CNN error: %s", e)
+            return
+        wall, conf = out if out else (None, 0.0)
+        stable = self._wall_voter.push(wall, conf)
+        if stable is None:
+            self._last_wall_hint = None
+            return
+        self._last_wall_hint = {
+            'type': 'wall_hint', 'wall': stable, 'confidence': float(conf),
+            'source': 'cnn_fallback', 'validated': False,
+            'frame_w': frame.shape[1], 'frame_h': frame.shape[0],
+            'timestamp': time.time(),
+        }
+        log.debug("[vision] wall-hint (fallback CNN) wall=%s conf=%.2f", stable, conf)
+
+    def latest_wall_hint(self, max_age=1.0) -> Optional[dict]:
+        """Tebakan sisi kolam dari CNN saat decode_qr() GAGAL — atau None.
+
+        BUKAN pengganti latest_qr(): tak ada payload, jadi TAK TERVALIDASI
+        (`validated: False`). Sudah disaring WallVoter (butuh N frame sepakat), tapi tetap
+        perlakukan sebagai petunjuk berkeyakinan rendah — mis. untuk memilih arah scan
+        saat QR tak terbaca, BUKAN untuk memicu GRAB/RELEASE."""
+        r = self._last_wall_hint
         if not r or (time.time() - r['timestamp']) > max_age:
             return None
         return r
