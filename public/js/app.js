@@ -1,3 +1,4 @@
+// app.js — dashboard utama Hydroship ROV
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
 import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy } from "./core.js";
@@ -7,6 +8,7 @@ import { cameraPage } from "./pages/camera.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
+
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
 const els = {

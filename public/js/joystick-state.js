@@ -219,8 +219,8 @@ export function updateJoystickStateFromGamepad() {
     value: Number(b.value || 0),
   }));
 
-  joystickState.mapped.surge = readAssignedAxis("Axis Y");
-  joystickState.mapped.sway  = readAssignedAxis("Axis X");
+  joystickState.mapped.surge = readAssignedAxis("Axis X");
+  joystickState.mapped.sway  = readAssignedAxis("Axis Y");
   joystickState.mapped.yaw   = readAssignedAxis("Axis R");
   joystickState.mapped.heave = readAssignedAxis("Axis Z");
 }

@@ -43,6 +43,12 @@ state = {
 
 master = None
 
+joystick = {
+    "surge": 0,
+    "sway": 0,
+    "heave": 0,
+    "yaw": 0,
+}
 # =========================
 # Utility
 # ========================
@@ -114,12 +120,39 @@ def command_listener():
                 state["light"] = bool(value)
                 print(f"[LIGHT] set to {state['light']}")
 
+            elif name in ["surge", "sway", "yaw", "heave"]:
+                joystick[name] = int(value)
+
             else:
                 print(f"[CMD] unknown command: {name}")
 
         except Exception as e:
             print("[CMD] error executing command:", e)
 
+def joystick_sender():
+    global master
+    while True:
+        if master is not None:
+            print(
+                f"[MANUAL] "
+                f"X={joystick['surge']} "
+                f"Y={joystick['sway']} "
+                f"Z={joystick['heave']} "
+                f"R={joystick['yaw']}"
+            )   
+            print("RAW =", joystick)
+
+            master.mav.manual_control_send(
+                master.target_system,
+                joystick["surge"]*10,
+                joystick["sway"]*10,
+                joystick["heave"]*10,
+                joystick["yaw"]*10,
+                0
+            )
+            print("[MANUAL] sent")
+
+        time.sleep(0.05)
 # =========================
 # Main koneksi Pixhawk
 # =========================
@@ -148,6 +181,7 @@ def main():
 
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
+    threading.Thread(target=joystick_sender, daemon=True).start()
 
     last_send = 0
 

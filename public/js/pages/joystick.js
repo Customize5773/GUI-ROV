@@ -1,3 +1,5 @@
+// joystick.js — halaman konfigurasi joystick/gamepad
+
 import {
   joystickState,
   updateJoystickStateFromGamepad,
