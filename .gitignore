@@ -8,6 +8,14 @@ autonomy/config/*.local.yaml
 autonomy/config/*.local.yml
 autonomy/config/*.local.json
 
+# Dataset simulasi bawah air (hasil tests/evaluate_qr_underwater.py) — regenerate
+# saja dari seed; jangan commit gambarnya.
+autonomy/dataset/
+dataset/
+# ZIP dinamai dari --outdir (mis. dataset/ -> dataset.zip)
+autonomy/dataset.zip
+dataset.zip
+
 # Editor / OS
 *.swp
 *.swo

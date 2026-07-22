@@ -696,6 +696,32 @@ body[data-theme="light"] .theme__icon::after {
   gap: 6px;
   pointer-events: none;
 }
+.cam__switch {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  z-index: 30;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(20,216,255,.35);
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(4,23,38,.78);
+  color: var(--ink);
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 11px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all .18s ease;
+  pointer-events: auto;
+}
+.cam__switch:hover {
+  background: rgba(20,216,255,.16);
+  border-color: rgba(20,216,255,.55);
+  box-shadow: 0 0 16px rgba(20,216,255,.16);
+}
 .cam__res {
   background: rgba(4,23,38,.7);
   color: var(--ink);
@@ -900,6 +926,14 @@ body.pseudo-fs-lock { overflow: hidden; }
 .cam.pseudo-fs #ctrlCamPip,
 .camcell__view:fullscreen .campip,
 .camcell__view.pseudo-fs .campip { display: block; }
+/* Tombol switch kamera: hanya saat kamera fullscreen DAN tersedia >1 kamera
+   (.is-multi diset di app.js). Di luar fullscreen tetap tersembunyi. */
+.cam:fullscreen .cam__switch.is-multi,
+.cam.pseudo-fs .cam__switch.is-multi { display: inline-flex; }
+/* Saat fullscreen, pojok kanan-atas dipesan untuk tombol switch — geser overlay
+   resolusi/rec ke bawahnya agar tidak bertumpuk. */
+.cam:fullscreen .cam__overlay,
+.cam.pseudo-fs .cam__overlay { top: 62px; }
 /* PiP pilot di kamera Control: kiri-ATAS supaya tidak menutupi tombol
    SNAPSHOT/REC/HUD (.cam__bar di kiri-bawah); overlay resolusi ada di kanan-atas. */
 #ctrlCamPip { left: 18px; top: 18px; right: auto; bottom: auto; }

@@ -3,6 +3,7 @@ numpy>=1.24
 # Visi (closed-loop ArUco/QR):
 opencv-contrib-python>=4.8   # cv2.aruco ada di contrib
 pyzbar>=0.1.9                # QR — butuh libzbar0 di Linux
+segno>=1.5                   # render QR sintetis utk tes & generator dataset bawah air
 
 # Tes-nilai-evaluasi (autonomy/tests/) — cukup numpy di atas; cv2/pyzbar opsional:
 pytest>=7.0                  # `pytest tests/` — uji unit + integrasi closed-loop misi 5

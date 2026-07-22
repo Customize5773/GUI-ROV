@@ -3,12 +3,17 @@ export const pilotAxes = { surge: 0, sway: 0, yaw: 0, heave: 0 };
 /* layanan yang disuntik app.js */
 let _log = (m) => console.log("[log]", m);
 let _sendCmd = (n, v) => console.log("[cmd]", n, v);
-export function setServices({ log, sendCmd }) {
+let _send = (obj) => console.log("[ws]", obj);
+export function setServices({ log, sendCmd, send }) {
   if (log) _log = log;
   if (sendCmd) _sendCmd = sendCmd;
+  if (send) _send = send;
 }
 export function log(msg, level = "") { _log(msg, level); }
 export function sendCmd(name, value) { _sendCmd(name, value); }
+/* kirim pesan WebSocket mentah (mis. {type:"record_start"}). Berbeda dari sendCmd:
+   TIDAK dibungkus type:"cmd", jadi tidak pernah diteruskan ke UDP/ROV. */
+export function wsSend(obj) { _send(obj); }
 
 /* unduh frame <img> saat ini sebagai PNG. return false jika tak ada frame. */
 export function snapshotImage(img, prefix = "hydroship_snapshot") {
