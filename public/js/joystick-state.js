@@ -95,12 +95,21 @@ function readAssignedAxis(label) {
 
   let v = normalizeAxis(joystickState.rawAxes[idx] ?? 0);
 
-  // kalau min > max, berarti dibalik
+  // Reverse jika Min > Max
   if (Number(row.min) > Number(row.max)) {
     v *= -1;
   }
 
-  return v;
+  const outMin = Number(row.min);
+  const outMax = Number(row.max);
+
+  const low = Math.min(outMin, outMax);
+  const high = Math.max(outMin, outMax);
+
+  const mapped =
+    low + ((v + 1) / 2) * (high - low);
+
+  return Math.round(mapped);
 }
 
 /* ========================= BUTTON HELPERS ========================= */
@@ -223,4 +232,6 @@ export function updateJoystickStateFromGamepad() {
   joystickState.mapped.sway  = readAssignedAxis("Axis Y");
   joystickState.mapped.yaw   = readAssignedAxis("Axis R");
   joystickState.mapped.heave = readAssignedAxis("Axis Z");
+
+  console.log("[MAPPED]", joystickState.mapped);
 }

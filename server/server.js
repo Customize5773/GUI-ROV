@@ -18,7 +18,6 @@ const fs = require("fs");
 const path = require("path");
 const { WebSocketServer } = require("ws");
 const recording = require("./recording");
-
 const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
 const UDP_IN   = parseInt(process.env.UDP_IN   || "14551", 10); // telemetry dari ROV
 const UDP_OUT  = parseInt(process.env.UDP_OUT  || "14550", 10); // command ke ROV
@@ -27,13 +26,32 @@ const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 
-/* Axis kontrol manual (persen -100..100). Divalidasi ulang sebelum diteruskan
-   ke Pi supaya input klien tidak bisa mengirim nilai di luar rentang. */
-const MOTION_AXES = new Set(["surge", "sway", "yaw", "heave"]);
-function clampPercent(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0;
-  return Math.max(-100, Math.min(100, Math.round(n)));
+const MOTION_AXES = new Set([
+    "surge",
+    "sway",
+    "yaw",
+    "heave"
+]);
+
+function clampAxis(name, value) {
+    let v = Number(value);
+
+    if (!Number.isFinite(v))
+        return 0;
+
+    switch (name) {
+
+        case "heave":
+            return Math.max(0, Math.min(1000, Math.round(v)));
+
+        case "surge":
+        case "sway":
+        case "yaw":
+            return Math.max(-1000, Math.min(1000, Math.round(v)));
+
+        default:
+            return v;
+    }
 }
 
 /* ======================= JOYSTICK CONFIG FILE ======================= */
@@ -433,13 +451,13 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
-    // ================= COMMAND KE ROV =================
+    // ================= COMMAND KE ROV ================f=
     if (msg.type === "cmd") {
       // Jangan percaya input klien mentah-mentah: clamp axis kontrol manual
       // (surge/sway/yaw/heave) ke rentang persen valid -100..100 sebelum
       // diteruskan. Pi yang mengubahnya ke MANUAL_CONTROL (-1000..1000 / 0..1000).
       if (MOTION_AXES.has(msg.name)) {
-        msg.value = clampPercent(msg.value);
+        msg.value = clampAxis(msg.name, msg.value);
       }
 
       // Tap command relevan-trajectory untuk rekaman (surge/sway/dll). Hanya
@@ -450,11 +468,19 @@ wss.on("connection", (ws, req) => {
       if (SIM) applySimCommand(msg.name, msg.value);
 
       // teruskan command ke Raspi via UDP
-      const packet = Buffer.from(JSON.stringify({
-        name: msg.name,
-        value: msg.value,
-        t: Date.now()
-      }));
+      let command = {
+          name: msg.name,
+          value: msg.value,
+          t: Date.now()
+      };
+
+      if (msg.name === "thruster_config") {
+          command.motors = msg.motors;
+      }
+
+      const packet = Buffer.from(JSON.stringify(command));
+
+      console.log("[SERVER BEFORE UDP]", msg.name, msg.value);
 
       udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
         if (e) console.warn("[UDP] gagal kirim command:", e.message);

@@ -2,7 +2,7 @@
 // Tiap kartu fungsional: nilai disimpan ke CONFIG + localStorage dan dikirim ke
 // ROV via sendCmd. Termasuk identitas tim (tampil di header).
 import { CONFIG } from "../config.js";
-import { log, sendCmd } from "../core.js";
+import { log, sendCmd, wsSend } from "../core.js";
 
 const LS_KEY = "hydroship-setup";
 
@@ -185,12 +185,26 @@ export const setupPage = {
       const gain = parseInt(root.querySelector("#suGain").value, 10);
       if (![min, neu, max].every(Number.isFinite) || !(min < neu && neu < max)) { log("PWM tidak valid (Min < Neutral < Max)", "warn"); return; }
       Object.assign(CONFIG.THRUSTER, {
-        frame: root.querySelector("#suFrame").value, pwmMin: min, pwmNeutral: neu, pwmMax: max,
-        gain: Math.max(0, Math.min(200, gain || 100)),
-        reversed: [...revWrap.children].map((b) => b.getAttribute("aria-pressed") === "true"),
+          pwmMin: min,
+          pwmNeutral: neu,
+          pwmMax: max,
+          gain: Math.max(0, Math.min(200, gain || 100)),
+          reversed: [...revWrap.children].map((b) => b.getAttribute("aria-pressed") === "true"),
       });
       saveSetup();
-      sendCmd("thruster_config", CONFIG.THRUSTER);
+      const motors = {};
+
+      CONFIG.THRUSTER.reversed.forEach((rev, index) => {
+          motors[String(index + 1)] = rev ? -1 : 1;
+      });
+
+      wsSend({
+          type: "cmd",
+          name: "thruster_config",
+          motors
+      });
+
+      log("Thruster configuration dikirim", "ok");
       log(`Thruster config dikirim — ${CONFIG.THRUSTER.frame}, gain ${CONFIG.THRUSTER.gain}%`, "ok");
     };
 

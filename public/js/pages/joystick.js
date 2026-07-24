@@ -123,7 +123,15 @@ function axisBarStyle(v) {
 function axisPreviewValue(raw, row) {
   let v = normalizeAxis(raw);
   if (Number(row.min) > Number(row.max)) v *= -1;
-  return v;
+  const outMin = Number(row.min);
+  const outMax = Number(row.max);
+
+  const mapped =
+      outMin +
+      ((v + 1) / 2) *
+      (outMax - outMin);
+
+  return Math.round(mapped);
 }
 
 function getAxisAssignedOptions(current) {
@@ -749,7 +757,7 @@ function patchLiveJoystickUI() {
     const barEl = tr.querySelector(".joy-axis-bar");
 
     if (valueEl) valueEl.textContent = val.toFixed(2);
-    if (subValueEl) subValueEl.textContent = (val * 1000).toFixed(2);
+    if (subValueEl) subValueEl.textContent = mappedValue.toFixed(0);
     if (barEl) barEl.style.cssText = barStyle;
   });
 

@@ -685,11 +685,14 @@ function setAxis(name, value, live = false) {
 Object.entries(axisEls).forEach(([name, el]) => {
   if (!el) return;
   el.addEventListener("change", () => {
-    // batasi entri manual ke rentang perintah valid −100..100
-    const v = Math.max(-100, Math.min(100, Math.round(Number(el.value) || 0)));
-    el.value = String(v);
-    if (name in pilotAxes) pilotAxes[name] = v;
-    sendCmd(name, v);
+      const v = Math.round(Number(el.value) || 0);
+
+      el.value = String(v);
+
+      if (name in pilotAxes)
+          pilotAxes[name] = v;
+
+      sendCmd(name, v);
   });
 });
 
@@ -727,30 +730,18 @@ window.addEventListener("keyup", (e) => {
    dashboard masih Keyboard. */
 const GP_DEADZONE = 0.12;
 
-function clamp100(v) {
-  return Math.max(-100, Math.min(100, Math.round(v)));
-}
-
-function axisToPercent(v) {
-  const n = Number(v) || 0;
-  if (Math.abs(n) < GP_DEADZONE) return 0;
-
-  const sign = Math.sign(n);
-  const mag = Math.abs(n);
-
-  // remap setelah deadzone
-  const scaled = (mag - GP_DEADZONE) / (1 - GP_DEADZONE);
-  return clamp100(sign * scaled * 100);
+function clamp(v, min, max) {
+    return Math.max(min, Math.min(max, Math.round(v)));
 }
 
 function getMappedJoystickAxes() {
   updateJoystickStateFromGamepad();
 
   return {
-    surge: axisToPercent(joystickState.mapped.surge),
-    sway:  axisToPercent(joystickState.mapped.sway),
-    yaw:   axisToPercent(joystickState.mapped.yaw),
-    heave: axisToPercent(joystickState.mapped.heave),
+    surge: joystickState.mapped.surge,
+    sway:  joystickState.mapped.sway,
+    yaw:   joystickState.mapped.yaw,
+    heave: joystickState.mapped.heave,
   };
 }
 
@@ -999,11 +990,13 @@ function pollGamepad() {
 
   /* ================= AXIS ================= */
   const next = {
-    surge: axisToPercent(joystickState.mapped.surge),
-    sway:  axisToPercent(joystickState.mapped.sway),
-    yaw:   axisToPercent(joystickState.mapped.yaw),
-    heave: axisToPercent(joystickState.mapped.heave),
+      surge: joystickState.mapped.surge,
+      sway:  joystickState.mapped.sway,
+      yaw:   joystickState.mapped.yaw,
+      heave: joystickState.mapped.heave,
   };
+
+  console.log("[APP]", next);
 
   let changed = false;
   for (const a of ["surge", "sway", "yaw", "heave"]) {
