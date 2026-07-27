@@ -153,6 +153,7 @@ class TelemetryReceiver:
 
     def __init__(self, host='0.0.0.0', port=14552):
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self._sock.bind((host, port))
         self._sock.settimeout(0.5)
         self._data = {'depth': 0.0, 'heading': 0.0, 'roll': 0.0, 'pitch': 0.0}
@@ -193,6 +194,7 @@ class CommandSender:
         self._host = host
         self._port = port
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     def _emit(self, name, value):
         """Kirim SATU command {name,value} — format yang dipahami rov_link/server.js."""
@@ -274,6 +276,12 @@ class Mission5FSM:
         self._hang_used_fallback = False  # instrumentasi: HANG jatuh ke fallback timed?
         self._dock_used_fallback = False  # instrumentasi: DOCK jatuh ke fallback timed?
 
+        # Telemetri live untuk GUI (dibaca rov_link.py, diteruskan sbg field "mission5").
+        self.telemetry_out = {
+            'state': self._state.name, 'active_cam': None,
+            'distance_z': None, 'offset_x': None, 'offset_y': None,
+        }
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self, start_state: State = State.DIVE, wait_mode: bool = True):
@@ -326,6 +334,7 @@ class Mission5FSM:
     def _loop(self):
         while self._running and self._state not in (State.DONE, State.ABORT):
             telem = self.telem.get()
+            self.telemetry_out['state'] = self._state.name
 
             # Handoff GUI: bila operator kembalikan ke MANUAL saat autonomous → abort.
             if self._require_auto and telem.get('mode') == 'manual':
@@ -657,16 +666,19 @@ class Mission5FSM:
         """Satu langkah visual servo dari deteksi QR. PBVS (pose 3D) bila ada, IBVS bila tidak.
         Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Dipakai M5_DOCK & M5_ENGAGE (hold x/y)."""
         pose = det.get('pose')
+        self.telemetry_out['active_cam'] = 'BOTTOM'
         if pose is not None:                       # PBVS — pose 3D (m) bila terkalibrasi
             out = self.pose_servo.step(pose['x'], pose['y'], pose['z'],
                                        pose.get('yaw_deg', 0.0), dt=0.1)
             log.debug("[FSM] servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
                       pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
+            self.telemetry_out.update(distance_z=out.z, offset_x=out.x, offset_y=out.y)
             return out, 'PBVS'
         cx, cy = det['center']                     # IBVS — fallback error piksel
         out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
         log.debug("[FSM] servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
                   out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
+        self.telemetry_out.update(distance_z=None, offset_x=out.ex, offset_y=out.ey)
         return out, 'IBVS'
 
     def _hook_servo_step(self, det):
@@ -674,16 +686,19 @@ class Mission5FSM:
         Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Reuse VisualServo/PoseServo — hanya instans &
         target khusus hook (lihat _servo_step untuk versi QR)."""
         pose = det.get('pose')
+        self.telemetry_out['active_cam'] = 'WALL'
         if pose is not None:                       # PBVS — pose 3D (m) bila kamera terkalibrasi
             out = self.hook_pose_servo.step(pose['x'], pose['y'], pose['z'],
                                             pose.get('yaw_deg', 0.0), dt=0.1)
             log.debug("[FSM] hook_servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
                       pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
+            self.telemetry_out.update(distance_z=out.z, offset_x=out.x, offset_y=out.y)
             return out, 'PBVS'
         cx, cy = det['center']                     # IBVS — fallback error piksel
         out = self.hook_servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
         log.debug("[FSM] hook_servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
                   out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
+        self.telemetry_out.update(distance_z=None, offset_x=out.ex, offset_y=out.ey)
         return out, 'IBVS'
 
     def _fresh_hook(self, max_age=0.5):

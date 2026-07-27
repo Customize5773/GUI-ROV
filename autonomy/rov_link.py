@@ -38,6 +38,9 @@ import time
 
 from pymavlink import mavutil
 
+from fsm.mission5 import Mission5FSM, State, CommandSender, TelemetryReceiver
+from vision.qr_detect import VisionPipeline
+
 # ───────────────────────── Konfigurasi yang perlu DIVERIFIKASI ke setup ArduSub kalian ──
 WATER_RHO = 997.0          # kg/m³ air tawar (kolam). Air laut ≈ 1025.
 G = 9.80665
@@ -55,6 +58,15 @@ LIGHT_PWM_OFF = 1100
 # Surge/sway/yaw: -1000..1000 dgn 0 = netral. VERIFIKASI arah/tanda saat uji SITL.
 Z_NEUTRAL = 500
 
+# Kill-switch: abaikan noise/jitter joystick fisik (mis. drift Logitech F310/DS4) di
+# bawah ambang ini (skala sama dgn axis GUI -100..100) agar tidak salah trigger abort
+# tepat setelah autonomy dimulai.
+KILL_SWITCH_DEADZONE = 15
+
+# Port lokal (loopback) tempat Mission5FSM menerima telemetri fan-out dari rov_link
+# selama misi otonom berjalan (lihat start_mission5 / extra_dests).
+FSM_TELEM_PORT_DEFAULT = 14552
+
 
 def clamp(v, lo, hi):
     return max(lo, min(hi, v))
@@ -70,6 +82,11 @@ class RovLink:
         self.surface_hpa = SURFACE_HPA_DEFAULT
         self.last_press_abs = SURFACE_HPA_DEFAULT   # tekanan absolut terbaru (utk set_surface)
         self.lock = threading.Lock()
+
+        # Mission5 FSM (misi 5 autonomous) — lihat start_mission5/stop_mission5.
+        self.mission5_fsm = None
+        self.mission5_thread = None
+        self.fsm_telem_port = getattr(args, "fsm_telem_port", FSM_TELEM_PORT_DEFAULT)
 
         # telemetri terbaru hasil parsing MAVLink
         self.telem = {
@@ -149,8 +166,17 @@ class RovLink:
             mavutil.mavlink.MAV_TYPE_GCS, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
 
     # ───────────────────────── Command dari GUI ─────────────────────────
-    def handle_command(self, name, value):
+    def handle_command(self, name, value, addr=None):
         if name in self.sp:                      # surge/sway/yaw/vert
+            # Kill-switch: axis nyata dari operator (bukan loopback CommandSender milik
+            # FSM sendiri) di atas deadzone, saat autonomous berjalan → override manual.
+            is_loopback = addr is not None and addr[0] in ("127.0.0.1", "::1")
+            if (self.control_mode == "autonomous" and not is_loopback
+                    and abs(float(value)) > KILL_SWITCH_DEADZONE):
+                print(f"[KILL-SWITCH] axis manual {name}={value} dari {addr} — abort autonomy")
+                self.control_mode = "manual"
+                self.set_mode("MANUAL")
+                self.stop_mission5()
             with self.lock:
                 self.sp[name] = float(value)
             return
@@ -177,6 +203,9 @@ class RovLink:
                 with self.lock:
                     for k in self.sp:
                         self.sp[k] = 0.0         # hold; FSM autonomy akan ambil alih nanti
+                self.start_mission5()
+            else:
+                self.stop_mission5()
         elif name == "set_surface":
             # tangkap tekanan absolut terbaru sebagai referensi depth = 0
             self.surface_hpa = self.last_press_abs
@@ -185,16 +214,62 @@ class RovLink:
             # mode/controller/thruster_config/pid/pool_depth/viewer_access → urusan GUI
             print(f"[CMD] (diabaikan di link) {name} = {value}")
 
+    # ───────────────────────── Mission5 FSM (misi 5 autonomous) ─────────────────────────
+    def start_mission5(self, vision_source=None, device=None):
+        """Spawn Mission5FSM sbg thread daemon in-process, bicara ke diri sendiri via
+        loopback UDP (protokol sama persis dgn tools/launch_sitl.py --fsm, hanya
+        diorkestrasi otomatis oleh toggle GUI, bukan proses terpisah)."""
+        if self.mission5_thread and self.mission5_thread.is_alive():
+            return
+        vision_source = vision_source or getattr(self.args, "fsm_vision_source", "usb")
+        device = self.args.fsm_vision_device if device is None else device
+        cmd = CommandSender(host="127.0.0.1", port=self.args.json_rx_port)
+        telem = TelemetryReceiver(host="0.0.0.0", port=self.fsm_telem_port)
+        vision = VisionPipeline(source=vision_source, device=device)
+        telem.start()
+        vision.start()
+        fsm = Mission5FSM(cmd=cmd, telem=telem, vision=vision)
+        self.mission5_fsm = fsm
+        dest = ("127.0.0.1", self.fsm_telem_port)
+        if dest not in self.extra_dests:
+            self.extra_dests.append(dest)
+
+        def _run():
+            try:
+                fsm.start(start_state=State.M5_REDIVE, wait_mode=False)
+            finally:
+                vision.stop()
+                telem.stop()
+                cmd.close()
+
+        self.mission5_thread = threading.Thread(target=_run, daemon=True)
+        self.mission5_thread.start()
+        print("[M5] Mission5 FSM dimulai (thread)")
+
+    def stop_mission5(self):
+        fsm, thread = self.mission5_fsm, self.mission5_thread
+        if fsm is None:
+            return
+        fsm.abort()   # failsafe + disarm; TIDAK menyentuh gripper (lihat PLAN §1)
+        if thread:
+            thread.join(timeout=2)
+        dest = ("127.0.0.1", self.fsm_telem_port)
+        if dest in self.extra_dests:
+            self.extra_dests.remove(dest)
+        self.mission5_fsm = None
+        self.mission5_thread = None
+        print("[M5] Mission5 FSM dihentikan")
+
     # ───────────────────────── Loop-loop ─────────────────────────
     def loop_rx_json(self):
         print(f"[JSON] dengar command di :{self.args.json_rx_port}")
         while True:
-            data, _ = self.rx.recvfrom(2048)
+            data, addr = self.rx.recvfrom(2048)
             try:
                 msg = json.loads(data.decode())
             except ValueError:
                 continue
-            self.handle_command(msg.get("name"), msg.get("value"))
+            self.handle_command(msg.get("name"), msg.get("value"), addr)
 
     def loop_mavlink_rx(self):
         while True:
@@ -231,6 +306,8 @@ class RovLink:
                 self.telem["mode"] = self.control_mode
             out = dict(self.telem)
             out["ts"] = time.time()
+            if self.mission5_fsm is not None:
+                out["mission5"] = dict(self.mission5_fsm.telemetry_out)
             payload = json.dumps(out).encode()
             self.tx.sendto(payload, (self.args.server, self.args.telem_port))
             for host, port in self.extra_dests:
@@ -263,6 +340,11 @@ def main():
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14555", help="endpoint MAVLink ke vehicle/SITL/mock")
     ap.add_argument("--baud", type=int, default=115200, help="baud (jika serial, mis. /dev/ttyACM0)")
     ap.add_argument("--hb-timeout", type=int, default=10, help="detik menunggu heartbeat vehicle sebelum menyerah")
+    ap.add_argument("--fsm-telem-port", type=int, default=FSM_TELEM_PORT_DEFAULT,
+                     help="port loopback tempat Mission5FSM in-process menerima telemetri (auto-dikelola oleh toggle GUI)")
+    ap.add_argument("--fsm-vision-source", default="usb", choices=["mock", "usb", "rtsp"],
+                     help="sumber video Mission5FSM saat autonomy dimulai dari GUI")
+    ap.add_argument("--fsm-vision-device", type=int, default=0, help="index USB webcam utk Mission5FSM (jika --fsm-vision-source usb)")
     args = ap.parse_args()
     RovLink(args).run()
 

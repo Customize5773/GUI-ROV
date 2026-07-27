@@ -36,6 +36,8 @@ const els = {
   ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
   axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axHeave: $("axHeave"),
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
+  mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
+  mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -256,12 +258,38 @@ function applyTelemetry(d) {
   if (typeof d.armed === "boolean") confirmArm(d.armed);
   if (typeof d.light === "boolean") confirmLight(d.light);
 
+  applyMission5(d.mission5);
+
   // teruskan sampel ke modul halaman yang sudah di-init (buffering murah;
   // render sebenarnya digerbang oleh onShow/onHide)
   for (const name of initedModules) {
     const m = pageModules[name];
     if (m && m.onTelemetry) { try { m.onTelemetry(d); } catch (e) {} }
   }
+}
+
+/* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
+function applyMission5(m5) {
+  if (!els.mission5State) return;
+  if (!m5) {
+    els.mission5State.textContent = "IDLE";
+    els.mission5State.className = "badge";
+    els.mission5Cam.textContent = "—";
+    els.mission5Z.textContent = "—";
+    els.mission5OffX.textContent = "—";
+    els.mission5OffY.textContent = "—";
+    return;
+  }
+  const state = m5.state || "IDLE";
+  els.mission5State.textContent = state;
+  els.mission5State.className =
+    state === "ABORT" ? "badge badge--fault" :
+    state === "DONE" ? "badge badge--ok" :
+    state === "IDLE" ? "badge" : "badge badge--active";
+  els.mission5Cam.textContent = m5.active_cam ? `CAM ${m5.active_cam === "BOTTOM" ? "0: BOTTOM" : "1: WALL"}` : "—";
+  els.mission5Z.textContent = num(m5.distance_z, 2);
+  els.mission5OffX.textContent = num(m5.offset_x, 1);
+  els.mission5OffY.textContent = num(m5.offset_y, 1);
 }
 
 function reflectArm(on) {
