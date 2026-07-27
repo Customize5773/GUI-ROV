@@ -61,9 +61,9 @@ export const setupPage = {
             <h3 class="card__title">Bottom &amp; Wall Cameras</h3>
             <p class="card__desc">URL stream MJPEG/WebRTC dari Raspberry Pi.</p>
             <label class="field field--grow"><span>CAM 1 — BOTTOM</span>
-              <input id="suCam0" type="text" placeholder="http://192.168.2.2:8080/?action=stream" value="${(CONFIG.CAMERAS[0]||{}).url || ""}" /></label>
+              <input id="suCam0" type="text" placeholder="http://192.168.2.2:8080/stream" value="${(CONFIG.CAMERAS[0]||{}).url || ""}" /></label>
             <label class="field field--grow"><span>CAM 2 — WALL</span>
-              <input id="suCam1" type="text" placeholder="http://192.168.2.3:8080/?action=stream" value="${(CONFIG.CAMERAS[1]||{}).url || ""}" /></label>
+              <input id="suCam1" type="text" placeholder="http://192.168.2.3:8080/stream" value="${(CONFIG.CAMERAS[1]||{}).url || ""}" /></label>
             <div class="card__row">
               <button class="btn-wide btn-wide--inline" id="suApplyCam">Apply</button>
               <button class="chip" id="suOpenCam">Open Camera Page</button>

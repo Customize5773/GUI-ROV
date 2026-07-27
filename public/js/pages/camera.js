@@ -112,16 +112,13 @@ export const cameraPage = {
       wrap.className = "camcfg__row";
       wrap.innerHTML = `
         <label class="field field--grow"><span>${c.id} — ${c.role || ""} URL</span>
-          <input id="camUrl${i}" type="text" placeholder="http://192.168.2.2:8080/?action=stream" value="${c.url || ""}" />
+          <input id="camUrl${i}" type="text" placeholder="http://192.168.2.2:8080/stream" value="${c.url || ""}" />
         </label>
         <button class="btn-wide btn-wide--inline" data-apply="${i}">Apply</button>`;
       cfg.appendChild(wrap);
       wrap.querySelector(`[data-apply="${i}"]`).onclick = () => {
         const url = wrap.querySelector(`#camUrl${i}`).value.trim();
         c.url = url;
-        if (i === 0) { CONFIG.CAMERA_URL = url; window.dispatchEvent(new Event("hydroship:camera-url")); }
-        if (this.streaming && url) this.els.cells[i].img.src = camProxy(url);
-        log(`URL ${c.id} (${c.role}) diset`, "ok");
       };
     });
 
@@ -229,15 +226,48 @@ export const cameraPage = {
   },
 
   _toggleStream() {
-    this.streaming = !this.streaming;
-    this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";
-    this.els.state.classList.toggle("badge--active", this.streaming);
-    (CONFIG.CAMERAS || []).forEach((c, i) => {
-      const cell = this.els.cells[i];
-      if (this.streaming && c.url) { cell.img.src = camProxy(c.url); }
-      else { cell.img.removeAttribute("src"); cell.no.style.display = "flex"; }
-    });
-    log(this.streaming ? "Stream kamera dimulai" : "Stream kamera dihentikan", this.streaming ? "ok" : "warn");
+      console.log("Start Stream diklik");
+
+      console.log(CONFIG.CAMERAS);
+
+      (CONFIG.CAMERAS || []).forEach((c, i) => {
+          console.log("Camera", i, c);
+
+          const url = camProxy(c.url);
+
+          console.log("Proxy =", url);
+
+          const cell = this.els.cells[i];
+
+          if (this.streaming && c.url) {
+              cell.img.src = url;
+              console.log("IMG =", cell.img.src);
+          }
+      });
+
+      this.streaming = !this.streaming;
+
+      console.log("CONFIG CAMERAS =", CONFIG.CAMERAS);
+
+      this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";
+
+      (CONFIG.CAMERAS || []).forEach((c, i) => {
+
+          console.log("Camera", i, c);
+
+          const url = camProxy(c.url);
+
+          console.log("URL =", url);
+
+          const cell = this.els.cells[i];
+
+          if (this.streaming && c.url) {
+              cell.img.src = url;
+              console.log("IMG SRC =", cell.img.src);
+          } else {
+              cell.img.removeAttribute("src");
+          }
+      });
   },
 
   /* loop scan QR dari kamera BOTTOM (indeks 0) */
