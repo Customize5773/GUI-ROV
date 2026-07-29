@@ -86,6 +86,23 @@ function findConfigByAssigned(label) {
   return joystickState.axisConfig.find((row) => row.assigned === label);
 }
 
+/* Satu-satunya sumber kebenaran untuk mapping axis mentah -> nilai keluaran.
+   Dipakai runtime (readAssignedAxis) maupun preview di halaman joystick,
+   supaya angka yang dilihat operator persis sama dengan yang dikirim. */
+export function mapAxisValue(raw, row) {
+  let v = normalizeAxis(raw);
+
+  // Reverse jika Min > Max
+  if (Number(row.min) > Number(row.max)) {
+    v *= -1;
+  }
+
+  const low = Math.min(Number(row.min), Number(row.max));
+  const high = Math.max(Number(row.min), Number(row.max));
+
+  return Math.round(low + ((v + 1) / 2) * (high - low));
+}
+
 function readAssignedAxis(label) {
   const row = findConfigByAssigned(label);
   if (!row) return 0;
@@ -93,23 +110,7 @@ function readAssignedAxis(label) {
   const idx = parseAxisIndex(row.input);
   if (idx < 0) return 0;
 
-  let v = normalizeAxis(joystickState.rawAxes[idx] ?? 0);
-
-  // Reverse jika Min > Max
-  if (Number(row.min) > Number(row.max)) {
-    v *= -1;
-  }
-
-  const outMin = Number(row.min);
-  const outMax = Number(row.max);
-
-  const low = Math.min(outMin, outMax);
-  const high = Math.max(outMin, outMax);
-
-  const mapped =
-    low + ((v + 1) / 2) * (high - low);
-
-  return Math.round(mapped);
+  return mapAxisValue(joystickState.rawAxes[idx] ?? 0, row);
 }
 
 /* ========================= BUTTON HELPERS ========================= */
@@ -232,6 +233,4 @@ export function updateJoystickStateFromGamepad() {
   joystickState.mapped.sway  = readAssignedAxis("Axis Y");
   joystickState.mapped.yaw   = readAssignedAxis("Axis R");
   joystickState.mapped.heave = readAssignedAxis("Axis Z");
-
-  console.log("[MAPPED]", joystickState.mapped);
 }

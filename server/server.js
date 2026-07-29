@@ -41,12 +41,13 @@ function clampAxis(name, value) {
 
     switch (name) {
 
-        case "heave":
-            return Math.max(0, Math.min(1000, Math.round(v)));
-
+        // Keempat axis memakai konvensi GUI yang sama: -1000..1000, 0 = diam.
+        // Konversi heave ke MANUAL_CONTROL.z ArduSub (0..1000, 500 = diam)
+        // dilakukan di rov_agent.py (to_mavlink_z), bukan di sini.
         case "surge":
         case "sway":
         case "yaw":
+        case "heave":
             return Math.max(-1000, Math.min(1000, Math.round(v)));
 
         default:
@@ -451,11 +452,10 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
-    // ================= COMMAND KE ROV ================f=
+    // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
       // Jangan percaya input klien mentah-mentah: clamp axis kontrol manual
-      // (surge/sway/yaw/heave) ke rentang persen valid -100..100 sebelum
-      // diteruskan. Pi yang mengubahnya ke MANUAL_CONTROL (-1000..1000 / 0..1000).
+      // (surge/sway/yaw/heave) ke -1000..1000 sebelum diteruskan.
       if (MOTION_AXES.has(msg.name)) {
         msg.value = clampAxis(msg.name, msg.value);
       }
@@ -479,8 +479,6 @@ wss.on("connection", (ws, req) => {
       }
 
       const packet = Buffer.from(JSON.stringify(command));
-
-      console.log("[SERVER BEFORE UDP]", msg.name, msg.value);
 
       udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
         if (e) console.warn("[UDP] gagal kirim command:", e.message);
