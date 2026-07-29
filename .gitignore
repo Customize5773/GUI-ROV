@@ -23,3 +23,6 @@ dataset.zip
 
 # Model 3D besar
 public/models/rov.obj
+
+# kilo-plan
+.kilo/plans/1785358205267-attitude-stabilization-plan.md
