@@ -454,7 +454,6 @@ wss.on("connection", (ws, req) => {
 
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
-<<<<<<< HEAD
       /* ================= MANIPULATOR ================= */
 
       if (msg.name === "manipulator") {
@@ -470,10 +469,6 @@ wss.on("connection", (ws, req) => {
           return;
       }
       
-=======
-      // Jangan percaya input klien mentah-mentah: clamp axis kontrol manual
-      // (surge/sway/yaw/heave) ke -1000..1000 sebelum diteruskan.
->>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
       if (MOTION_AXES.has(msg.name)) {
         msg.value = clampAxis(msg.name, msg.value);
       }

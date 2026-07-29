@@ -980,8 +980,6 @@ function processMappedGamepadButtons() {
     const falling = !current && prev;
 
     if (row.mode === "hold") {
-<<<<<<< HEAD
-
 
       // hanya sekali saat tombol mulai ditekan
       if (rising) {
@@ -996,18 +994,6 @@ function processMappedGamepadButtons() {
     }
   
     else {
-=======
-      // selama tombol ditekan, kirim terus command hold
-      if (current) {
-        executeJoystickAction(row.action, "hold");
-      }
-
-      // saat tombol dilepas, kirim stop sekali
-      if (falling) {
-        executeJoystickRelease(row.action);
-      }
-    } else {
->>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
       // toggle = sekali saat rising edge
       if (rising) {

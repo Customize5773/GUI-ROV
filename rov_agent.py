@@ -76,10 +76,7 @@ joystick_lock = threading.Lock()
 def send_telemetry():
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
-<<<<<<< HEAD
     print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
-=======
->>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
 def normalize_heading(deg):
     if deg < 0:
@@ -134,16 +131,9 @@ def command_listener():
 
         name = msg.get("name")
         value = msg.get("value")
-<<<<<<< HEAD
         device = msg.get("device")
         action = msg.get("action")
         direction = msg.get("direction")
-=======
-
-        # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console
-        if name not in AXIS_RANGE:
-            print(f"[CMD] {name} = {value} from {addr}")
->>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
         print(f"[CMD] {name} = {value} from {addr}")
         
@@ -252,14 +242,9 @@ def command_listener():
             elif name == "thruster_config":
 
                 motors = msg.get("motors", {})
-<<<<<<< HEAD
                 print("[DEBUG] Motors received:", motors)
 
                 for motor, motor_direction in motors.items():
-=======
-
-                for motor, direction in motors.items():
->>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
                     motor = int(motor)
                     motor_direction = int(motor_direction)
