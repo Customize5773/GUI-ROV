@@ -453,9 +453,21 @@ wss.on("connection", (ws, req) => {
 
     // ================= COMMAND KE ROV ================f=
     if (msg.type === "cmd") {
-      // Jangan percaya input klien mentah-mentah: clamp axis kontrol manual
-      // (surge/sway/yaw/heave) ke rentang persen valid -100..100 sebelum
-      // diteruskan. Pi yang mengubahnya ke MANUAL_CONTROL (-1000..1000 / 0..1000).
+      /* ================= MANIPULATOR ================= */
+
+      if (msg.name === "manipulator") {
+
+          const packet = Buffer.from(JSON.stringify(msg));
+
+          console.log("[MANIPULATOR]", msg);
+
+          udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
+              if (e) console.warn("[UDP] gagal kirim manipulator:", e.message);
+          });
+
+          return;
+      }
+      
       if (MOTION_AXES.has(msg.name)) {
         msg.value = clampAxis(msg.name, msg.value);
       }

@@ -43,6 +43,20 @@ state = {
 
 master = None
 
+# =========================
+# Manipulator Servo
+# =========================
+SERVO_GRIP = 7
+SERVO_ROTATE = 8
+
+PWM_STOP  = 1500
+
+PWM_OPEN  = 1900
+PWM_CLOSE = 1100
+
+PWM_LEFT  = 1100
+PWM_RIGHT = 1900
+
 joystick = {
     "surge": 0,
     "sway": 0,
@@ -56,10 +70,36 @@ def send_telemetry():
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
     print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+
 def normalize_heading(deg):
     if deg < 0:
         deg += 360.0
     return deg % 360.0
+
+# =========================
+# Servo Output
+# =========================
+def set_servo(channel, pwm):
+    global master
+
+    if master is None:
+        return
+
+    try:
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+            0,
+            channel,    # Servo channel
+            pwm,        # PWM
+            0, 0, 0, 0, 0
+        )
+
+        print(f"[SERVO] CH={channel} PWM={pwm}")
+
+    except Exception as e:
+        print(f"[SERVO] ERROR: {e}")    
 
 # =========================
 # Command handler dari laptop
@@ -85,14 +125,73 @@ def command_listener():
 
         name = msg.get("name")
         value = msg.get("value")
-        print(f"[CMD] {name} = {value} from {addr}")
-        print("FULL CMD =", msg)
+        device = msg.get("device")
+        action = msg.get("action")
+        direction = msg.get("direction")
 
+        print(f"[CMD] {name} = {value} from {addr}")
+        
         if master is None:
             print("[CMD] Pixhawk not connected yet")
             continue
 
         try:
+            if name == "manipulator":
+
+                # Validasi
+                if device not in ("grip", "rotate"):
+                    print(f"[MANIPULATOR] Unknown device: {device}")
+                    continue
+
+                if action not in ("start", "stop"):
+                    print(f"[MANIPULATOR] Unknown action: {action}")
+                    continue
+
+                if direction not in ("open", "close", "left", "right", None):
+                    print(f"[MANIPULATOR] Unknown direction: {direction}")
+                    continue
+
+                print(
+                    f"[MANIPULATOR] "
+                    f"device={device} "
+                    f"action={action} "
+                    f"direction={direction}"
+                )
+
+                # =========================
+                # GRIP
+                # =========================
+                if device == "grip":
+
+                    if action == "start":
+
+                        if direction == "open":
+                            set_servo(SERVO_GRIP, PWM_OPEN)
+
+                        elif direction == "close":
+                            set_servo(SERVO_GRIP, PWM_CLOSE)
+
+                    elif action == "stop":
+                        set_servo(SERVO_GRIP, PWM_STOP)
+
+                # =========================
+                # ROTATE
+                # =========================
+                elif device == "rotate":
+
+                    if action == "start":
+
+                        if direction == "left":
+                            set_servo(SERVO_ROTATE, PWM_LEFT)
+
+                        elif direction == "right":
+                            set_servo(SERVO_ROTATE, PWM_RIGHT)
+
+                    elif action == "stop":
+                        set_servo(SERVO_ROTATE, PWM_STOP)
+
+                continue
+            
             if name == "arm":
                 if value:
                     print("[MAV] ARM")
@@ -137,22 +236,26 @@ def command_listener():
 
                 motors = msg.get("motors", {})
                 print("[DEBUG] Motors received:", motors)
-                
-                for motor, direction in motors.items():
+
+                for motor, motor_direction in motors.items():
 
                     motor = int(motor)
-                    direction = int(direction)
+                    motor_direction = int(motor_direction)
+
                     param = f"MOT_{motor}_DIRECTION"
-                    print(f"[PARAM] {param} -> {direction}")
+
+                    print(f"[PARAM] {param} -> {motor_direction}")
 
                     master.mav.param_set_send(
                         master.target_system,
                         master.target_component,
                         param.encode("utf-8"),
-                        float(direction),
+                        float(motor_direction),
                         mavutil.mavlink.MAV_PARAM_TYPE_INT8
                     )
+
                     time.sleep(0.1)
+
                 print("[PARAM] Thruster configuration updated.")
 
             elif name in ["surge", "sway", "yaw", "heave"]:
@@ -161,6 +264,7 @@ def command_listener():
             else:
                 print(f"[CMD] unknown command: {name}")
 
+        
         except Exception as e:
             print("[CMD] error executing command:", e)
 
@@ -215,6 +319,22 @@ def main():
     except Exception as e:
         print("[MAV] request_data_stream_send warning:", e)
 
+    # =========================
+    # Request AHRS2 (Depth)
+    # =========================
+    try:
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavutil.mavlink.MAVLINK_MSG_ID_AHRS2,
+            100000,      # 10 Hz (100000 µs)
+            0, 0, 0, 0, 0
+        )
+    except Exception as e:
+        print("[MAV] AHRS2 request warning:", e)
+
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
@@ -223,11 +343,25 @@ def main():
 
     while True:
         msg = master.recv_match(blocking=True, timeout=1)
-        if msg is not None and msg.get_type() == "STATUSTEXT":
-           print("[PIXHAWK]", msg.text)
 
         if msg is None:
             continue
+
+        # =========================
+        # DEBUG MAVLINK
+        # =========================
+        if msg.get_type() in [
+            "AHRS2",
+            "ALTITUDE",
+            "SCALED_PRESSURE",
+            "SCALED_PRESSURE2",
+            "SCALED_PRESSURE3",
+            "VFR_HUD"
+        ]:
+            print(msg)
+
+        if msg.get_type() == "STATUSTEXT":
+            print("[PIXHAWK]", msg.text)
 
         mtype = msg.get_type()
 
@@ -254,6 +388,15 @@ def main():
         elif mtype == "SYS_STATUS":
             if msg.voltage_battery != 65535:
                 state["voltage"] = msg.voltage_battery / 1000.0
+
+        # --------------------------------
+        # AHRS2 : Depth dari ArduSub (meter)
+        # --------------------------------
+        elif mtype == "AHRS2":
+            # altitude pada ArduSub bernilai negatif saat berada di bawah permukaan.
+            # Depth = -altitude
+            if hasattr(msg, "altitude"):
+                state["depth"] = max(0.0, -float(msg.altitude))
 
         # --------------------------------
         # HEARTBEAT: mode dan armed
