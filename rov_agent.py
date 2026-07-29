@@ -113,16 +113,45 @@ def command_listener():
                     master.arducopter_disarm()
 
             elif name == "control_mode":
-                # contoh mode umum ArduSub / ArduPilot:
-                # MANUAL, STABILIZE, ALT_HOLD, POSHOLD, GUIDED, dsb
-                mode = str(value).upper()
-                if mode in master.mode_mapping():
-                    mode_id = master.mode_mapping()[mode]
-                    master.set_mode(mode_id)
-                    print(f"[MAV] set mode {mode}")
-                else:
-                    print(f"[MAV] mode '{mode}' tidak ada di mode_mapping()")
 
+                global current_control_mode
+
+                current_control_mode = str(value).lower()
+
+                if current_control_mode not in ("manual", "autonomous"):
+                    print(f"[CONTROL] Unknown mode: {current_control_mode}")
+                    continue
+
+                print(f"[CONTROL] {current_control_mode}")
+
+            elif name == "pilot_mode":
+
+                mode = str(value).lower()
+
+                pilot_mode_map = {
+                    "manual": "MANUAL",
+                    "stabilize": "STABILIZE",
+                    "depth_hold": "ALT_HOLD",
+                }
+
+                if mode not in pilot_mode_map:
+                    print(f"[PILOT] Unknown mode: {mode}")
+                    continue
+
+                pixhawk_mode = pilot_mode_map[mode]
+
+                mode_mapping = master.mode_mapping() or {}
+
+                if pixhawk_mode not in mode_mapping:
+                    print(f"[PILOT] {pixhawk_mode} not supported")
+                    continue
+
+                master.set_mode(mode_mapping[pixhawk_mode])
+
+                print("====================================")
+                print(f" PILOT MODE : {pixhawk_mode}")
+                print("====================================")
+                
             elif name == "stop":
                 # Failsafe sederhana: disarm
                 print("[MAV] STOP -> DISARM")
