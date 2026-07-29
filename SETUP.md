@@ -5,7 +5,6 @@
 - Node.js ≥ 18 (server.js)
 - Python 3 (rov_agent.py di RPI)
 - Ethernet umbilical: laptop ↔ RPI, satu subnet (contoh: laptop `192.168.2.1`, RPI `192.168.2.2`)
-- Wireless **dilarang** (aturan KKI)
 
 ---
 
