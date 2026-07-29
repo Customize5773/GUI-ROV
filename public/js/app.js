@@ -362,7 +362,18 @@ function connect() {
     setLink("on"); log("Terhubung ke server", "ok"); stopDemo();
     sendPing();
   };
-  ws.onclose = () => { linkStale = false; setLink("off"); scheduleReconnect(); maybeDemo(); };
+  ws.onclose = () => {
+    linkStale = false;
+    setLink("off");
+    /* Link putus = GUI tidak lagi punya otoritas kontrol. Kunci E-Stop dan
+       netralkan axis lokal supaya saat WS tersambung lagi joystick tidak
+       langsung mengirim nilai lama; operator harus ARM ulang dulu. */
+    if (!estopLatched) log("Koneksi putus — joystick dikunci sampai ARM ulang", "warn");
+    estopLatched = true;
+    neutralizeGamepadAxes();
+    scheduleReconnect();
+    maybeDemo();
+  };
   ws.onerror = () => { log("Error koneksi WS", "err"); };
   ws.onmessage = (ev) => {
   let msg;
@@ -713,14 +724,10 @@ function setAxis(name, value, live = false) {
 Object.entries(axisEls).forEach(([name, el]) => {
   if (!el) return;
   el.addEventListener("change", () => {
-      const v = Math.round(Number(el.value) || 0);
-
-      el.value = String(v);
-
-      if (name in pilotAxes)
-          pilotAxes[name] = v;
-
-      sendCmd(name, v);
+    const v = clamp(Number(el.value) || 0, -1000, 1000);
+    el.value = String(v);
+    if (name in pilotAxes) pilotAxes[name] = v;
+    sendCmd(name, v);
   });
 });
 
@@ -759,7 +766,7 @@ window.addEventListener("keyup", (e) => {
 const GP_DEADZONE = 0.12;
 
 function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, Math.round(v)));
+  return Math.max(min, Math.min(max, Math.round(v)));
 }
 
 function getMappedJoystickAxes() {
@@ -771,14 +778,6 @@ function getMappedJoystickAxes() {
     yaw:   joystickState.mapped.yaw,
     heave: joystickState.mapped.heave,
   };
-}
-
-/* loop khusus untuk halaman joystick / panel tester
-   supaya status connected, axis preview, dan tester tombol tetap hidup
-   walaupun activeController belum dipilih ke Gamepad */
-function pollJoystickPanel() {
-  updateJoystickStateFromGamepad();
-  requestAnimationFrame(pollJoystickPanel);
 }
 
 function firstGamepad() {
@@ -814,6 +813,13 @@ let estopLatched = false;
 const GP_SEND_HZ = 15;
 const GP_SEND_INTERVAL = 1000 / GP_SEND_HZ;
 let gpLastSent = 0;
+
+/* Membaca navigator.getGamepads() mengalokasikan array baru tiap panggilan,
+   jadi tidak perlu dilakukan 60x/detik. 30 Hz sudah 2x laju kirim (15 Hz)
+   sehingga tidak menambah latensi yang terasa. */
+const GP_POLL_HZ = 30;
+const GP_POLL_INTERVAL = 1000 / GP_POLL_HZ;
+let gpLastPoll = 0;
 
 // status tombol fisik frame sebelumnya
 const gpBtnPrev = {};
@@ -853,22 +859,22 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= CONTROL MODE ================= */
     case "mode_manual": {
-  sendCmd("pilot_mode", "manual");
-  log("Pilot mode: MANUAL", "ok");
-  return;
-}
+      sendCmd("pilot_mode", "manual");
+      log("Pilot mode: MANUAL", "ok");
+      return;
+    }
 
-case "mode_stabilize": {
-  sendCmd("pilot_mode", "stabilize");
-  log("Pilot mode: STABILIZE", "ok");
-  return;
-}
+    case "mode_stabilize": {
+      sendCmd("pilot_mode", "stabilize");
+      log("Pilot mode: STABILIZE", "ok");
+      return;
+    }
 
-case "mode_depth_hold": {
-  sendCmd("pilot_mode", "depth_hold");
-  log("Pilot mode: DEPTH HOLD", "ok");
-  return;
-}
+    case "mode_depth_hold": {
+      sendCmd("pilot_mode", "depth_hold");
+      log("Pilot mode: DEPTH HOLD", "ok");
+      return;
+    }
 
     case "input_hold_set": {
       sendCmd("input_hold_set", true);
@@ -955,33 +961,22 @@ function processMappedGamepadButtons() {
     if (!Number.isInteger(btnIndex) || btnIndex < 0) continue;
 
     const current = !!joystickState.rawButtons?.[btnIndex]?.pressed;
-
-    if (current) {
-  console.log(
-    "[JOY]",
-    "layer =", layerName,
-    "button =", btnIndex,
-    "action =", row.action,
-    "mode =", row.mode
-  );
-}
-
     const prev = !!gpBtnPrev[btnIndex];
 
     const rising = current && !prev;
     const falling = !current && prev;
 
     if (row.mode === "hold") {
-  // selama tombol ditekan, kirim terus command hold
-  if (current) {
-    executeJoystickAction(row.action, "hold");
-  }
+      // selama tombol ditekan, kirim terus command hold
+      if (current) {
+        executeJoystickAction(row.action, "hold");
+      }
 
-  // saat tombol dilepas, kirim stop sekali
-  if (falling) {
-    executeJoystickRelease(row.action);
-  }
-} else {
+      // saat tombol dilepas, kirim stop sekali
+      if (falling) {
+        executeJoystickRelease(row.action);
+      }
+    } else {
       // toggle = sekali saat rising edge
       if (rising) {
         executeJoystickAction(row.action, "toggle");
@@ -997,6 +992,10 @@ function processMappedGamepadButtons() {
 
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
+
+  const nowPoll = performance.now();
+  if (nowPoll - gpLastPoll < GP_POLL_INTERVAL) return;
+  gpLastPoll = nowPoll;
 
   // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
   updateJoystickStateFromGamepad();
@@ -1018,13 +1017,11 @@ function pollGamepad() {
 
   /* ================= AXIS ================= */
   const next = {
-      surge: joystickState.mapped.surge,
-      sway:  joystickState.mapped.sway,
-      yaw:   joystickState.mapped.yaw,
-      heave: joystickState.mapped.heave,
+    surge: joystickState.mapped.surge,
+    sway:  joystickState.mapped.sway,
+    yaw:   joystickState.mapped.yaw,
+    heave: joystickState.mapped.heave,
   };
-
-  console.log("[APP]", next);
 
   let changed = false;
   for (const a of ["surge", "sway", "yaw", "heave"]) {
@@ -1063,10 +1060,9 @@ window.addEventListener("gamepaddisconnected", (e) => {
   }
 });
 
-/* penting:
-   - pollJoystickPanel = untuk halaman joystick / tester / mapping
-   - pollGamepad       = untuk kontrol thruster saat mode Gamepad aktif */
-requestAnimationFrame(pollJoystickPanel);
+/* Satu loop saja: pollGamepad menyegarkan joystickState (dipakai badge,
+   panel tester, dan kontrol thruster). Halaman joystick punya loop sendiri
+   saat di-mount, lihat pages/joystick.js. */
 requestAnimationFrame(pollGamepad);
 
 /* set surface level */
