@@ -122,10 +122,10 @@ Legenda: ✅ selesai · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · �
 
 **Joystick manual control (GUI, baru diimplementasikan — 2026-07-14):**
 - [x] Capture Gamepad API + deadzone + mapping axis (browser, sudah ada sebelumnya).
-- [x] Encoding **MANUAL_CONTROL** di Pi (`rov_agent.py` + `manual_control.py`, `pymavlink`);
+- [x] Encoding **MANUAL_CONTROL** di Pi (`rov_agent.py` + `rov_axes.py`, `pymavlink`);
       Node server hanya forward JSON + clamp axis (−100..100).
 - [x] Gating otoritas: joystick nonaktif saat mode Autonomous & terkunci saat E-Stop.
-- [x] Fail-safe: netral saat disconnect / idle > 0.5 s. Unit test `test_manual_control.py`.
+- [x] Fail-safe: netral saat disconnect / idle > 0.5 s. Unit test `test_rov_axes.py`.
 - [ ] **Butuh keputusan Rasya / uji hardware:** verifikasi tanda & skala sumbu (surge/sway/yaw/heave)
       cocok dengan orientasi thruster di kolam; bitmask tombol masih placeholder.
 

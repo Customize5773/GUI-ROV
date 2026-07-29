@@ -185,12 +185,24 @@
                   <label class="axis"><span class="axis__k">Yaw</span><input class="axis__v" id="axYaw" type="number" value="0" step="1" /></label>
                   <label class="axis"><span class="axis__k">Vertical</span><input class="axis__v" id="axHeave" type="number" value="0" step="1" /></label>
                 </div>
-                <div class="axes" role="group" aria-label="Gripper">
-                  <span class="axis__k">Gripper</span>
-                  <button class="ctrl" id="btnGripOpen" title="Buka gripper (H)"><span class="ctrl__led"></span> OPEN</button>
-                  <button class="ctrl" id="btnGripClose" title="Tutup gripper (G)"><span class="ctrl__led"></span> CLOSE</button>
-                </div>
                 <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
+              </div>
+            </section>
+
+            <!-- MISSION 5: PAYLOAD DOCKING/UNHOOK -->
+            <section class="panel panel--mission5">
+              <div class="panel__head">
+                <span class="panel__title">MISSION 5 — DOCKING</span>
+                <span class="badge" id="mission5State">IDLE</span>
+              </div>
+              <div class="readout"><span class="readout__k">CAM AKTIF</span><span class="readout__v readout__v--text" id="mission5Cam">—</span></div>
+              <div class="readout"><span class="readout__k">DISTANCE Z</span><span class="readout__v" id="mission5Z">—</span><span class="readout__u">m</span></div>
+              <div class="readout"><span class="readout__k">OFFSET X</span><span class="readout__v" id="mission5OffX">—</span><span class="readout__u">px</span></div>
+              <div class="readout"><span class="readout__k">OFFSET Y</span><span class="readout__v" id="mission5OffY">—</span><span class="readout__u">px</span></div>
+              <div class="axes" role="group" aria-label="Gripper">
+                <span class="axis__k">Gripper</span>
+                <button class="ctrl" id="btnGripOpen" title="Buka gripper (H)"><span class="ctrl__led"></span> OPEN</button>
+                <button class="ctrl" id="btnGripClose" title="Tutup gripper (G)"><span class="ctrl__led"></span> CLOSE</button>
               </div>
             </section>
 

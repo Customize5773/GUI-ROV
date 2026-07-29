@@ -528,10 +528,11 @@ body[data-theme="light"] .theme__icon::after {
 .grid {
   display: grid;
   grid-template-columns: 1.15fr 1.15fr 0.45fr;
-  grid-template-rows: 1fr 1fr;
+  grid-template-rows: 1fr 1fr auto;
   grid-template-areas:
     "attitude cam   depth"
-    "attitude cam   log";
+    "attitude cam   log"
+    "attitude cam   mission5";
   gap: var(--gap);
   min-height: 0;
 }
@@ -576,6 +577,8 @@ body[data-theme="light"] .theme__icon::after {
 .panel--cam      { grid-area: cam; }
 .panel--depth    { grid-area: depth; }
 .panel--log      { grid-area: log; }
+.panel--mission5 { grid-area: mission5; padding: 14px 16px; gap: 10px; }
+.panel--mission5 .readout__v--text { font-size: 15px; letter-spacing: .5px; }
 
 .panel {
   position: relative;
@@ -983,10 +986,11 @@ body.pseudo-fs-lock { overflow: hidden; }
   .strip { grid-template-columns: repeat(4, 1fr); }
   .grid {
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto 320px;
+    grid-template-rows: auto 320px auto;
     grid-template-areas:
       "attitude cam"
-      "depth    log";
+      "depth    log"
+      "mission5 mission5";
   }
   .panel--attitude, .panel--cam { min-height: 560px; }
 }
@@ -1035,7 +1039,7 @@ body.pseudo-fs-lock { overflow: hidden; }
   .grid {
     grid-template-columns: 1fr;
     grid-template-rows: none;
-    grid-template-areas: "attitude" "cam" "depth" "log";
+    grid-template-areas: "attitude" "cam" "depth" "log" "mission5";
   }
   .panel--attitude, .panel--cam { min-height: 300px; }
 }
