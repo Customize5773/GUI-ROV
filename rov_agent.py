@@ -6,6 +6,7 @@ import math
 from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, to_mavlink_z
+from attitude_filter import AttitudeFilter
 
 # =========================
 # Konfigurasi jaringan
@@ -44,6 +45,11 @@ state = {
 }
 
 master = None
+
+# Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
+# attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
+attitude_filter = AttitudeFilter()
+prev_attitude_ts = None
 
 joystick = {
     "surge": 0,
@@ -223,7 +229,7 @@ def joystick_sender():
 # Main koneksi Pixhawk
 # =========================
 def main():
-    global master
+    global master, prev_attitude_ts
 
     print(f"[MAV] Connecting to Pixhawk on {PIXHAWK_PORT} @ {PIXHAWK_BAUD} ...")
     master = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
@@ -265,14 +271,22 @@ def main():
         # ATTITUDE: roll, pitch, yaw
         # --------------------------------
         if mtype == "ATTITUDE":
-            state["roll"] = math.degrees(msg.roll)
-            state["pitch"] = math.degrees(msg.pitch)
-            yaw_deg = math.degrees(msg.yaw)
-            state["heading"] = normalize_heading(yaw_deg)
+            now_ts = msg._timestamp
+            dt = (now_ts - prev_attitude_ts) if prev_attitude_ts is not None else 0.1
+            roll_f, pitch_f, yaw_f = attitude_filter.update(
+                math.degrees(msg.roll),
+                math.degrees(msg.pitch),
+                normalize_heading(math.degrees(msg.yaw)),
+                math.degrees(msg.rollspeed),
+                math.degrees(msg.pitchspeed),
+                math.degrees(msg.yawspeed),
+                dt,
+            )
+            state["roll"] = roll_f
+            state["pitch"] = pitch_f
+            state["heading"] = yaw_f
+            prev_attitude_ts = now_ts
 
-        # --------------------------------
-        # VFR_HUD: heading kadang tersedia di sini juga
-        # --------------------------------
         # --------------------------------
         # COMMAND_ACK: hasil ARM/DISARM dsb.
         # Ditangani di sini (bukan di command_listener) supaya thread command
@@ -281,9 +295,9 @@ def main():
         elif mtype == "COMMAND_ACK":
             print(f"[MAV] ACK cmd={msg.command} result={msg.result}")
 
-        elif mtype == "VFR_HUD":
-            if hasattr(msg, "heading"):
-                state["heading"] = float(msg.heading)
+        # VFR_HUD.heading sengaja tidak dipakai: ATTITUDE (via attitude_filter)
+        # adalah satu-satunya sumber heading, supaya heading yang sudah
+        # difilter tidak ditimpa nilai mentah.
 
         # --------------------------------
         # SYS_STATUS: tegangan baterai
