@@ -37,6 +37,8 @@ const els = {
   ctrlTitle: $("ctrlTitle"), ctrlBadge: $("ctrlBadge"),
   axSurge: $("axSurge"), axSway: $("axSway"), axYaw: $("axYaw"), axHeave: $("axHeave"),
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
+  mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
+  mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -258,12 +260,38 @@ function applyTelemetry(d) {
   if (typeof d.armed === "boolean") confirmArm(d.armed);
   if (typeof d.light === "boolean") confirmLight(d.light);
 
+  applyMission5(d.mission5);
+
   // teruskan sampel ke modul halaman yang sudah di-init (buffering murah;
   // render sebenarnya digerbang oleh onShow/onHide)
   for (const name of initedModules) {
     const m = pageModules[name];
     if (m && m.onTelemetry) { try { m.onTelemetry(d); } catch (e) {} }
   }
+}
+
+/* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
+function applyMission5(m5) {
+  if (!els.mission5State) return;
+  if (!m5) {
+    els.mission5State.textContent = "IDLE";
+    els.mission5State.className = "badge";
+    els.mission5Cam.textContent = "—";
+    els.mission5Z.textContent = "—";
+    els.mission5OffX.textContent = "—";
+    els.mission5OffY.textContent = "—";
+    return;
+  }
+  const state = m5.state || "IDLE";
+  els.mission5State.textContent = state;
+  els.mission5State.className =
+    state === "ABORT" ? "badge badge--fault" :
+    state === "DONE" ? "badge badge--ok" :
+    state === "IDLE" ? "badge" : "badge badge--active";
+  els.mission5Cam.textContent = m5.active_cam ? `CAM ${m5.active_cam === "BOTTOM" ? "0: BOTTOM" : "1: WALL"}` : "—";
+  els.mission5Z.textContent = num(m5.distance_z, 2);
+  els.mission5OffX.textContent = num(m5.offset_x, 1);
+  els.mission5OffY.textContent = num(m5.offset_y, 1);
 }
 
 function reflectArm(on) {
@@ -336,7 +364,18 @@ function connect() {
     setLink("on"); log("Terhubung ke server", "ok"); stopDemo();
     sendPing();
   };
-  ws.onclose = () => { linkStale = false; setLink("off"); scheduleReconnect(); maybeDemo(); };
+  ws.onclose = () => {
+    linkStale = false;
+    setLink("off");
+    /* Link putus = GUI tidak lagi punya otoritas kontrol. Kunci E-Stop dan
+       netralkan axis lokal supaya saat WS tersambung lagi joystick tidak
+       langsung mengirim nilai lama; operator harus ARM ulang dulu. */
+    if (!estopLatched) log("Koneksi putus — joystick dikunci sampai ARM ulang", "warn");
+    estopLatched = true;
+    neutralizeGamepadAxes();
+    scheduleReconnect();
+    maybeDemo();
+  };
   ws.onerror = () => { log("Error koneksi WS", "err"); };
   ws.onmessage = (ev) => {
   let msg;
@@ -697,14 +736,10 @@ function setAxis(name, value, live = false) {
 Object.entries(axisEls).forEach(([name, el]) => {
   if (!el) return;
   el.addEventListener("change", () => {
-      const v = Math.round(Number(el.value) || 0);
-
-      el.value = String(v);
-
-      if (name in pilotAxes)
-          pilotAxes[name] = v;
-
-      sendCmd(name, v);
+    const v = clamp(Number(el.value) || 0, -1000, 1000);
+    el.value = String(v);
+    if (name in pilotAxes) pilotAxes[name] = v;
+    sendCmd(name, v);
   });
 });
 
@@ -743,7 +778,7 @@ window.addEventListener("keyup", (e) => {
 const GP_DEADZONE = 0.12;
 
 function clamp(v, min, max) {
-    return Math.max(min, Math.min(max, Math.round(v)));
+  return Math.max(min, Math.min(max, Math.round(v)));
 }
 
 function getMappedJoystickAxes() {
@@ -755,14 +790,6 @@ function getMappedJoystickAxes() {
     yaw:   joystickState.mapped.yaw,
     heave: joystickState.mapped.heave,
   };
-}
-
-/* loop khusus untuk halaman joystick / panel tester
-   supaya status connected, axis preview, dan tester tombol tetap hidup
-   walaupun activeController belum dipilih ke Gamepad */
-function pollJoystickPanel() {
-  updateJoystickStateFromGamepad();
-  requestAnimationFrame(pollJoystickPanel);
 }
 
 function firstGamepad() {
@@ -798,6 +825,13 @@ let estopLatched = false;
 const GP_SEND_HZ = 15;
 const GP_SEND_INTERVAL = 1000 / GP_SEND_HZ;
 let gpLastSent = 0;
+
+/* Membaca navigator.getGamepads() mengalokasikan array baru tiap panggilan,
+   jadi tidak perlu dilakukan 60x/detik. 30 Hz sudah 2x laju kirim (15 Hz)
+   sehingga tidak menambah latensi yang terasa. */
+const GP_POLL_HZ = 30;
+const GP_POLL_INTERVAL = 1000 / GP_POLL_HZ;
+let gpLastPoll = 0;
 
 // status tombol fisik frame sebelumnya
 const gpBtnPrev = {};
@@ -837,22 +871,22 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= CONTROL MODE ================= */
     case "mode_manual": {
-  sendCmd("pilot_mode", "manual");
-  log("Pilot mode: MANUAL", "ok");
-  return;
-}
+      sendCmd("pilot_mode", "manual");
+      log("Pilot mode: MANUAL", "ok");
+      return;
+    }
 
-case "mode_stabilize": {
-  sendCmd("pilot_mode", "stabilize");
-  log("Pilot mode: STABILIZE", "ok");
-  return;
-}
+    case "mode_stabilize": {
+      sendCmd("pilot_mode", "stabilize");
+      log("Pilot mode: STABILIZE", "ok");
+      return;
+    }
 
-case "mode_depth_hold": {
-  sendCmd("pilot_mode", "depth_hold");
-  log("Pilot mode: DEPTH HOLD", "ok");
-  return;
-}
+    case "mode_depth_hold": {
+      sendCmd("pilot_mode", "depth_hold");
+      log("Pilot mode: DEPTH HOLD", "ok");
+      return;
+    }
 
     case "input_hold_set": {
       sendCmd("input_hold_set", true);
@@ -940,23 +974,14 @@ function processMappedGamepadButtons() {
     if (!Number.isInteger(btnIndex) || btnIndex < 0) continue;
 
     const current = !!joystickState.rawButtons?.[btnIndex]?.pressed;
-
-    if (current) {
-  console.log(
-    "[JOY]",
-    "layer =", layerName,
-    "button =", btnIndex,
-    "action =", row.action,
-    "mode =", row.mode
-  );
-}
-
     const prev = !!gpBtnPrev[btnIndex];
 
     const rising = current && !prev;
     const falling = !current && prev;
 
     if (row.mode === "hold") {
+<<<<<<< HEAD
+
 
       // hanya sekali saat tombol mulai ditekan
       if (rising) {
@@ -971,6 +996,19 @@ function processMappedGamepadButtons() {
     }
   
     else {
+=======
+      // selama tombol ditekan, kirim terus command hold
+      if (current) {
+        executeJoystickAction(row.action, "hold");
+      }
+
+      // saat tombol dilepas, kirim stop sekali
+      if (falling) {
+        executeJoystickRelease(row.action);
+      }
+    } else {
+>>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
+
       // toggle = sekali saat rising edge
       if (rising) {
         executeJoystickAction(row.action, "toggle");
@@ -986,6 +1024,10 @@ function processMappedGamepadButtons() {
 
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
+
+  const nowPoll = performance.now();
+  if (nowPoll - gpLastPoll < GP_POLL_INTERVAL) return;
+  gpLastPoll = nowPoll;
 
   // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
   updateJoystickStateFromGamepad();
@@ -1007,13 +1049,11 @@ function pollGamepad() {
 
   /* ================= AXIS ================= */
   const next = {
-      surge: joystickState.mapped.surge,
-      sway:  joystickState.mapped.sway,
-      yaw:   joystickState.mapped.yaw,
-      heave: joystickState.mapped.heave,
+    surge: joystickState.mapped.surge,
+    sway:  joystickState.mapped.sway,
+    yaw:   joystickState.mapped.yaw,
+    heave: joystickState.mapped.heave,
   };
-
-  console.log("[APP]", next);
 
   let changed = false;
   for (const a of ["surge", "sway", "yaw", "heave"]) {
@@ -1052,10 +1092,9 @@ window.addEventListener("gamepaddisconnected", (e) => {
   }
 });
 
-/* penting:
-   - pollJoystickPanel = untuk halaman joystick / tester / mapping
-   - pollGamepad       = untuk kontrol thruster saat mode Gamepad aktif */
-requestAnimationFrame(pollJoystickPanel);
+/* Satu loop saja: pollGamepad menyegarkan joystickState (dipakai badge,
+   panel tester, dan kontrol thruster). Halaman joystick punya loop sendiri
+   saat di-mount, lihat pages/joystick.js. */
 requestAnimationFrame(pollGamepad);
 
 /* set surface level */

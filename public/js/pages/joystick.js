@@ -8,6 +8,7 @@ import {
   getActiveButtonLayerName,
   getButtonPressed,
   getButtonValue,
+  mapAxisValue,
 } from "../joystick-state.js";
 
 let root = null;
@@ -120,18 +121,10 @@ function axisBarStyle(v) {
   return `left:${50 - width}%;width:${width}%;`;
 }
 
+/* Preview memakai mapping yang sama persis dengan runtime (joystick-state.js),
+   supaya angka di layar tidak pernah berbeda dari yang dikirim ke ROV. */
 function axisPreviewValue(raw, row) {
-  let v = normalizeAxis(raw);
-  if (Number(row.min) > Number(row.max)) v *= -1;
-  const outMin = Number(row.min);
-  const outMax = Number(row.max);
-
-  const mapped =
-      outMin +
-      ((v + 1) / 2) *
-      (outMax - outMin);
-
-  return Math.round(mapped);
+  return mapAxisValue(raw, row);
 }
 
 function getAxisAssignedOptions(current) {

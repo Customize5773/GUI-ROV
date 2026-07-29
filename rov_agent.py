@@ -5,6 +5,8 @@ import threading
 import math
 from pymavlink import mavutil
 
+from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, to_mavlink_z
+
 # =========================
 # Konfigurasi jaringan
 # =========================
@@ -63,13 +65,21 @@ joystick = {
     "heave": 0,
     "yaw": 0,
 }
-# =========================
-# Utility
-# ========================
+
+# Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
+# JOYSTICK_IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus),
+# kirim SATU perintah netral lalu berhenti sampai ada perintah manual lagi.
+JOYSTICK_IDLE_TIMEOUT = 0.5
+last_joystick_update = 0.0
+joystick_lock = threading.Lock()
+
 def send_telemetry():
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
+<<<<<<< HEAD
     print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+=======
+>>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
 def normalize_heading(deg):
     if deg < 0:
@@ -105,7 +115,7 @@ def set_servo(channel, pwm):
 # Command handler dari laptop
 # =========================
 def command_listener():
-    global master
+    global master, last_joystick_update
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
         try:
@@ -118,16 +128,22 @@ def command_listener():
 
         try:
             msg = json.loads(data.decode("utf-8"))
-            print("RAW UDP:", msg)
         except Exception:
             print("[UDP] invalid JSON command")
             continue
 
         name = msg.get("name")
         value = msg.get("value")
+<<<<<<< HEAD
         device = msg.get("device")
         action = msg.get("action")
         direction = msg.get("direction")
+=======
+
+        # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console
+        if name not in AXIS_RANGE:
+            print(f"[CMD] {name} = {value} from {addr}")
+>>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
         print(f"[CMD] {name} = {value} from {addr}")
         
@@ -203,10 +219,8 @@ def command_listener():
                         1,      # arm
                         0,0,0,0,0,0
                     )
-
-                    ack = master.recv_match(type="COMMAND_ACK", blocking=True, timeout=3)
-
-                    print("ACK =", ack)
+                    # COMMAND_ACK ditangani oleh loop utama (main()) supaya
+                    # thread ini tidak terblokir dan STOP/E-Stop tetap responsif.
                 else:
                     print("[MAV] DISARM")
                     master.arducopter_disarm()
@@ -223,8 +237,11 @@ def command_listener():
                     print(f"[MAV] mode '{mode}' tidak ada di mode_mapping()")
 
             elif name == "stop":
-                # Failsafe sederhana: disarm
+                # Failsafe sederhana: netralkan axis lalu disarm
                 print("[MAV] STOP -> DISARM")
+                with joystick_lock:
+                    joystick.update(AXIS_NEUTRAL)
+                    last_joystick_update = 0.0
                 master.arducopter_disarm()
 
             elif name == "light":
@@ -235,9 +252,14 @@ def command_listener():
             elif name == "thruster_config":
 
                 motors = msg.get("motors", {})
+<<<<<<< HEAD
                 print("[DEBUG] Motors received:", motors)
 
                 for motor, motor_direction in motors.items():
+=======
+
+                for motor, direction in motors.items():
+>>>>>>> b988616c341010f902e9fc3a38ab3899740bd725
 
                     motor = int(motor)
                     motor_direction = int(motor_direction)
@@ -258,8 +280,10 @@ def command_listener():
 
                 print("[PARAM] Thruster configuration updated.")
 
-            elif name in ["surge", "sway", "yaw", "heave"]:
-                joystick[name] = int(value)
+            elif name in AXIS_RANGE:
+                with joystick_lock:
+                    joystick[name] = clamp_axis(name, value)
+                    last_joystick_update = time.time()
 
             else:
                 print(f"[CMD] unknown command: {name}")
@@ -269,28 +293,48 @@ def command_listener():
             print("[CMD] error executing command:", e)
 
 def joystick_sender():
-    global master
-    while True:
-        if master is not None:
-            print(
-                f"[MANUAL] "
-                f"X={joystick['surge']} "
-                f"Y={joystick['sway']} "
-                f"Z={joystick['heave']} "
-                f"R={joystick['yaw']}"
-            )   
-            print("RAW =", joystick)
+    """Kirim MANUAL_CONTROL 20 Hz selama GUI masih aktif mengirim axis.
 
+    Fail-safe: bila tidak ada perintah axis baru selama JOYSTICK_IDLE_TIMEOUT,
+    kirim satu perintah netral (semua axis 0) lalu berhenti mengirim sampai
+    ada perintah manual berikutnya. Ini mencegah Pi terus mengulang nilai
+    terakhir ke Pixhawk saat GUI crash atau link putus.
+    """
+    global master
+
+    sent_neutral = True   # sudah netral saat start, belum ada input
+
+    while True:
+        if master is None:
+            time.sleep(0.05)
+            continue
+
+        with joystick_lock:
+            axes = dict(joystick)
+            idle = (time.time() - last_joystick_update) > JOYSTICK_IDLE_TIMEOUT
+
+        if idle:
+            if sent_neutral:
+                time.sleep(0.05)
+                continue
+
+            axes = dict(AXIS_NEUTRAL)
+            sent_neutral = True
+            print("[MANUAL] fail-safe: idle, kirim netral")
+        else:
+            sent_neutral = False
+
+        try:
             master.mav.manual_control_send(
                 master.target_system,
-                joystick["surge"],
-                joystick["sway"],
-                joystick["heave"],
-                joystick["yaw"],
+                axes["surge"],
+                axes["sway"],
+                to_mavlink_z(axes["heave"]),
+                axes["yaw"],
                 0
             )
-            
-            print("[MANUAL] sent")
+        except Exception as e:
+            print("[MANUAL] gagal kirim:", e)
 
         time.sleep(0.05)
 # =========================
@@ -377,6 +421,14 @@ def main():
         # --------------------------------
         # VFR_HUD: heading kadang tersedia di sini juga
         # --------------------------------
+        # --------------------------------
+        # COMMAND_ACK: hasil ARM/DISARM dsb.
+        # Ditangani di sini (bukan di command_listener) supaya thread command
+        # tidak pernah terblokir menunggu ACK.
+        # --------------------------------
+        elif mtype == "COMMAND_ACK":
+            print(f"[MAV] ACK cmd={msg.command} result={msg.result}")
+
         elif mtype == "VFR_HUD":
             if hasattr(msg, "heading"):
                 state["heading"] = float(msg.heading)
