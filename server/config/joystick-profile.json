@@ -19,7 +19,7 @@
       "input": "axis 1",
       "assigned": "Axis Z",
       "min": 1000,
-      "max": -1000,
+      "max": 0,
       "direction": "↕"
     },
     {
