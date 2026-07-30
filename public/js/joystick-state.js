@@ -11,11 +11,26 @@ export const BUTTON_ACTIONS = [
   "mount_center",
   "actuator1_inc",
   "actuator1_dec",
+  "grip_open",
+  "grip_close",
   "lights_brighter",
   "lights_dimmer",
   "gain_inc",
   "gain_dec",
 ];
+
+/* Profil lama memetakan tombol ke actuator1_inc/dec, yang tidak punya handler
+   apa pun di sisi ROV (rov_agent.py) — praktis mati. Gripper memakai posisi
+   tombol yang sama, jadi profil tersimpan dimigrasikan otomatis supaya
+   operator tidak perlu menyunting ulang halaman Joystick. */
+const ACTION_MIGRATION = {
+  actuator1_inc: "grip_close",
+  actuator1_dec: "grip_open",
+};
+
+export function migrateButtonAction(action) {
+  return ACTION_MIGRATION[action] || action;
+}
 
 function defaultButtonLayer() {
   return [
@@ -27,8 +42,8 @@ function defaultButtonLayer() {
     { action: "mount_tilt_up", button: 5, mode: "hold" },
     { action: "mount_tilt_down", button: 6, mode: "hold" },
     { action: "mount_center", button: 7, mode: "toggle" },
-    { action: "actuator1_inc", button: 8, mode: "hold" },
-    { action: "actuator1_dec", button: 9, mode: "hold" },
+    { action: "grip_close", button: 8, mode: "toggle" },
+    { action: "grip_open", button: 9, mode: "toggle" },
     { action: "lights_brighter", button: 10, mode: "hold" },
     { action: "lights_dimmer", button: 11, mode: "hold" },
     { action: "gain_inc", button: 12, mode: "hold" },
@@ -51,6 +66,7 @@ export const joystickState = {
     sway: 0,
     yaw: 0,
     heave: 0,
+    grip: 0,
   },
 
   axisConfig: [
@@ -58,7 +74,11 @@ export const joystickState = {
     { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
     { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
     { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
-    { input: "axis 4", assigned: "No function", min: -1, max: 1, direction: "↕" },
+    /* Axis 4 dibiarkan "No function": pada Logitech F310 axis ini sering
+       tidak diekspos browser, dan axis 0-3 sudah dipakai thruster. Operator
+       yang ingin grip analog cukup mengubah dropdown ini ke "Grip" —
+       min/max sudah disiapkan pada skala -1000..1000. */
+    { input: "axis 4", assigned: "No function", min: -1000, max: 1000, direction: "↕" },
   ],
 
   shiftButton: 5,
@@ -198,7 +218,9 @@ export function applyJoystickConfig(config) {
         const src = srcLayer[i];
         if (!src) return;
 
-        row.action = typeof src.action === "string" ? src.action : row.action;
+        row.action = typeof src.action === "string"
+          ? migrateButtonAction(src.action)
+          : row.action;
         row.button = Number.isFinite(Number(src.button)) ? Number(src.button) : row.button;
         row.mode = src.mode === "hold" ? "hold" : "toggle";
       });
@@ -217,7 +239,7 @@ export function updateJoystickStateFromGamepad() {
     joystickState.controllerName = "Unknown controller";
     joystickState.rawAxes = [];
     joystickState.rawButtons = [];
-    joystickState.mapped = { surge: 0, sway: 0, yaw: 0, heave: 0 };
+    joystickState.mapped = { surge: 0, sway: 0, yaw: 0, heave: 0, grip: 0 };
     return;
   }
 
@@ -233,4 +255,6 @@ export function updateJoystickStateFromGamepad() {
   joystickState.mapped.sway  = readAssignedAxis("Axis Y");
   joystickState.mapped.yaw   = readAssignedAxis("Axis R");
   joystickState.mapped.heave = readAssignedAxis("Axis Z");
+  // "Grip" opsional: 0 bila tidak ada axis yang di-assign ke Grip.
+  joystickState.mapped.grip  = readAssignedAxis("Grip");
 }

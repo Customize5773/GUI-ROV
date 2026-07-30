@@ -174,7 +174,7 @@ export class RovScene {
   loadModel(url, onTag) {
     loadModelOnce(url).then((base) => {
       const model = base.clone(true);   // clone berbagi geometry/material
-      orient(model, url);
+      orient(model, url, true);
       fitAndCenter(model, 0.9);
       const wrapper = new THREE.Group();
       wrapper.add(model);
