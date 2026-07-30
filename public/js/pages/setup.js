@@ -77,6 +77,7 @@ export const setupPage = {
             <p class="card__desc">Frame, batas PWM, gain &amp; arah putar (maks 6 thruster).</p>
             <label class="field"><span>Frame</span>
               <select id="suFrame">
+                <option ${T.frame === "BlueROV1" ? "selected" : ""}>BlueROV1</option>
                 <option ${T.frame === "Vectored" ? "selected" : ""}>Vectored</option>
                 <option ${T.frame === "Vectored_6DOF" ? "selected" : ""}>Vectored_6DOF</option>
                 <option ${T.frame === "Custom" ? "selected" : ""}>Custom</option>

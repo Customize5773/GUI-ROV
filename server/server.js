@@ -59,63 +59,27 @@ function clampAxis(name, value) {
 const CONFIG_DIR = path.join(__dirname, "config");
 const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
 
-/* Profil lama memetakan tombol ke actuator1_inc/dec, yang tidak punya handler
-   apa pun di sisi ROV (rov_agent.py) — praktis mati. Gripper memakai posisi
-   tombol yang sama, jadi profil tersimpan dimigrasikan otomatis supaya
-   operator tidak perlu menyunting ulang halaman Joystick.
-   Harus sinkron dgn ACTION_MIGRATION di public/js/joystick-state.js. */
-const ACTION_MIGRATION = {
-  actuator1_inc: "grip_close",
-  actuator1_dec: "grip_open",
-};
+/* Default mapping + daftar aksi dibaca dari file yang SAMA dengan yang dipakai
+   browser (public/js/joystick-state.js mem-fetch-nya). Sebelumnya tabel default
+   disalin verbatim di sini dan di joystick-state.js, dijaga hanya oleh komentar
+   — dan memang sudah hanyut. Sekarang satu file, satu kebenaran. */
+const JOY_DEFAULTS = require(path.join(__dirname, "..", "public", "js", "joystick-defaults.json"));
+
+const VALID_ACTIONS = new Set(JOY_DEFAULTS.actions);
+const ACTION_MIGRATION = JOY_DEFAULTS.actionMigration;
 
 function migrateButtonAction(action) {
-  return ACTION_MIGRATION[action] || action;
-}
-
-function defaultButtonLayer() {
-  return [
-    { action: "arm", button: 0, mode: "toggle" },
-    { action: "disarm", button: 1, mode: "toggle" },
-    { action: "mode_manual", button: 2, mode: "toggle" },
-    { action: "mode_stabilize", button: 3, mode: "toggle" },
-    { action: "mode_depth_hold", button: 4, mode: "toggle" },
-    { action: "mount_tilt_up", button: 5, mode: "hold" },
-    { action: "mount_tilt_down", button: 6, mode: "hold" },
-    { action: "mount_center", button: 7, mode: "toggle" },
-    { action: "grip_close", button: 8, mode: "toggle" },
-    { action: "grip_open", button: 9, mode: "toggle" },
-    { action: "lights_brighter", button: 10, mode: "hold" },
-    { action: "lights_dimmer", button: 11, mode: "hold" },
-    { action: "gain_inc", button: 12, mode: "hold" },
-    { action: "gain_dec", button: 13, mode: "hold" },
-    { action: "input_hold_set", button: 14, mode: "toggle" },
-    { action: "no_function", button: 15, mode: "toggle" },
-  ];
+  const mapped = ACTION_MIGRATION[action] || action;
+  return VALID_ACTIONS.has(mapped) ? mapped : "no_function";
 }
 
 function defaultJoystickConfig() {
-  return {
-    enabled: true,
-    shiftButton: 5,
+  return structuredClone(JOY_DEFAULTS.profile);
+}
 
-    axisConfig: [
-      { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
-      { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
-      { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
-      { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
-      /* Axis 4 dibiarkan "No function": pada Logitech F310 axis ini sering
-         tidak diekspos browser, dan axis 0-3 sudah dipakai thruster. Operator
-         yang ingin grip analog cukup mengubah dropdown ini ke "Grip" —
-         min/max sudah disiapkan pada skala -1000..1000. */
-      { input: "axis 4", assigned: "No function", min: -1000, max: 1000, direction: "↕" },
-    ],
-
-    buttonConfig: {
-      regular: defaultButtonLayer(),
-      shift: defaultButtonLayer(),
-    },
-  };
+function clampNum(v, lo, hi, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
 }
 
 function ensureConfigDir() {
@@ -132,6 +96,17 @@ function sanitizeJoystickConfig(data) {
   const shiftButton = Number.isInteger(Number(data.shiftButton))
     ? Number(data.shiftButton)
     : fallback.shiftButton;
+
+  /* ================= TUNING ================= */
+  // Deadzone/expo/slew/gain ikut tersimpan di profil supaya "rasa" stik yang
+  // sudah dicari operator saat kalibrasi tidak hilang begitu dashboard di-reload.
+  const t = (data.tuning && typeof data.tuning === "object") ? data.tuning : {};
+  const tuning = {
+    deadzone: clampNum(t.deadzone, 0, 0.9, fallback.tuning.deadzone),
+    expo: clampNum(t.expo, 0, 1, fallback.tuning.expo),
+    slewPerSec: clampNum(t.slewPerSec, 100, 20000, fallback.tuning.slewPerSec),
+    gainIndex: Math.round(clampNum(t.gainIndex, 0, 20, fallback.tuning.gainIndex)),
+  };
 
   /* ================= AXIS ================= */
   const srcAxis = Array.isArray(data.axisConfig)
@@ -154,31 +129,25 @@ function sanitizeJoystickConfig(data) {
     ? data.buttonConfig
     : {};
 
-  const buttonConfig = {
-    regular: fallback.buttonConfig.regular.map((def, i) => {
-      const row = Array.isArray(srcBtnCfg.regular) ? (srcBtnCfg.regular[i] || {}) : {};
+  const sanitizeLayer = (layerName) =>
+    fallback.buttonConfig[layerName].map((def, i) => {
+      const row = Array.isArray(srcBtnCfg[layerName]) ? (srcBtnCfg[layerName][i] || {}) : {};
       return {
         action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
         button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
         mode: row.mode === "hold" ? "hold" : "toggle",
       };
-    }),
-
-    shift: fallback.buttonConfig.shift.map((def, i) => {
-      const row = Array.isArray(srcBtnCfg.shift) ? (srcBtnCfg.shift[i] || {}) : {};
-      return {
-        action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
-        button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
-        mode: row.mode === "hold" ? "hold" : "toggle",
-      };
-    }),
-  };
+    });
 
   return {
     enabled,
     shiftButton,
+    tuning,
     axisConfig,
-    buttonConfig,
+    buttonConfig: {
+      regular: sanitizeLayer("regular"),
+      shift: sanitizeLayer("shift"),
+    },
   };
 }
 
@@ -472,23 +441,14 @@ wss.on("connection", (ws, req) => {
 
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
-      /* ================= MANIPULATOR ================= */
+      /* Perintah "manipulator" sudah dihapus: rov_agent.py tidak pernah punya
+         handler untuknya, jadi paketnya selalu berakhir sebagai "unknown
+         command". Seluruh kendali gripper kini lewat perintah "gripper" —
+         satu-satunya jalur yang benar-benar menggerakkan servo. */
 
-      if (msg.name === "manipulator") {
-
-          const packet = Buffer.from(JSON.stringify(msg));
-
-          console.log("[MANIPULATOR]", msg);
-
-          udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
-              if (e) console.warn("[UDP] gagal kirim manipulator:", e.message);
-          });
-
-          return;
-      }
-      
       if (MOTION_AXES.has(msg.name)) {
         msg.value = clampAxis(msg.name, msg.value);
+        simLastAxis = Date.now();
       }
 
       // Tap command relevan-trajectory untuk rekaman (surge/sway/dll). Hanya
@@ -558,7 +518,17 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 
 /* ----------------------- simulator (opsional) ----------------------- */
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
-const simState = { armed: false, light: false, mode: "manual" };
+/* mode = string mode ArduSub, persis seperti yang dikirim rov_agent.py dari
+   HEARTBEAT. Dashboard memakainya untuk menyorot tab mode, jadi simulator
+   harus memakai kosakata yang sama (MANUAL/STABILIZE/ALT_HOLD) — bukan
+   manual/autonomous milik control_mode. */
+const PILOT_MODE_TO_ARDUSUB = {
+  manual: "MANUAL",
+  stabilize: "STABILIZE",
+  depth_hold: "ALT_HOLD",
+};
+
+const simState = { armed: false, light: false, mode: "MANUAL", cmdLink: "ok" };
 
 function applySimCommand(name, value) {
   switch (name) {
@@ -571,11 +541,19 @@ function applySimCommand(name, value) {
     case "stop":
       simState.armed = false;
       break; // failsafe: netralkan
-    case "control_mode":
-      simState.mode = value;
+    case "pilot_mode": {
+      const mapped = PILOT_MODE_TO_ARDUSUB[String(value).toLowerCase()];
+      if (mapped) simState.mode = mapped;
       break;
+    }
   }
 }
+
+/* Fail-safe idle ditiru juga di SIM supaya prosedur trial bisa dilatih tanpa
+   wahana: kalau axis berhenti mengalir, dashboard menyalakan banner yang sama
+   seperti saat rov_agent.py mengirim NEUTRAL sendiri. */
+const SIM_IDLE_TIMEOUT_MS = 500;
+let simLastAxis = 0;
 
 if (SIM) {
   console.log("[SIM] menghasilkan telemetri palsu (tanpa Raspi).");
@@ -597,6 +575,7 @@ if (SIM) {
         armed: simState.armed,
         light: simState.light,
         mode: simState.mode,
+        cmd_link: (Date.now() - simLastAxis) > SIM_IDLE_TIMEOUT_MS ? "stale" : "ok",
       },
       recv: Date.now(),
     });

@@ -1,62 +1,66 @@
-export const BUTTON_ACTIONS = [
-  "no_function",
-  "arm",
-  "disarm",
-  "mode_manual",
-  "mode_stabilize",
-  "mode_depth_hold",
-  "input_hold_set",
-  "mount_tilt_up",
-  "mount_tilt_down",
-  "mount_center",
-  "actuator1_inc",
-  "actuator1_dec",
-  "grip_open",
-  "grip_close",
-  "lights_brighter",
-  "lights_dimmer",
-  "gain_inc",
-  "gain_dec",
-];
+import { shapeAxis } from "./axis-shaping.js";
 
-/* Profil lama memetakan tombol ke actuator1_inc/dec, yang tidak punya handler
-   apa pun di sisi ROV (rov_agent.py) — praktis mati. Gripper memakai posisi
-   tombol yang sama, jadi profil tersimpan dimigrasikan otomatis supaya
-   operator tidak perlu menyunting ulang halaman Joystick. */
-const ACTION_MIGRATION = {
-  actuator1_inc: "grip_close",
-  actuator1_dec: "grip_open",
+/* Default mapping dimuat dari joystick-defaults.json — SATU sumber kebenaran
+   yang dipakai bersama server.js (lihat require() di server/server.js), supaya
+   tabel default tidak lagi disalin di dua tempat dan bisa hanyut.
+
+   Top-level await: modul ini kecil dan same-origin, dan app.js memang harus
+   punya mapping sebelum polling gamepad dimulai. Kalau fetch gagal (file
+   hilang / dibuka lewat file://), kita jatuh ke konfigurasi KOSONG yang aman —
+   tidak ada axis dan tidak ada tombol yang aktif — bukan ke tebakan mapping. */
+
+const EMPTY_BUTTON_LAYER = () =>
+  Array.from({ length: 17 }, (_, i) => ({
+    action: "no_function",
+    button: i,
+    mode: "toggle",
+  }));
+
+const SAFE_FALLBACK = {
+  actions: ["no_function"],
+  actionMigration: {},
+  profile: {
+    enabled: true,
+    shiftButton: 10,
+    tuning: { deadzone: 0.12, expo: 0.35, slewPerSec: 4000, gainIndex: 1 },
+    axisConfig: [],
+    buttonConfig: { regular: EMPTY_BUTTON_LAYER(), shift: EMPTY_BUTTON_LAYER() },
+  },
 };
 
-export function migrateButtonAction(action) {
-  return ACTION_MIGRATION[action] || action;
+let DEFAULTS = SAFE_FALLBACK;
+try {
+  const res = await fetch(new URL("./joystick-defaults.json", import.meta.url));
+  if (res.ok) DEFAULTS = await res.json();
+  else console.warn("[joystick] joystick-defaults.json tidak terbaca:", res.status);
+} catch (err) {
+  console.warn("[joystick] gagal memuat joystick-defaults.json:", err.message);
 }
 
-function defaultButtonLayer() {
-  return [
-    { action: "arm", button: 0, mode: "toggle" },
-    { action: "disarm", button: 1, mode: "toggle" },
-    { action: "mode_manual", button: 2, mode: "toggle" },
-    { action: "mode_stabilize", button: 3, mode: "toggle" },
-    { action: "mode_depth_hold", button: 4, mode: "toggle" },
-    { action: "mount_tilt_up", button: 5, mode: "hold" },
-    { action: "mount_tilt_down", button: 6, mode: "hold" },
-    { action: "mount_center", button: 7, mode: "toggle" },
-    { action: "grip_close", button: 8, mode: "toggle" },
-    { action: "grip_open", button: 9, mode: "toggle" },
-    { action: "lights_brighter", button: 10, mode: "hold" },
-    { action: "lights_dimmer", button: 11, mode: "hold" },
-    { action: "gain_inc", button: 12, mode: "hold" },
-    { action: "gain_dec", button: 13, mode: "hold" },
-    { action: "input_hold_set", button: 14, mode: "toggle" },
-    { action: "no_function", button: 15, mode: "toggle" },
-  ];
+export const BUTTON_ACTIONS = DEFAULTS.actions.slice();
+
+/* Profil tersimpan milik operator bisa memuat aksi dari versi lama (mis.
+   actuator1_inc, mount_tilt_up) yang sudah tidak punya handler atau hardware.
+   Dipetakan ulang saat dimuat supaya operator tidak perlu menyunting ulang
+   halaman Joystick, dan supaya tidak ada tombol yang diam-diam mati. */
+export function migrateButtonAction(action) {
+  const mapped = DEFAULTS.actionMigration[action] || action;
+  return BUTTON_ACTIONS.includes(mapped) ? mapped : "no_function";
+}
+
+function cloneDefaultProfile() {
+  return structuredClone(DEFAULTS.profile);
 }
 
 export const joystickState = {
   enabled: true,
   connected: false,
   controllerName: "Unknown controller",
+
+  /* Mapping baru dianggap sah hanya setelah server mengirimkannya (atau
+     setelah default dimuat). Dipakai app.js untuk menahan kendali thruster
+     sampai mapping benar-benar diketahui. */
+  configLoaded: false,
 
   rawAxes: [],
   rawButtons: [],
@@ -69,37 +73,30 @@ export const joystickState = {
     grip: 0,
   },
 
-  axisConfig: [
-    { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
-    { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
-    { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
-    { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
-    /* Axis 4 dibiarkan "No function": pada Logitech F310 axis ini sering
-       tidak diekspos browser, dan axis 0-3 sudah dipakai thruster. Operator
-       yang ingin grip analog cukup mengubah dropdown ini ke "Grip" —
-       min/max sudah disiapkan pada skala -1000..1000. */
-    { input: "axis 4", assigned: "No function", min: -1000, max: 1000, direction: "↕" },
-  ],
-
-  shiftButton: 5,
-
-  buttonConfig: {
-    regular: defaultButtonLayer(),
-    shift: defaultButtonLayer(),
-  },
+  ...cloneDefaultProfile(),
 };
 
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, v));
 }
 
-function parseAxisIndex(inputName) {
-  const m = String(inputName).match(/axis\s+(\d+)/i);
-  return m ? Number(m[1]) : -1;
-}
+/* Sumber input bisa berupa axis fisik ("axis 2") atau sumber virtual.
+   "triggers" = LT/RT pada F310. Pada X-Input, LT/RT BUKAN axis melainkan
+   button analog 6 dan 7, jadi tidak akan pernah muncul di gp.axes. Nilainya
+   disintesis di sini: RT positif (menutup gripper), LT negatif (membuka). */
+export function readRawInput(inputName) {
+  const name = String(inputName).trim().toLowerCase();
 
-function normalizeAxis(raw) {
-  return clamp(Number(raw) || 0, -1, 1);
+  if (name === "triggers") {
+    const lt = Number(joystickState.rawButtons[6]?.value) || 0;
+    const rt = Number(joystickState.rawButtons[7]?.value) || 0;
+    return clamp(rt - lt, -1, 1);
+  }
+
+  const m = name.match(/axis\s+(\d+)/);
+  if (!m) return 0;
+
+  return clamp(Number(joystickState.rawAxes[Number(m[1])]) || 0, -1, 1);
 }
 
 function findConfigByAssigned(label) {
@@ -110,7 +107,7 @@ function findConfigByAssigned(label) {
    Dipakai runtime (readAssignedAxis) maupun preview di halaman joystick,
    supaya angka yang dilihat operator persis sama dengan yang dikirim. */
 export function mapAxisValue(raw, row) {
-  let v = normalizeAxis(raw);
+  let v = clamp(Number(raw) || 0, -1, 1);
 
   // Reverse jika Min > Max
   if (Number(row.min) > Number(row.max)) {
@@ -123,14 +120,17 @@ export function mapAxisValue(raw, row) {
   return Math.round(low + ((v + 1) / 2) * (high - low));
 }
 
-function readAssignedAxis(label) {
-  const row = findConfigByAssigned(label);
+/* Deadzone + expo diterapkan DI SINI, sebelum penskalaan min/max — satu titik
+   untuk semua konsumen. Halaman Joystick memanggil fungsi yang SAMA untuk
+   preview-nya, jadi angka yang dilihat operator dijamin persis sama dengan
+   yang dikirim ke ROV. */
+export function axisOutputFor(row) {
   if (!row) return 0;
+  return mapAxisValue(shapeAxis(readRawInput(row.input), joystickState.tuning), row);
+}
 
-  const idx = parseAxisIndex(row.input);
-  if (idx < 0) return 0;
-
-  return mapAxisValue(joystickState.rawAxes[idx] ?? 0, row);
+export function readAssignedAxis(label) {
+  return axisOutputFor(findConfigByAssigned(label));
 }
 
 /* ========================= BUTTON HELPERS ========================= */
@@ -161,6 +161,7 @@ export function getJoystickConfigPayload() {
   return {
     enabled: joystickState.enabled,
     shiftButton: joystickState.shiftButton,
+    tuning: { ...joystickState.tuning },
 
     axisConfig: joystickState.axisConfig.map((row) => ({
       input: row.input,
@@ -188,45 +189,64 @@ export function getJoystickConfigPayload() {
 export function applyJoystickConfig(config) {
   if (!config || typeof config !== "object") return;
 
+  const def = DEFAULTS.profile;
+
   joystickState.enabled = config.enabled !== false;
 
-  if (Number.isInteger(config.shiftButton)) {
-    joystickState.shiftButton = config.shiftButton;
+  if (Number.isInteger(Number(config.shiftButton))) {
+    joystickState.shiftButton = Number(config.shiftButton);
   }
 
-  if (Array.isArray(config.axisConfig)) {
-    joystickState.axisConfig.forEach((row, i) => {
-      const src = config.axisConfig[i];
-      if (!src) return;
+  /* ================= TUNING ================= */
+  const t = (config.tuning && typeof config.tuning === "object") ? config.tuning : {};
+  joystickState.tuning = {
+    deadzone: clampNum(t.deadzone, 0, 0.9, def.tuning.deadzone),
+    expo: clampNum(t.expo, 0, 1, def.tuning.expo),
+    slewPerSec: clampNum(t.slewPerSec, 100, 20000, def.tuning.slewPerSec),
+    gainIndex: Math.round(clampNum(t.gainIndex, 0, 20, def.tuning.gainIndex)),
+  };
 
-      row.input = typeof src.input === "string" ? src.input : row.input;
-      row.assigned = typeof src.assigned === "string" ? src.assigned : row.assigned;
-      row.min = Number.isFinite(Number(src.min)) ? Number(src.min) : row.min;
-      row.max = Number.isFinite(Number(src.max)) ? Number(src.max) : row.max;
-      row.direction = src.direction === "↕" ? "↕" : "↔";
+  /* ================= AXIS ================= */
+  if (Array.isArray(config.axisConfig)) {
+    joystickState.axisConfig = config.axisConfig.map((src, i) => {
+      const fallback = def.axisConfig[i] || def.axisConfig[0] || {
+        input: `axis ${i}`, assigned: "No function", min: -1000, max: 1000, direction: "↕",
+      };
+      return {
+        input: typeof src?.input === "string" ? src.input : fallback.input,
+        assigned: typeof src?.assigned === "string" ? src.assigned : fallback.assigned,
+        min: Number.isFinite(Number(src?.min)) ? Number(src.min) : fallback.min,
+        max: Number.isFinite(Number(src?.max)) ? Number(src.max) : fallback.max,
+        direction: src?.direction === "↕" ? "↕" : "↔",
+      };
     });
   }
 
+  /* ================= BUTTON ================= */
   if (config.buttonConfig && typeof config.buttonConfig === "object") {
     for (const layerName of ["regular", "shift"]) {
       const srcLayer = config.buttonConfig[layerName];
-      const dstLayer = joystickState.buttonConfig[layerName];
+      if (!Array.isArray(srcLayer)) continue;
 
-      if (!Array.isArray(srcLayer) || !Array.isArray(dstLayer)) continue;
-
-      dstLayer.forEach((row, i) => {
-        const src = srcLayer[i];
-        if (!src) return;
-
-        row.action = typeof src.action === "string"
-          ? migrateButtonAction(src.action)
-          : row.action;
-        row.button = Number.isFinite(Number(src.button)) ? Number(src.button) : row.button;
-        row.mode = src.mode === "hold" ? "hold" : "toggle";
-      });
+      joystickState.buttonConfig[layerName] = srcLayer.map((src, i) => ({
+        action: migrateButtonAction(typeof src?.action === "string" ? src.action : "no_function"),
+        button: Number.isFinite(Number(src?.button)) ? Number(src.button) : i,
+        mode: src?.mode === "hold" ? "hold" : "toggle",
+      }));
     }
   }
+
+  joystickState.configLoaded = true;
 }
+
+function clampNum(v, lo, hi, fallback) {
+  const n = Number(v);
+  return Number.isFinite(n) ? clamp(n, lo, hi) : fallback;
+}
+
+/* Pakai default sebagai titik awal supaya dashboard tetap bisa dikemudikan
+   walau server belum sempat mengirim profil tersimpan. */
+applyJoystickConfig(cloneDefaultProfile());
 
 /* ========================= GAMEPAD POLLING ========================= */
 

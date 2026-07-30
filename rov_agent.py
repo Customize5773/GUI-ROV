@@ -5,7 +5,7 @@ import threading
 import math
 from pymavlink import mavutil
 
-from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, to_mavlink_z
+from rov_axes import AXIS_RANGE, IDLE_TIMEOUT, clamp_axis, resolve_manual_packet
 from attitude_filter import AttitudeFilter
 from rov_gripper import (
     GRIPPER_PWM_NEUTRAL,
@@ -48,6 +48,11 @@ state = {
     "armed": False,
     "light": False,
     "mode": "unknown",
+    # "ok" selama axis dari GUI masih mengalir, "stale" saat fail-safe idle
+    # aktif dan Pi mengirim netral sendiri. Sengaja BUKAN "link": sisi browser
+    # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
+    # ke GUI); yang ini menandai perintah tidak sampai ke Pi.
+    "cmd_link": "ok",
 }
 
 master = None
@@ -65,11 +70,35 @@ joystick = {
 }
 
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
-# JOYSTICK_IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus),
-# kirim SATU perintah netral lalu berhenti sampai ada perintah manual lagi.
-JOYSTICK_IDLE_TIMEOUT = 0.5
+# IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus), berhenti
+# memakai axis terakhir dan streaming NEUTRAL sebagai gantinya.
+#
+# Kenapa TETAP streaming (bukan berhenti mengirim)? ArduSub mengharapkan aliran
+# MANUAL_CONTROL yang kontinu; kalau kita diam, failsafe pilot-input Pixhawk
+# yang jalan dan perilakunya tergantung parameter. Mengirim netral terus jauh
+# lebih bisa diprediksi: diam di tempat, dan di ALT_HOLD berarti tahan
+# kedalaman.
+JOYSTICK_SEND_INTERVAL = 0.05   # 20 Hz
 last_joystick_update = 0.0
 joystick_lock = threading.Lock()
+
+# Log axis per-iterasi membanjiri console Pi (20 baris/detik) dan memakan CPU
+# yang dibutuhkan link serial. Nyalakan hanya saat debugging.
+VERBOSE_JOYSTICK = False
+JOYSTICK_LOG_INTERVAL = 1.0
+
+# Telemetry keluar 10 Hz; mencetaknya juga hanya menutupi log yang penting.
+VERBOSE_TELEMETRY = False
+
+# Perintah yang memang hanya mengubah tampilan/state di dashboard dan tidak
+# punya padanan di wahana. Didaftarkan eksplisit supaya log "unknown command"
+# benar-benar hanya berisi hal yang perlu diperiksa.
+GUI_ONLY_COMMANDS = frozenset({
+    "controller",     # tab Keyboard/Gamepad di dashboard
+    "set_surface",    # reset acuan permukaan (dihitung sisi GUI)
+    "snapshot",       # tangkapan frame di browser
+    "record",         # perekaman di browser
+})
 
 # =========================
 # Gripper
@@ -87,7 +116,8 @@ gripper_lock = threading.Lock()
 def send_telemetry():
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
-    print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+    if VERBOSE_TELEMETRY:
+        print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
 def normalize_heading(deg):
     if deg < 0:
         deg += 360.0
@@ -110,7 +140,6 @@ def command_listener():
 
         try:
             msg = json.loads(data.decode("utf-8"))
-            print("RAW UDP:", msg)
         except Exception:
             print("[UDP] invalid JSON command")
             continue
@@ -236,37 +265,73 @@ def command_listener():
                     joystick[name] = clamp_axis(name, value)
                     last_joystick_update = time.time()
 
+            elif name in GUI_ONLY_COMMANDS:
+                # Murni state dashboard (tab controller aktif, reset acuan
+                # permukaan, snapshot/record lokal). Diterima tanpa aksi —
+                # diakui di sini supaya tidak tercatat sebagai perintah asing.
+                pass
+
             else:
-                print(f"[CMD] unknown command: {name}")
+                print(f"[CMD] unknown command: {name} = {value}")
 
         except Exception as e:
             print("[CMD] error executing command:", e)
 
 def joystick_sender():
-    global master
-    while True:
-        if master is not None:
-            print(
-                f"[MANUAL] "
-                f"X={joystick['surge']} "
-                f"Y={joystick['sway']} "
-                f"Z={joystick['heave']} "
-                f"R={joystick['yaw']}"
-            )   
-            print("RAW =", joystick)
+    """Streaming MANUAL_CONTROL ke Pixhawk 20 Hz.
 
+    Konversi axis GUI -> field MANUAL_CONTROL dilakukan oleh
+    rov_axes.resolve_manual_packet(), termasuk heave -> z (0..1000, netral 500).
+    Ini PENTING: mengirim heave mentah membuat stik netral terbaca sebagai
+    turun penuh oleh ArduSub.
+    """
+    global master
+
+    was_stale = None        # None = belum pernah lapor, supaya status awal ikut ter-log
+    last_log = 0.0
+
+    while True:
+        if master is None:
+            time.sleep(JOYSTICK_SEND_INTERVAL)
+            continue
+
+        with joystick_lock:
+            axes = dict(joystick)
+            last_update = last_joystick_update
+
+        packet, stale = resolve_manual_packet(axes, last_update, time.time())
+
+        if stale != was_stale:
+            was_stale = stale
+            state["cmd_link"] = "stale" if stale else "ok"
+            if stale:
+                print(f"[FAILSAFE] Tidak ada axis > {IDLE_TIMEOUT}s — kirim NEUTRAL")
+            else:
+                print("[FAILSAFE] Axis mengalir lagi — kontrol manual pulih")
+
+        try:
             master.mav.manual_control_send(
                 master.target_system,
-                joystick["surge"],
-                joystick["sway"],
-                joystick["heave"],
-                joystick["yaw"],
-                0
+                packet["x"],
+                packet["y"],
+                packet["z"],
+                packet["r"],
+                packet["buttons"],
             )
-            
-            print("[MANUAL] sent")
+        except Exception as e:
+            print("[MANUAL] gagal kirim:", e)
 
-        time.sleep(0.05)
+        if VERBOSE_JOYSTICK:
+            now = time.time()
+            if now - last_log >= JOYSTICK_LOG_INTERVAL:
+                last_log = now
+                print(
+                    f"[MANUAL] x={packet['x']} y={packet['y']} "
+                    f"z={packet['z']} r={packet['r']}"
+                    f"{' (STALE)' if stale else ''}"
+                )
+
+        time.sleep(JOYSTICK_SEND_INTERVAL)
 
 def gripper_sender():
     """Gerakkan servo gripper menuju target 10 Hz dgn rate-limit + EMA.
@@ -424,7 +489,8 @@ def main():
             # altitude bernilai negatif saat ROV berada di bawah permukaan
             if hasattr(msg, "altitude"):
                 state["depth"] = max(0.0, -float(msg.altitude))
-                print(f"[DEPTH] {state['depth']:.2f} m")
+                if VERBOSE_TELEMETRY:
+                    print(f"[DEPTH] {state['depth']:.2f} m")
         # --------------------------------
         # HEARTBEAT: mode dan armed
         # --------------------------------

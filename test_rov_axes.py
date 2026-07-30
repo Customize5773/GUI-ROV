@@ -6,10 +6,12 @@
 import unittest
 
 from rov_axes import (
+    IDLE_TIMEOUT,
     NEUTRAL,
     Z_NEUTRAL,
     axes_to_manual_control,
     clamp_axis,
+    resolve_manual_packet,
     to_mavlink_z,
 )
 
@@ -74,6 +76,59 @@ class TestAxesToManualControl(unittest.TestCase):
 
     def test_neutral_adalah_perintah_diam(self):
         self.assertEqual(NEUTRAL, {"x": 0, "y": 0, "z": Z_NEUTRAL, "r": 0, "buttons": 0})
+
+
+class TestResolveManualPacket(unittest.TestCase):
+    """Fail-safe idle: axis berhenti mengalir -> kirim netral, jangan tahan
+    thrust terakhir."""
+
+    AXES = {"surge": 400, "sway": -300, "yaw": 200, "heave": 600}
+
+    def test_axis_masih_segar_dipakai_apa_adanya(self):
+        packet, stale = resolve_manual_packet(self.AXES, last_update=100.0, now=100.2)
+        self.assertFalse(stale)
+        self.assertEqual(packet, axes_to_manual_control(**self.AXES))
+
+    def test_lewat_timeout_jadi_netral(self):
+        packet, stale = resolve_manual_packet(
+            self.AXES, last_update=100.0, now=100.0 + IDLE_TIMEOUT + 0.01
+        )
+        self.assertTrue(stale)
+        self.assertEqual(packet, NEUTRAL)
+
+    def test_tepat_di_batas_belum_stale(self):
+        packet, stale = resolve_manual_packet(
+            self.AXES, last_update=100.0, now=100.0 + IDLE_TIMEOUT
+        )
+        self.assertFalse(stale)
+        self.assertEqual(packet, axes_to_manual_control(**self.AXES))
+
+    def test_belum_pernah_ada_axis_langsung_netral(self):
+        # last_update = 0.0 -> GUI belum pernah mengirim apa pun sejak boot.
+        packet, stale = resolve_manual_packet(self.AXES, last_update=0.0, now=100.0)
+        self.assertTrue(stale)
+        self.assertEqual(packet, NEUTRAL)
+
+    def test_netral_berarti_throttle_tengah_bukan_nol(self):
+        # Inti bug yang diperbaiki: z = 0 pada MANUAL_CONTROL = turun penuh.
+        packet, _ = resolve_manual_packet({}, last_update=0.0, now=1.0)
+        self.assertEqual(packet["z"], Z_NEUTRAL)
+        self.assertEqual((packet["x"], packet["y"], packet["r"]), (0, 0, 0))
+
+    def test_hasil_bisa_dimodifikasi_tanpa_merusak_NEUTRAL(self):
+        packet, _ = resolve_manual_packet({}, last_update=0.0, now=1.0)
+        packet["z"] = 999
+        self.assertEqual(NEUTRAL["z"], Z_NEUTRAL)
+
+    def test_axis_hilang_dianggap_diam(self):
+        packet, stale = resolve_manual_packet(
+            {"surge": 500}, last_update=100.0, now=100.1
+        )
+        self.assertFalse(stale)
+        self.assertEqual(packet["x"], 500)
+        self.assertEqual(packet["y"], 0)
+        self.assertEqual(packet["r"], 0)
+        self.assertEqual(packet["z"], Z_NEUTRAL)
 
 
 if __name__ == "__main__":

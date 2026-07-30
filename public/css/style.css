@@ -672,6 +672,21 @@ body[data-theme="light"] .theme__icon::after {
   text-shadow: 0 0 8px rgba(43,224,214,.4);
 }
 .hud__rp { display: flex; gap: 14px; color: var(--ink); }
+.hud__gain { color: var(--ink); letter-spacing: 1px; }
+
+/* Banner fail-safe: Pi berhenti menerima axis dan mengirim netral sendiri.
+   Sengaja mencolok & di tengah — operator harus melihatnya tanpa mencari. */
+.cmdlink {
+  position: absolute; left: 50%; top: 12px; transform: translateX(-50%);
+  padding: 6px 14px; border-radius: 6px; pointer-events: none; z-index: 5;
+  background: rgba(255,86,86,.16);
+  border: 1px solid rgba(255,86,86,.55);
+  color: #ff9b9b;
+  font-family: "JetBrains Mono", monospace; font-size: 11px; letter-spacing: 1.5px;
+  animation: cmdlink-pulse 1.1s ease-in-out infinite;
+}
+.cmdlink[hidden] { display: none; }
+@keyframes cmdlink-pulse { 50% { opacity: .45; } }
 
 /* camera */
 .cam { flex: 1; position: relative; min-height: 0; background: #000; }
@@ -791,6 +806,14 @@ body[data-theme="light"] .theme__icon::after {
   color: var(--sonar); border-color: rgba(20,216,255,.45);
   background: rgba(20,216,255,.12);
   box-shadow: 0 0 14px rgba(20,216,255,.18);
+}
+/* menunggu konfirmasi HEARTBEAT dari Pixhawk */
+.mode--pending { opacity: .55; border-style: dashed; }
+/* mode Pixhawk sebenarnya — termasuk mode di luar ketiga tab (SURFACE, POSHOLD, ...) */
+.modebar__actual {
+  align-self: center; padding: 0 4px;
+  font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 1px;
+  color: var(--ink-dim); white-space: nowrap;
 }
 
 /* viewport floating actions */

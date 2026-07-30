@@ -9,7 +9,7 @@ import { replayPage } from "./pages/replay.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
-import { Manipulator } from "./manipulator/manipulator.js";
+import { slewToward } from "./axis-shaping.js";
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -20,6 +20,7 @@ const els = {
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
+  hudGain: $("hudGain"), modeActual: $("modeActual"), cmdLinkBanner: $("cmdLinkBanner"),
   miniCompass: $("miniCompass"), miniCompassNeedle: $("miniCompassNeedle"),
   miniCompassDir: $("miniCompassDir"), miniCompassValue: $("miniCompassValue"),
   camRes: $("camRes"), camRecIndicator: $("camRecIndicator"),
@@ -53,7 +54,6 @@ const pages = {
 };
 
 const navLinks = document.querySelectorAll(".sidebar__link");
-const manipulator = new Manipulator();
 
 // modul per-halaman (Control tidak punya modul; logikanya inline di app.js)
 const pageModules = {
@@ -259,6 +259,8 @@ function applyTelemetry(d) {
 
   if (typeof d.armed === "boolean") confirmArm(d.armed);
   if (typeof d.light === "boolean") confirmLight(d.light);
+  if (typeof d.mode === "string") confirmMode(d.mode);
+  reflectCmdLink(d.cmd_link);
 
   applyMission5(d.mission5);
 
@@ -306,21 +308,53 @@ function reflectLight(on) {
   els.btnLight.setAttribute("aria-pressed", String(on));
 }
 
+/* Fail-safe sisi Pi: axis dari GUI berhenti mengalir, jadi rov_agent.py
+   mengirim netral sendiri. Berbeda arah dengan linkStale (telemetry tidak
+   sampai ke GUI), karena itu ditampilkan terpisah. */
+let cmdLinkStale = false;
+function reflectCmdLink(value) {
+  // Saat autonomous, GUI memang sengaja tidak mengirim axis — netral di Pi
+  // adalah kondisi normal, bukan kegagalan. Jangan bunyikan alarm palsu.
+  const stale = value === "stale" && controlMode === "manual";
+  if (els.cmdLinkBanner) els.cmdLinkBanner.hidden = !stale;
+  if (stale === cmdLinkStale) return;
+  cmdLinkStale = stale;
+  log(
+    stale ? "Fail-safe ROV: perintah axis tidak sampai — thruster netral" : "Link perintah ke ROV pulih",
+    stale ? "err" : "ok",
+  );
+}
+
 /* ARM/LIGHT: UI dibalik optimistik saat diklik lalu ditandai "pending" sampai
    telemetri ROV mengonfirmasi. Jika ROV menolak (nilai beda) atau tak pernah
    meng-echo status dalam 2 dtk, operator diberi tahu agar tidak salah baca. */
 const pending = {
   arm:   { active: false, expected: false, since: 0, btn: els.btnArm,   label: "ARM" },
   light: { active: false, expected: false, since: 0, btn: els.btnLight, label: "LIGHT" },
+  /* Perpindahan mode juga butuh konfirmasi: ALT_HOLD, misalnya, ditolak
+     Pixhawk kalau sumber kedalaman belum sehat. Targetnya sebuah tab, bukan
+     satu tombol tetap, jadi elemennya dicari saat markPending. */
+  mode:  { active: false, expected: null, since: 0, btn: null, label: "MODE" },
 };
+function modeTab(mode) {
+  return document.querySelector(`#modeBar .mode[data-mode="${mode}"]`);
+}
 function markPending(key, expected) {
   const p = pending[key];
+  if (key === "mode") {
+    if (p.btn) p.btn.classList.remove("mode--pending");
+    p.btn = modeTab(expected);
+    if (p.btn) p.btn.classList.add("mode--pending");
+  } else {
+    p.btn.classList.add("ctrl--pending");
+  }
   p.active = true; p.expected = expected; p.since = performance.now();
-  p.btn.classList.add("ctrl--pending");
 }
 function clearPending(key) {
   const p = pending[key];
-  p.active = false; p.btn.classList.remove("ctrl--pending");
+  p.active = false;
+  if (!p.btn) return;
+  p.btn.classList.remove(key === "mode" ? "mode--pending" : "ctrl--pending");
 }
 function confirmArm(on) {
   if (pending.arm.active) {
@@ -336,10 +370,22 @@ function confirmLight(on) {
   }
   reflectLight(on);
 }
+function confirmMode(ardusubMode) {
+  const tab = PILOT_MODE_FROM_ARDUSUB[String(ardusubMode || "").toUpperCase()] || null;
+  if (pending.mode.active && tab) {
+    if (tab !== pending.mode.expected) {
+      log(`Pixhawk menolak/override mode — aktif: ${ardusubMode}`, "warn");
+    } else {
+      log(`Pilot mode: ${ardusubMode}`, "ok");
+    }
+    clearPending("mode");
+  }
+  reflectPilotMode(ardusubMode);
+}
 // watchdog: bila konfirmasi tak datang, hentikan indikator pending + peringatkan
 setInterval(() => {
   const now = performance.now();
-  for (const key of ["arm", "light"]) {
+  for (const key of ["arm", "light", "mode"]) {
     const p = pending[key];
     if (p.active && now - p.since > 2000) {
       clearPending(key);
@@ -418,17 +464,6 @@ function sendCmd(name, value, quiet = false) {
   send({ type: "cmd", name, value });
   if (!quiet) log(`CMD ${name} = ${value}`);
 }
-function sendPacket(packet, quiet = false) {
-  if (!packet) return;
-
-  send(packet);
-
-  if (!quiet) {
-    console.log("[MANIPULATOR]", packet);
-    log(`CMD ${packet.name} → ${packet.device}`);
-  }
-}
-
 // sediakan log, sendCmd & send (WS mentah) untuk modul halaman
 setServices({ log, sendCmd, send });
 function setLatency(ms) { els.lat.textContent = Math.round(ms); }
@@ -683,20 +718,42 @@ const camFs = makeFullscreen(els.camStage, {
 });
 els.btnCamFull.onclick = () => camFs.toggle();
 
-/* pilot mode tabs: Standby | Dry Cal | Manual | Hold */
-let pilotMode = "manual";
+/* ================= PILOT MODE (ArduSub) =================
+   Manual | Stabilize | Depth Hold. Perintah yang dikirim adalah "pilot_mode",
+   yang di rov_agent.py diterjemahkan ke MANUAL / STABILIZE / ALT_HOLD.
+
+   Sorotan tab TIDAK diset lokal saat diklik. Sumbernya cuma satu: string mode
+   dari HEARTBEAT di telemetry. Karena itu tab GUI dan tombol D-pad gamepad
+   otomatis sinkron, dan tab tidak pernah membohongi operator kalau Pixhawk
+   menolak perpindahan mode. */
+const PILOT_MODE_FROM_ARDUSUB = {
+  MANUAL: "manual",
+  STABILIZE: "stabilize",
+  ALT_HOLD: "depth_hold",
+};
+
+function setPilotMode(mode) {
+  sendCmd("pilot_mode", mode);
+  markPending("mode", mode);
+}
+
+function reflectPilotMode(ardusubMode) {
+  const raw = String(ardusubMode || "").toUpperCase();
+  const tab = PILOT_MODE_FROM_ARDUSUB[raw] || null;
+
+  document.querySelectorAll("#modeBar .mode").forEach((b) => {
+    const on = b.dataset.mode === tab;
+    b.classList.toggle("mode--active", on);
+    if (on) b.setAttribute("aria-selected", "true");
+    else b.removeAttribute("aria-selected");
+  });
+
+  // Mode di luar ketiga tab (SURFACE, POSHOLD, ...) tetap terbaca operator.
+  if (els.modeActual) els.modeActual.textContent = raw || "—";
+}
+
 document.querySelectorAll("#modeBar .mode").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#modeBar .mode").forEach((b) => {
-      b.classList.remove("mode--active");
-      b.removeAttribute("aria-selected");
-    });
-    btn.classList.add("mode--active");
-    btn.setAttribute("aria-selected", "true");
-    pilotMode = btn.dataset.mode;
-    sendCmd("mode", pilotMode);
-    log(`Mode pilot: ${btn.textContent}`, "ok");
-  };
+  btn.onclick = () => setPilotMode(btn.dataset.mode);
 });
 
 /* controller tabs: Keyboard | Gamepad */
@@ -744,12 +801,13 @@ Object.entries(axisEls).forEach(([name, el]) => {
 });
 
 /* keyboard piloting (hanya saat controller = Keyboard):
-   W/S surge · A/D sway · Q/E yaw · R/F vertical — tahan untuk ±50, lepas untuk 0 */
+   W/S surge · A/D sway · Q/E yaw · R/F vertical — tahan untuk bergerak, lepas untuk 0.
+   Besar langkah = CONFIG.CONTROL.KEY_AXIS_STEP dikali gain pilot. */
 const KEY_AXIS = {
-  KeyW: ["surge", 50], KeyS: ["surge", -50],
-  KeyD: ["sway", 50], KeyA: ["sway", -50],
-  KeyE: ["yaw", 50], KeyQ: ["yaw", -50],
-  KeyR: ["heave", 50], KeyF: ["heave", -50],
+  KeyW: ["surge", 1], KeyS: ["surge", -1],
+  KeyD: ["sway", 1], KeyA: ["sway", -1],
+  KeyE: ["yaw", 1], KeyQ: ["yaw", -1],
+  KeyR: ["heave", 1], KeyF: ["heave", -1],
 };
 const heldKeys = new Set();
 function pilotKeyActive(e) {
@@ -757,12 +815,20 @@ function pilotKeyActive(e) {
 }
 window.addEventListener("keydown", (e) => {
   if (!pilotKeyActive(e) || heldKeys.has(e.code)) return;
+  /* Gerbang otoritas yang sama seperti jalur gamepad (lihat pollGamepad):
+     saat FSM autonomous memegang kendali atau E-Stop terkunci, keyboard juga
+     tidak boleh meng-override. Sebelumnya celah ini membuat E-Stop bisa
+     dilewati lewat W/A/S/D. */
+  if (controlMode !== "manual" || estopLatched) return;
+
   heldKeys.add(e.code);
-  const [axis, val] = KEY_AXIS[e.code];
+  const [axis, dir] = KEY_AXIS[e.code];
+  const val = Math.round(dir * CONFIG.CONTROL.KEY_AXIS_STEP * currentGain());
   setAxis(axis, val, true);
   sendCmd(axis, val);
 });
 window.addEventListener("keyup", (e) => {
+  // Sengaja TANPA gerbang: netralisasi harus selalu bisa lewat.
   if (!KEY_AXIS[e.code] || !heldKeys.has(e.code)) return;
   heldKeys.delete(e.code);
   const [axis] = KEY_AXIS[e.code];
@@ -775,21 +841,37 @@ window.addEventListener("keyup", (e) => {
    hasil mapping axis diambil dari joystick-state / halaman joystick.
    Panel joystick tetap bisa membaca gamepad walaupun activeController
    dashboard masih Keyboard. */
-const GP_DEADZONE = 0.12;
-
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, Math.round(v)));
 }
 
-function getMappedJoystickAxes() {
-  updateJoystickStateFromGamepad();
+/* ====================== GAIN PILOT ======================
+   Pengali output axis (surge/sway/yaw/heave) sebelum dikirim — TIDAK berlaku
+   untuk gripper. Deadzone & expo membuat gerakan kecil presisi; gain membatasi
+   thrust maksimum, yang justru paling dibutuhkan saat manuver rapat di dekat
+   struktur. Indeksnya tersimpan di profil joystick (joystickState.tuning). */
+function gainSteps() {
+  return CONFIG.CONTROL.GAIN_STEPS;
+}
 
-  return {
-    surge: joystickState.mapped.surge,
-    sway:  joystickState.mapped.sway,
-    yaw:   joystickState.mapped.yaw,
-    heave: joystickState.mapped.heave,
-  };
+function currentGain() {
+  const steps = gainSteps();
+  const i = clamp(joystickState.tuning?.gainIndex ?? 0, 0, steps.length - 1);
+  return steps[i];
+}
+
+function setGainIndex(next) {
+  const steps = gainSteps();
+  const i = clamp(next, 0, steps.length - 1);
+  if (i === joystickState.tuning.gainIndex) return false;
+  joystickState.tuning.gainIndex = i;
+  reflectGain();
+  return true;
+}
+
+function reflectGain() {
+  const pct = Math.round(currentGain() * 100);
+  if (els.hudGain) els.hudGain.textContent = `GAIN ${pct}%`;
 }
 
 function firstGamepad() {
@@ -824,12 +906,35 @@ let lastGripCmd = null;
 /* E-Stop mengunci joystick sampai operator arm ulang (lihat btnStop/btnArm). */
 let estopLatched = false;
 
-/* Throttle pengiriman axis ke server ~15 Hz. Meski axis ditahan konstan,
-   kita tetap resend supaya Pi menerima MANUAL_CONTROL berkelanjutan dan tidak
-   masuk fail-safe timeout. */
+/* Heartbeat axis ~15 Hz.
+
+   Nilai axis saat ini dikirim ulang terus-menerus walau tidak berubah, supaya
+   rov_agent.py menerima aliran MANUAL_CONTROL yang berkelanjutan dan tahu link
+   masih hidup. Sengaja TIDAK bergantung pada jenis controller: kalau hanya
+   jalur gamepad yang mengirim, mode Keyboard akan terus-menerus terbaca
+   "stale" oleh fail-safe Pi padahal semuanya normal.
+
+   Dengan begini "stale" benar-benar berarti GUI/link mati, bukan sekadar
+   operator sedang tidak menyentuh stik. */
 const GP_SEND_HZ = 15;
 const GP_SEND_INTERVAL = 1000 / GP_SEND_HZ;
-let gpLastSent = 0;
+const AXIS_NAMES = ["surge", "sway", "yaw", "heave"];
+
+setInterval(() => {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+  // Saat autonomous, FSM yang memegang axis — GUI diam, dan fail-safe netral
+  // di Pi memang perilaku yang diharapkan (lihat reflectCmdLink).
+  if (controlMode !== "manual") return;
+
+  /* E-Stop: JANGAN diam. Mengirim nol secara eksplisit lebih aman daripada
+     membiarkan link terlihat mati — perintah netralnya tegas, dan operator
+     tidak dibingungkan peringatan "link terputus" padahal dia sendiri yang
+     menekan STOP. */
+  for (const a of AXIS_NAMES) {
+    sendCmd(a, estopLatched ? 0 : (Math.round(pilotAxes[a]) || 0), true);
+  }
+}, GP_SEND_INTERVAL);
 
 /* Membaca navigator.getGamepads() mengalokasikan array baru tiap panggilan,
    jadi tidak perlu dilakukan 60x/detik. 30 Hz sudah 2x laju kirim (15 Hz)
@@ -862,10 +967,11 @@ function sendGripper(cmd, force = false) {
   if (controlMode !== "manual" || estopLatched) return false;
 
   if (typeof cmd === "number") {
-    if (cmd === gpLast.grip) return false;
+    if (!force && cmd === gpLast.grip) return false;
     gpLast.grip = cmd;
     lastGripCmd = null;   // posisi diubah analog — open/close berikutnya sah
     sendCmd("gripper", cmd, true);
+    if (force) log(cmd === 0 ? "Gripper: NETRAL" : `Gripper: ${cmd}`, "ok");
     return true;
   }
 
@@ -887,7 +993,7 @@ function neutralizeGamepadAxes() {
   for (const k in gpBtnPrev) delete gpBtnPrev[k];
 }
 
-function executeJoystickAction(action, mode = "toggle") {
+function executeJoystickAction(action) {
   if (!action || action === "no_function") return;
 
   switch (action) {
@@ -921,37 +1027,11 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    case "input_hold_set": {
-      sendCmd("input_hold_set", true);
-      log("Input hold set", "ok");
-      return;
-    }
-
-    /* ================= CAMERA / MOUNT ================= */
-    case "mount_tilt_up": {
-      sendPacket(manipulator.rotateLeft(), true);
-      return;
-    }
-
-    case "mount_tilt_down": {
-      sendPacket(manipulator.rotateRight(), true);
-      return;
-    }
-
-    case "mount_center": {
-      sendCmd("mount_center", true);
-      log("Mount center", "ok");
-      return;
-    }
-
-    /* ================= ACTUATOR ================= */
-    case "actuator1_inc": {
-      sendPacket(manipulator.openGrip(), true);
-      return;
-    }
-
-    case "actuator1_dec": {
-      sendPacket(manipulator.closeGrip(), true);
+    /* ================= E-STOP ================= */
+    /* Dipetakan di layer regular MAUPUN shift, supaya penekanan shift yang
+       tidak disengaja tidak pernah menghilangkan tombol darurat. */
+    case "e_stop": {
+      els.btnStop.click();
       return;
     }
 
@@ -966,45 +1046,40 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    /* ================= LIGHT ================= */
-    case "lights_brighter": {
-      sendCmd("light_level", mode === "hold" ? { dir: "up", hold: true } : "up");
+    case "grip_neutral": {
+      sendGripper(0, true);
       return;
     }
 
-    case "lights_dimmer": {
-      sendCmd("light_level", mode === "hold" ? { dir: "down", hold: true } : "down");
+    /* ================= LIGHT ================= */
+    case "light_toggle": {
+      els.btnLight.click();
       return;
     }
 
     /* ================= GAIN ================= */
     case "gain_inc": {
-      sendCmd("gain", mode === "hold" ? { dir: "inc", hold: true } : "inc");
+      if (setGainIndex(joystickState.tuning.gainIndex + 1)) {
+        log(`Gain pilot: ${Math.round(currentGain() * 100)}%`, "ok");
+      }
       return;
     }
 
     case "gain_dec": {
-      sendCmd("gain", mode === "hold" ? { dir: "dec", hold: true } : "dec");
+      if (setGainIndex(joystickState.tuning.gainIndex - 1)) {
+        log(`Gain pilot: ${Math.round(currentGain() * 100)}%`, "ok");
+      }
       return;
     }
   }
 }
 
+/* Tidak ada lagi aksi bermode "hold" yang butuh perintah lepas: aksi kamera
+   mount & actuator sudah dihapus (tidak ada hardware-nya, dan tidak pernah
+   punya handler di rov_agent.py). Dipertahankan sebagai titik pasang bila
+   nanti ada aktuator yang memang perlu start/stop. */
 function executeJoystickRelease(action) {
-    if (!action || action === "no_function") return;
-
-    switch (action) {
-
-        case "mount_tilt_up":
-        case "mount_tilt_down":
-            sendPacket(manipulator.stopRotate(), true);
-            return;
-
-        case "actuator1_inc":
-        case "actuator1_dec":
-            sendPacket(manipulator.stopGrip(), true);
-            return;
-    }
+  if (!action || action === "no_function") return;
 }
 
 function isGripAction(action) {
@@ -1039,7 +1114,7 @@ function processMappedGamepadButtons(accept = () => true) {
 
       // hanya sekali saat tombol mulai ditekan
       if (rising) {
-          executeJoystickAction(row.action, "hold");
+          executeJoystickAction(row.action);
       }
 
       // hanya sekali saat tombol dilepas
@@ -1048,12 +1123,12 @@ function processMappedGamepadButtons(accept = () => true) {
       }
 
     }
-  
+
     else {
 
       // toggle = sekali saat rising edge
       if (rising) {
-        executeJoystickAction(row.action, "toggle");
+        executeJoystickAction(row.action);
       }
     }
   }
@@ -1083,6 +1158,7 @@ function pollGamepad() {
 
   const nowPoll = performance.now();
   if (nowPoll - gpLastPoll < GP_POLL_INTERVAL) return;
+  const dt = Math.min((nowPoll - gpLastPoll) / 1000, 0.25);   // kurung jeda tab background
   gpLastPoll = nowPoll;
 
   // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
@@ -1090,6 +1166,8 @@ function pollGamepad() {
 
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
+  // jangan kemudikan apa pun sebelum mapping yang berlaku benar-benar diketahui
+  if (!joystickState.configLoaded) return;
 
   /* ================= AUX: GRIPPER =================
      Tidak digerbangi activeController, jadi gripper tetap bisa dioperasikan
@@ -1116,28 +1194,28 @@ function pollGamepad() {
     return;
   }
 
-  /* ================= AXIS ================= */
-  const next = {
-    surge: joystickState.mapped.surge,
-    sway:  joystickState.mapped.sway,
-    yaw:   joystickState.mapped.yaw,
-    heave: joystickState.mapped.heave,
-  };
+  /* ================= AXIS =================
+     joystickState.mapped sudah melewati deadzone + expo (readAssignedAxis).
+     Di sini tinggal gain pilot lalu rate-limit, supaya hentakan stik tidak
+     jadi lonjakan thrust/arus baterai mendadak. */
+  const gain = currentGain();
+  const slewRate = joystickState.tuning?.slewPerSec ?? 4000;
 
   let changed = false;
   for (const a of ["surge", "sway", "yaw", "heave"]) {
-    if (next[a] !== gpLast[a]) {
-      gpLast[a] = next[a];
-      setAxis(a, next[a], true);
+    const target = joystickState.mapped[a] * gain;
+    const next = Math.round(slewToward(gpLast[a], target, slewRate, dt));
+
+    if (next !== gpLast[a]) {
+      gpLast[a] = next;
+      setAxis(a, next, true);
       changed = true;
     }
   }
 
-  // Kirim saat berubah, ATAU secara periodik (~15 Hz) walau axis ditahan,
-  // agar MANUAL_CONTROL di Pi terus mengalir dan tidak masuk fail-safe.
-  const nowT = performance.now();
-  if (changed || nowT - gpLastSent >= GP_SEND_INTERVAL) {
-    gpLastSent = nowT;
+  /* Hanya kirim saat berubah — pengiriman periodik ditangani heartbeat axis
+     di bawah, yang jalan untuk semua jenis controller. */
+  if (changed) {
     for (const a of ["surge", "sway", "yaw", "heave"]) {
       sendCmd(a, gpLast[a], true);
     }
@@ -1167,6 +1245,7 @@ window.addEventListener("gamepaddisconnected", (e) => {
 /* Satu loop saja: pollGamepad menyegarkan joystickState (dipakai badge,
    panel tester, dan kontrol thruster). Halaman joystick punya loop sendiri
    saat di-mount, lihat pages/joystick.js. */
+reflectGain();
 requestAnimationFrame(pollGamepad);
 
 /* set surface level */
@@ -1175,41 +1254,21 @@ $("btnSetSurface").onclick = () => {
   log("Surface level diset — Depth = 0", "ok");
 };
 
-/* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
-/* ===================== MANIPULATOR ===================== */
+/* ===================== GRIPPER =====================
+   Tombol GUI, keyboard H/G, dan tombol/trigger gamepad semuanya bermuara ke
+   sendGripper() — satu-satunya corong, sehingga dedupe dan gerbang
+   manual/E-Stop berlaku sama dari sumber mana pun.
 
-/* ---------- Grip Open ---------- */
-els.btnGripOpen.addEventListener("pointerdown", () => {
-    sendPacket(manipulator.openGrip());
-    log("Grip OPEN", "ok");
-});
-
-els.btnGripOpen.addEventListener("pointerup", () => {
-    sendPacket(manipulator.stopGrip(), true);
-});
-
-els.btnGripOpen.addEventListener("pointerleave", () => {
-    sendPacket(manipulator.stopGrip(), true);
-});
-
-/* ---------- Grip Close ---------- */
-els.btnGripClose.addEventListener("pointerdown", () => {
-    sendPacket(manipulator.closeGrip());
-    log("Grip CLOSE", "ok");
-});
-
-els.btnGripClose.addEventListener("pointerup", () => {
-    sendPacket(manipulator.stopGrip(), true);
-});
-
-els.btnGripClose.addEventListener("pointerleave", () => {
-    sendPacket(manipulator.stopGrip(), true);
-});
+   gripper_sender() di Pi yang menggeser servo perlahan menuju target, jadi
+   perintah di sini cukup sekali klik (bukan tahan-lepas): posisi terakhir
+   DITAHAN dan tidak balik sendiri. */
+els.btnGripOpen.onclick = () => sendGripper("open", true);
+els.btnGripClose.onclick = () => sendGripper("close", true);
 
 window.addEventListener("keydown", (e) => {
   if (e.target !== document.body) return;
-  if (e.code === "KeyH") { e.preventDefault(); els.btnGripOpen.click(); }
-  else if (e.code === "KeyG") { e.preventDefault(); els.btnGripClose.click(); }
+  if (e.code === "KeyH") { e.preventDefault(); sendGripper("open", true); }
+  else if (e.code === "KeyG") { e.preventDefault(); sendGripper("close", true); }
 });
 
 /* viewport toggles: Follow ROV | Preview AIR | Echo → aksi nyata di scene 3D */
