@@ -87,7 +87,7 @@ gripper_lock = threading.Lock()
 def send_telemetry():
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
-
+    print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
 def normalize_heading(deg):
     if deg < 0:
         deg += 360.0
@@ -110,6 +110,7 @@ def command_listener():
 
         try:
             msg = json.loads(data.decode("utf-8"))
+            print("RAW UDP:", msg)
         except Exception:
             print("[UDP] invalid JSON command")
             continue
@@ -143,29 +144,57 @@ def command_listener():
                         1,      # arm
                         0,0,0,0,0,0
                     )
-                    # COMMAND_ACK ditangani oleh loop utama (main()) supaya
-                    # thread ini tidak terblokir dan STOP/E-Stop tetap responsif.
+
+                    ack = master.recv_match(type="COMMAND_ACK", blocking=True, timeout=3)
+
+                    print("ACK =", ack)
                 else:
                     print("[MAV] DISARM")
                     master.arducopter_disarm()
 
             elif name == "control_mode":
-                # contoh mode umum ArduSub / ArduPilot:
-                # MANUAL, STABILIZE, ALT_HOLD, POSHOLD, GUIDED, dsb
-                mode = str(value).upper()
-                if mode in master.mode_mapping():
-                    mode_id = master.mode_mapping()[mode]
-                    master.set_mode(mode_id)
-                    print(f"[MAV] set mode {mode}")
-                else:
-                    print(f"[MAV] mode '{mode}' tidak ada di mode_mapping()")
 
+                global current_control_mode
+
+                current_control_mode = str(value).lower()
+
+                if current_control_mode not in ("manual", "autonomous"):
+                    print(f"[CONTROL] Unknown mode: {current_control_mode}")
+                    continue
+
+                print(f"[CONTROL] {current_control_mode}")
+
+            elif name == "pilot_mode":
+
+                mode = str(value).lower()
+
+                pilot_mode_map = {
+                    "manual": "MANUAL",
+                    "stabilize": "STABILIZE",
+                    "depth_hold": "ALT_HOLD",
+                }
+
+                if mode not in pilot_mode_map:
+                    print(f"[PILOT] Unknown mode: {mode}")
+                    continue
+
+                pixhawk_mode = pilot_mode_map[mode]
+
+                mode_mapping = master.mode_mapping() or {}
+
+                if pixhawk_mode not in mode_mapping:
+                    print(f"[PILOT] {pixhawk_mode} not supported")
+                    continue
+
+                master.set_mode(mode_mapping[pixhawk_mode])
+
+                print("====================================")
+                print(f" PILOT MODE : {pixhawk_mode}")
+                print("====================================")
+                
             elif name == "stop":
-                # Failsafe sederhana: netralkan axis lalu disarm
+                # Failsafe sederhana: disarm
                 print("[MAV] STOP -> DISARM")
-                with joystick_lock:
-                    joystick.update(AXIS_NEUTRAL)
-                    last_joystick_update = 0.0
                 master.arducopter_disarm()
 
             elif name == "light":
@@ -176,7 +205,8 @@ def command_listener():
             elif name == "thruster_config":
 
                 motors = msg.get("motors", {})
-
+                print("[DEBUG] Motors received:", motors)
+                
                 for motor, direction in motors.items():
 
                     motor = int(motor)
@@ -213,48 +243,28 @@ def command_listener():
             print("[CMD] error executing command:", e)
 
 def joystick_sender():
-    """Kirim MANUAL_CONTROL 20 Hz selama GUI masih aktif mengirim axis.
-
-    Fail-safe: bila tidak ada perintah axis baru selama JOYSTICK_IDLE_TIMEOUT,
-    kirim satu perintah netral (semua axis 0) lalu berhenti mengirim sampai
-    ada perintah manual berikutnya. Ini mencegah Pi terus mengulang nilai
-    terakhir ke Pixhawk saat GUI crash atau link putus.
-    """
     global master
-
-    sent_neutral = True   # sudah netral saat start, belum ada input
-
     while True:
-        if master is None:
-            time.sleep(0.05)
-            continue
+        if master is not None:
+            print(
+                f"[MANUAL] "
+                f"X={joystick['surge']} "
+                f"Y={joystick['sway']} "
+                f"Z={joystick['heave']} "
+                f"R={joystick['yaw']}"
+            )   
+            print("RAW =", joystick)
 
-        with joystick_lock:
-            axes = dict(joystick)
-            idle = (time.time() - last_joystick_update) > JOYSTICK_IDLE_TIMEOUT
-
-        if idle:
-            if sent_neutral:
-                time.sleep(0.05)
-                continue
-
-            axes = dict(AXIS_NEUTRAL)
-            sent_neutral = True
-            print("[MANUAL] fail-safe: idle, kirim netral")
-        else:
-            sent_neutral = False
-
-        try:
             master.mav.manual_control_send(
                 master.target_system,
-                axes["surge"],
-                axes["sway"],
-                to_mavlink_z(axes["heave"]),
-                axes["yaw"],
+                joystick["surge"],
+                joystick["sway"],
+                joystick["heave"],
+                joystick["yaw"],
                 0
             )
-        except Exception as e:
-            print("[MANUAL] gagal kirim:", e)
+            
+            print("[MANUAL] sent")
 
         time.sleep(0.05)
 
@@ -333,6 +343,22 @@ def main():
     except Exception as e:
         print("[MAV] request_data_stream_send warning:", e)
 
+    # =========================
+    # Request AHRS2 (Depth)
+    # =========================
+    try:
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavutil.mavlink.MAVLINK_MSG_ID_AHRS2,
+            100000,      # 10 Hz (100000 µs)
+            0, 0, 0, 0, 0
+        )
+    except Exception as e:
+        print("[MAV] AHRS2 request warning:", e)
+
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
@@ -390,6 +416,15 @@ def main():
             if msg.voltage_battery != 65535:
                 state["voltage"] = msg.voltage_battery / 1000.0
 
+        # --------------------------------
+        # AHRS2 : Depth dari ArduSub (meter)
+        # --------------------------------
+        elif mtype == "AHRS2":
+
+            # altitude bernilai negatif saat ROV berada di bawah permukaan
+            if hasattr(msg, "altitude"):
+                state["depth"] = max(0.0, -float(msg.altitude))
+                print(f"[DEPTH] {state['depth']:.2f} m")
         # --------------------------------
         # HEARTBEAT: mode dan armed
         # --------------------------------

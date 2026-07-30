@@ -9,6 +9,7 @@ import { replayPage } from "./pages/replay.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
+import { Manipulator } from "./manipulator/manipulator.js";
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -52,6 +53,7 @@ const pages = {
 };
 
 const navLinks = document.querySelectorAll(".sidebar__link");
+const manipulator = new Manipulator();
 
 // modul per-halaman (Control tidak punya modul; logikanya inline di app.js)
 const pageModules = {
@@ -415,6 +417,16 @@ function send(obj) {
 function sendCmd(name, value, quiet = false) {
   send({ type: "cmd", name, value });
   if (!quiet) log(`CMD ${name} = ${value}`);
+}
+function sendPacket(packet, quiet = false) {
+  if (!packet) return;
+
+  send(packet);
+
+  if (!quiet) {
+    console.log("[MANIPULATOR]", packet);
+    log(`CMD ${packet.name} → ${packet.device}`);
+  }
 }
 
 // sediakan log, sendCmd & send (WS mentah) untuk modul halaman
@@ -917,12 +929,12 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= CAMERA / MOUNT ================= */
     case "mount_tilt_up": {
-      sendCmd("mount_tilt", mode === "hold" ? { dir: "up", hold: true } : "up");
+      sendPacket(manipulator.rotateLeft(), true);
       return;
     }
 
     case "mount_tilt_down": {
-      sendCmd("mount_tilt", mode === "hold" ? { dir: "down", hold: true } : "down");
+      sendPacket(manipulator.rotateRight(), true);
       return;
     }
 
@@ -934,12 +946,12 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= ACTUATOR ================= */
     case "actuator1_inc": {
-      sendCmd("actuator1", mode === "hold" ? { dir: "inc", hold: true } : "inc");
+      sendPacket(manipulator.openGrip(), true);
       return;
     }
 
     case "actuator1_dec": {
-      sendCmd("actuator1", mode === "hold" ? { dir: "dec", hold: true } : "dec");
+      sendPacket(manipulator.closeGrip(), true);
       return;
     }
 
@@ -979,19 +991,20 @@ function executeJoystickAction(action, mode = "toggle") {
 }
 
 function executeJoystickRelease(action) {
-  if (!action || action === "no_function") return;
+    if (!action || action === "no_function") return;
 
-  switch (action) {
-    case "mount_tilt_up":
-    case "mount_tilt_down":
-      sendCmd("mount_tilt", { dir: "stop" });
-      return;
+    switch (action) {
 
-    case "actuator1_inc":
-    case "actuator1_dec":
-      sendCmd("actuator1", { dir: "stop" });
-      return;
-  }
+        case "mount_tilt_up":
+        case "mount_tilt_down":
+            sendPacket(manipulator.stopRotate(), true);
+            return;
+
+        case "actuator1_inc":
+        case "actuator1_dec":
+            sendPacket(manipulator.stopGrip(), true);
+            return;
+    }
 }
 
 function isGripAction(action) {
@@ -1023,16 +1036,21 @@ function processMappedGamepadButtons(accept = () => true) {
     const falling = !current && prev;
 
     if (row.mode === "hold") {
-      // selama tombol ditekan, kirim terus command hold
-      if (current) {
-        executeJoystickAction(row.action, "hold");
+
+      // hanya sekali saat tombol mulai ditekan
+      if (rising) {
+          executeJoystickAction(row.action, "hold");
       }
 
-      // saat tombol dilepas, kirim stop sekali
+      // hanya sekali saat tombol dilepas
       if (falling) {
-        executeJoystickRelease(row.action);
+          executeJoystickRelease(row.action);
       }
-    } else {
+
+    }
+  
+    else {
+
       // toggle = sekali saat rising edge
       if (rising) {
         executeJoystickAction(row.action, "toggle");
@@ -1157,13 +1175,37 @@ $("btnSetSurface").onclick = () => {
   log("Surface level diset — Depth = 0", "ok");
 };
 
-/* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G.
+/* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
+/* ===================== MANIPULATOR ===================== */
 
-   Sengaja TIDAK digerbangi activeController: gripper adalah perintah bantu,
-   bukan thruster. Operator harus bisa mencengkeram payload lewat keyboard
-   sementara gamepad tetap memegang kendali thruster, tanpa berpindah tab. */
-els.btnGripOpen.onclick = () => sendGripper("open", true);
-els.btnGripClose.onclick = () => sendGripper("close", true);
+/* ---------- Grip Open ---------- */
+els.btnGripOpen.addEventListener("pointerdown", () => {
+    sendPacket(manipulator.openGrip());
+    log("Grip OPEN", "ok");
+});
+
+els.btnGripOpen.addEventListener("pointerup", () => {
+    sendPacket(manipulator.stopGrip(), true);
+});
+
+els.btnGripOpen.addEventListener("pointerleave", () => {
+    sendPacket(manipulator.stopGrip(), true);
+});
+
+/* ---------- Grip Close ---------- */
+els.btnGripClose.addEventListener("pointerdown", () => {
+    sendPacket(manipulator.closeGrip());
+    log("Grip CLOSE", "ok");
+});
+
+els.btnGripClose.addEventListener("pointerup", () => {
+    sendPacket(manipulator.stopGrip(), true);
+});
+
+els.btnGripClose.addEventListener("pointerleave", () => {
+    sendPacket(manipulator.stopGrip(), true);
+});
+
 window.addEventListener("keydown", (e) => {
   if (e.target !== document.body) return;
   if (e.code === "KeyH") { e.preventDefault(); els.btnGripOpen.click(); }
