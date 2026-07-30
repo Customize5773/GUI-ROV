@@ -17,7 +17,7 @@ let rafId = null;
 let visualMode = "visual"; // visual | table
 let mappingLayer = "regular"; // regular | shift
 
-const AXIS_OPTIONS = ["Axis X", "Axis Y", "Axis Z", "Axis R", "Axis S", "Axis T", "No function"];
+const AXIS_OPTIONS = ["Axis X", "Axis Y", "Axis Z", "Axis R", "Axis S", "Axis T", "Grip", "No function"];
 const BUTTON_OPTIONS = Array.from({ length: 16 }, (_, i) => i);
 const BUTTON_MODES = ["toggle", "hold"];
 
@@ -34,6 +34,8 @@ const ACTION_LABELS = {
   mount_center: "Mount center",
   actuator1_inc: "Actuator 1 inc",
   actuator1_dec: "Actuator 1 dec",
+  grip_open: "Gripper open",
+  grip_close: "Gripper close",
   lights_brighter: "Lights brighter",
   lights_dimmer: "Lights dimmer",
   gain_inc: "Gain inc",
@@ -633,6 +635,18 @@ function bindEvents() {
 
       if (field === "assigned") {
         row.assigned = e.target.value;
+
+        /* Axis yang sebelumnya "No function" bisa punya rentang sisa yang
+           terlalu kecil (mis. -1..1) sehingga nilainya selalu masuk deadzone
+           gripper dan grip analog tak pernah aktif. Saat operator memilih
+           "Grip", naikkan rentangnya ke skala perintah -1000..1000. */
+        if (row.assigned === "Grip" &&
+            Math.abs(Number(row.max) - Number(row.min)) < 100) {
+          row.min = -1000;
+          row.max = 1000;
+          rerender();
+          return;
+        }
       } else if (field === "min" || field === "max") {
         row[field] = Number(e.target.value);
       }

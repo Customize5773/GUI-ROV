@@ -802,7 +802,12 @@ function logGamepadStatus() {
   }
 }
 
-const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
+const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0, grip: 0 };
+
+/* Perintah gripper terakhir yang dikirim ("open" | "close" | null).
+   Dipakai untuk dedupe: tombol mode "hold" dan keyboard bisa memanggil aksi
+   gripper berulang, sedangkan yang dibutuhkan hanya satu perintah posisi. */
+let lastGripCmd = null;
 
 /* E-Stop mengunci joystick sampai operator arm ulang (lihat btnStop/btnArm). */
 let estopLatched = false;
@@ -830,6 +835,34 @@ function gpPressed(pad, idx) {
   const was = !!gpBtnPrev[idx];
   gpBtnPrev[idx] = now;
   return now && !was;
+}
+
+/* Satu-satunya jalan keluar perintah gripper (tombol GUI, keyboard H/G,
+   tombol gamepad, axis analog) supaya dedupe konsisten antar sumber input.
+
+   cmd  : "open" | "close" | angka -1000..1000 (axis analog)
+   force: true untuk klik tombol GUI eksplisit — selalu kirim + beri log,
+          walau posisinya sama, agar operator dapat umpan balik.
+   Return true bila perintah benar-benar dikirim. */
+function sendGripper(cmd, force = false) {
+  // Gripper adalah aktuator payload: sama seperti thruster, ia tidak boleh
+  // digerakkan GUI saat FSM autonomous memegang kendali atau E-Stop aktif.
+  if (controlMode !== "manual" || estopLatched) return false;
+
+  if (typeof cmd === "number") {
+    if (cmd === gpLast.grip) return false;
+    gpLast.grip = cmd;
+    lastGripCmd = null;   // posisi diubah analog — open/close berikutnya sah
+    sendCmd("gripper", cmd, true);
+    return true;
+  }
+
+  if (!force && lastGripCmd === cmd) return false;
+  lastGripCmd = cmd;
+  gpLast.grip = 0;
+  sendCmd("gripper", cmd);
+  log(`Gripper: ${cmd === "close" ? "CLOSE" : "OPEN"}`, "ok");
+  return true;
 }
 
 function neutralizeGamepadAxes() {
@@ -910,6 +943,17 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
+    /* ================= GRIPPER ================= */
+    case "grip_open": {
+      sendGripper("open");
+      return;
+    }
+
+    case "grip_close": {
+      sendGripper("close");
+      return;
+    }
+
     /* ================= LIGHT ================= */
     case "lights_brighter": {
       sendCmd("light_level", mode === "hold" ? { dir: "up", hold: true } : "up");
@@ -950,12 +994,24 @@ function executeJoystickRelease(action) {
   }
 }
 
-function processMappedGamepadButtons() {
+function isGripAction(action) {
+  return action === "grip_open" || action === "grip_close";
+}
+
+/* Proses tombol gamepad yang aksinya lolos `accept`.
+
+   Cache edge (gpBtnPrev) TIDAK di-update di sini — commitButtonCache() yang
+   melakukannya sekali per frame. Sebabnya: tombol gripper diproses di jalur
+   terpisah dari tombol lain (lihat pollGamepad), dan kalau masing-masing
+   jalur meng-update cache, jalur yang jalan lebih dulu akan "memakan" rising
+   edge sehingga jalur kedua tidak pernah melihatnya. */
+function processMappedGamepadButtons(accept = () => true) {
   const layerName = getActiveButtonLayerName();
   const rows = joystickState.buttonConfig?.[layerName] || [];
 
   for (const row of rows) {
     if (!row) continue;
+    if (!accept(row.action)) continue;
 
     const btnIndex = Number(row.button);
     if (!Number.isInteger(btnIndex) || btnIndex < 0) continue;
@@ -983,11 +1039,25 @@ function processMappedGamepadButtons() {
       }
     }
   }
+}
 
-  // update cache tombol fisik setelah semua aksi diproses
+// update cache tombol fisik setelah SEMUA jalur aksi diproses
+function commitButtonCache() {
   (joystickState.rawButtons || []).forEach((b, idx) => {
     gpBtnPrev[idx] = !!(b && b.pressed);
   });
+}
+
+/* Axis analog gripper (opsional — hanya aktif kalau operator meng-assign
+   sebuah axis ke "Grip" di halaman Joystick). Deadzone menahan jitter stick;
+   di dalam deadzone tidak ada perintah dikirim sama sekali, jadi posisi
+   gripper dari tombol/keyboard tidak ikut tergeser saat stick diam. */
+const GRIP_AXIS_DEADZONE = 150;
+
+function processAnalogGrip() {
+  const raw = Number(joystickState.mapped.grip) || 0;
+  if (Math.abs(raw) < GRIP_AXIS_DEADZONE) return;
+  sendGripper(Math.round(raw));
 }
 
 function pollGamepad() {
@@ -1000,10 +1070,22 @@ function pollGamepad() {
   // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
   updateJoystickStateFromGamepad();
 
-  // thruster control hanya aktif kalau dashboard controller = Gamepad
-  if (activeController !== "Gamepad") return;
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
+
+  /* ================= AUX: GRIPPER =================
+     Tidak digerbangi activeController, jadi gripper tetap bisa dioperasikan
+     dari gamepad walau tab controller sedang di Keyboard (dan sebaliknya —
+     lihat handler keyboard H/G). Otoritas manual/E-Stop tetap ditegakkan di
+     dalam sendGripper(). */
+  processMappedGamepadButtons(isGripAction);
+  processAnalogGrip();
+
+  // thruster control hanya aktif kalau dashboard controller = Gamepad
+  if (activeController !== "Gamepad") {
+    commitButtonCache();
+    return;
+  }
 
   /* Otoritas GUI vs FSM (mirip prinsip gripper): joystick HANYA boleh
      menggerakkan ROV saat mode kontrol = Manual dan E-Stop tidak aktif.
@@ -1012,6 +1094,7 @@ function pollGamepad() {
     if (gpLast.surge || gpLast.sway || gpLast.yaw || gpLast.heave) {
       neutralizeGamepadAxes();
     }
+    commitButtonCache();
     return;
   }
 
@@ -1042,8 +1125,11 @@ function pollGamepad() {
     }
   }
 
-  /* ================= BUTTON MAPPING ================= */
-  processMappedGamepadButtons();
+  /* ================= BUTTON MAPPING =================
+     Aksi gripper sudah diproses di jalur AUX di atas, jadi di sini hanya
+     sisanya — supaya satu rising edge tidak dieksekusi dua kali. */
+  processMappedGamepadButtons((a) => !isGripAction(a));
+  commitButtonCache();
 }
 
 window.addEventListener("gamepadconnected", (e) => {
@@ -1071,11 +1157,15 @@ $("btnSetSurface").onclick = () => {
   log("Surface level diset — Depth = 0", "ok");
 };
 
-/* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
-els.btnGripOpen.onclick = () => { sendCmd("gripper", "open"); log("Gripper: OPEN", "ok"); };
-els.btnGripClose.onclick = () => { sendCmd("gripper", "close"); log("Gripper: CLOSE", "ok"); };
+/* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G.
+
+   Sengaja TIDAK digerbangi activeController: gripper adalah perintah bantu,
+   bukan thruster. Operator harus bisa mencengkeram payload lewat keyboard
+   sementara gamepad tetap memegang kendali thruster, tanpa berpindah tab. */
+els.btnGripOpen.onclick = () => sendGripper("open", true);
+els.btnGripClose.onclick = () => sendGripper("close", true);
 window.addEventListener("keydown", (e) => {
-  if (activeController !== "Keyboard" || e.target !== document.body) return;
+  if (e.target !== document.body) return;
   if (e.code === "KeyH") { e.preventDefault(); els.btnGripOpen.click(); }
   else if (e.code === "KeyG") { e.preventDefault(); els.btnGripClose.click(); }
 });

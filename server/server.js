@@ -59,6 +59,20 @@ function clampAxis(name, value) {
 const CONFIG_DIR = path.join(__dirname, "config");
 const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
 
+/* Profil lama memetakan tombol ke actuator1_inc/dec, yang tidak punya handler
+   apa pun di sisi ROV (rov_agent.py) — praktis mati. Gripper memakai posisi
+   tombol yang sama, jadi profil tersimpan dimigrasikan otomatis supaya
+   operator tidak perlu menyunting ulang halaman Joystick.
+   Harus sinkron dgn ACTION_MIGRATION di public/js/joystick-state.js. */
+const ACTION_MIGRATION = {
+  actuator1_inc: "grip_close",
+  actuator1_dec: "grip_open",
+};
+
+function migrateButtonAction(action) {
+  return ACTION_MIGRATION[action] || action;
+}
+
 function defaultButtonLayer() {
   return [
     { action: "arm", button: 0, mode: "toggle" },
@@ -69,8 +83,8 @@ function defaultButtonLayer() {
     { action: "mount_tilt_up", button: 5, mode: "hold" },
     { action: "mount_tilt_down", button: 6, mode: "hold" },
     { action: "mount_center", button: 7, mode: "toggle" },
-    { action: "actuator1_inc", button: 8, mode: "hold" },
-    { action: "actuator1_dec", button: 9, mode: "hold" },
+    { action: "grip_close", button: 8, mode: "toggle" },
+    { action: "grip_open", button: 9, mode: "toggle" },
     { action: "lights_brighter", button: 10, mode: "hold" },
     { action: "lights_dimmer", button: 11, mode: "hold" },
     { action: "gain_inc", button: 12, mode: "hold" },
@@ -90,7 +104,11 @@ function defaultJoystickConfig() {
       { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
       { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
       { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
-      { input: "axis 4", assigned: "No function", min: -1, max: 1, direction: "↕" },
+      /* Axis 4 dibiarkan "No function": pada Logitech F310 axis ini sering
+         tidak diekspos browser, dan axis 0-3 sudah dipakai thruster. Operator
+         yang ingin grip analog cukup mengubah dropdown ini ke "Grip" —
+         min/max sudah disiapkan pada skala -1000..1000. */
+      { input: "axis 4", assigned: "No function", min: -1000, max: 1000, direction: "↕" },
     ],
 
     buttonConfig: {
@@ -140,7 +158,7 @@ function sanitizeJoystickConfig(data) {
     regular: fallback.buttonConfig.regular.map((def, i) => {
       const row = Array.isArray(srcBtnCfg.regular) ? (srcBtnCfg.regular[i] || {}) : {};
       return {
-        action: typeof row.action === "string" ? row.action : def.action,
+        action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
         button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
         mode: row.mode === "hold" ? "hold" : "toggle",
       };
@@ -149,7 +167,7 @@ function sanitizeJoystickConfig(data) {
     shift: fallback.buttonConfig.shift.map((def, i) => {
       const row = Array.isArray(srcBtnCfg.shift) ? (srcBtnCfg.shift[i] || {}) : {};
       return {
-        action: typeof row.action === "string" ? row.action : def.action,
+        action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
         button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
         mode: row.mode === "hold" ? "hold" : "toggle",
       };
