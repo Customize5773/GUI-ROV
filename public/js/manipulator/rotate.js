@@ -10,7 +10,8 @@ import { ManipulatorProtocol } from "./protocol.js";
 import {
     RotateState,
     ManipulatorAction,
-    RotateDirection
+    RotateDirection,
+    ManipulatorDevice
 } from "./constants.js";
 
 export class RotateController {
@@ -24,7 +25,7 @@ export class RotateController {
         ManipulatorState.rotate.busy = true;
 
         return ManipulatorProtocol.create(
-            "rotate",
+            ManipulatorDevice.ROTATE,
             ManipulatorAction.START,
             RotateDirection.LEFT
         );
@@ -40,7 +41,7 @@ export class RotateController {
         ManipulatorState.rotate.busy = true;
 
         return ManipulatorProtocol.create(
-            "rotate",
+            ManipulatorDevice.ROTATE,
             ManipulatorAction.START,
             RotateDirection.RIGHT
         );
@@ -56,7 +57,7 @@ export class RotateController {
         ManipulatorState.rotate.busy = false;
 
         return ManipulatorProtocol.create(
-            "rotate",
+            ManipulatorDevice.ROTATE,
             ManipulatorAction.STOP
         );
 

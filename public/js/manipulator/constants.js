@@ -1,3 +1,5 @@
+export const ProtocolVersion = 1;
+
 export const GripState = Object.freeze({
     OPENING: "OPENING",
     CLOSING: "CLOSING",
@@ -28,4 +30,9 @@ export const GripDirection = Object.freeze({
 export const RotateDirection = Object.freeze({
     LEFT: "left",
     RIGHT: "right"
+});
+
+export const ManipulatorDevice = Object.freeze({
+    GRIP: "grip",
+    ROTATE: "rotate"
 });

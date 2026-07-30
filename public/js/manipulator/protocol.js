@@ -4,6 +4,7 @@
  * Manipulator Protocol
  * ============================================================
  */
+import { ProtocolVersion } from "./constants.js";
 
 export class ManipulatorProtocol {
 
@@ -18,11 +19,16 @@ export class ManipulatorProtocol {
     static create(device, action, direction = null, data = {}) {
 
         return {
+            version: ProtocolVersion,
+            timestamp: Date.now(),
+
             type: "cmd",
             name: "manipulator",
+
             device,
             action,
             direction,
+
             data
         };
 

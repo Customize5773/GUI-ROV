@@ -5,12 +5,15 @@
  * ============================================================
  */
 
+
+
 import { ManipulatorState } from "./state.js";
 import { ManipulatorProtocol } from "./protocol.js";
 import {
     GripState,
     ManipulatorAction,
-    GripDirection
+    GripDirection,
+    ManipulatorDevice
 } from "./constants.js";
 
 export class GripController {
@@ -27,7 +30,7 @@ export class GripController {
 
         // Buat packet
         return ManipulatorProtocol.create(
-            "grip",
+            ManipulatorDevice.GRIP,
             ManipulatorAction.START,
             GripDirection.OPEN
         );
@@ -46,7 +49,7 @@ export class GripController {
 
         // Buat packet
         return ManipulatorProtocol.create(
-            "grip",
+            ManipulatorDevice.GRIP,
             ManipulatorAction.START,
             GripDirection.CLOSE
         );
@@ -65,7 +68,7 @@ export class GripController {
 
         // Buat packet
         return ManipulatorProtocol.create(
-            "grip",
+            ManipulatorDevice.GRIP,
             ManipulatorAction.STOP
         );
 
