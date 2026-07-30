@@ -35,6 +35,22 @@ cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.bind(("0.0.0.0", UDP_CMD_PORT))
 cmd_sock.settimeout(0.2)
 
+
+# ==========================
+# Manipulator Configuration
+# ==========================
+
+GRIP_CHANNEL = 7
+ROTATE_CHANNEL = 8
+
+SERVO_NEUTRAL = 1500
+
+GRIP_OPEN_PWM = 1900
+GRIP_CLOSE_PWM = 1100
+
+ROTATE_LEFT_PWM = 1100
+ROTATE_RIGHT_PWM = 1900
+
 # =========================
 # Status telemetry lokal
 # =========================
@@ -116,12 +132,28 @@ gripper_lock = threading.Lock()
 def send_telemetry():
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
-    if VERBOSE_TELEMETRY:
-        print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+    print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+
 def normalize_heading(deg):
     if deg < 0:
         deg += 360.0
     return deg % 360.0
+
+def set_servo_pwm(channel, pwm):
+    """
+    Mengirim PWM ke output servo Pixhawk.
+    Channel menggunakan nomor SERVO (1-14).
+    """
+
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+        0,
+        channel,
+        pwm,
+        0, 0, 0, 0, 0
+    )
 
 # =========================
 # Command handler dari laptop
@@ -220,7 +252,7 @@ def command_listener():
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 print("====================================")
-                
+
             elif name == "stop":
                 # Failsafe sederhana: disarm
                 print("[MAV] STOP -> DISARM")
@@ -253,29 +285,44 @@ def command_listener():
                     time.sleep(0.1)
                 print("[PARAM] Thruster configuration updated.")
 
-            elif name == "gripper":
-                # "open"/"close" dari tombol & keyboard H/G, atau angka
-                # -1000..1000 dari axis analog gamepad. Yang disimpan hanya
-                # TARGET; gripper_sender() yang menggerakkannya perlahan.
-                with gripper_lock:
-                    gripper_target = gripper_value_to_pwm(value)
-
-            elif name in AXIS_RANGE:
-                with joystick_lock:
-                    joystick[name] = clamp_axis(name, value)
-                    last_joystick_update = time.time()
-
-            elif name in GUI_ONLY_COMMANDS:
-                # Murni state dashboard (tab controller aktif, reset acuan
-                # permukaan, snapshot/record lokal). Diterima tanpa aksi —
-                # diakui di sini supaya tidak tercatat sebagai perintah asing.
-                pass
+            elif name in ["surge", "sway", "yaw", "heave"]:
+                joystick[name] = int(value)
 
             else:
                 print(f"[CMD] unknown command: {name} = {value}")
 
         except Exception as e:
             print("[CMD] error executing command:", e)
+
+def handle_manipulator(device, action, direction):
+
+    print(f"[MANIP] {device} | {action} | {direction}")
+
+    if device == "grip":
+
+        if action == "start":
+
+            if direction == "open":
+                set_servo_pwm(GRIP_CHANNEL, GRIP_OPEN_PWM)
+
+            elif direction == "close":
+                set_servo_pwm(GRIP_CHANNEL, GRIP_CLOSE_PWM)
+
+        elif action == "stop":
+            set_servo_pwm(GRIP_CHANNEL, SERVO_NEUTRAL)
+
+    elif device == "rotate":
+
+        if action == "start":
+
+            if direction == "left":
+                set_servo_pwm(ROTATE_CHANNEL, ROTATE_LEFT_PWM)
+
+            elif direction == "right":
+                set_servo_pwm(ROTATE_CHANNEL, ROTATE_RIGHT_PWM)
+
+        elif action == "stop":
+            set_servo_pwm(ROTATE_CHANNEL, SERVO_NEUTRAL)
 
 def joystick_sender():
     """Streaming MANUAL_CONTROL ke Pixhawk 20 Hz.

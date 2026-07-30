@@ -38,7 +38,7 @@ export const CONFIG = {
      keenam motor sesuai FRAME_CONFIG. Nilai di bawah ini untuk tampilan
      Setup + perintah MOT_n_DIRECTION. */
   THRUSTER: {
-    frame: "BlueROV1",                                   // BlueROV1 | Vectored | Vectored_6DOF | Custom
+    frame: "bluerov",                                   // Vectored | Vectored_6DOF | Custom
     pwmMin: 1100, pwmNeutral: 1500, pwmMax: 1900,        // mikrodetik
     gain: 100,                                           // % daya keluaran
     reversed: [false, false, false, false, false, false], // T1..T6
