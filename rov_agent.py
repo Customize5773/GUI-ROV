@@ -5,7 +5,7 @@ import threading
 import math
 from pymavlink import mavutil
 
-from rov_axes import AXIS_RANGE, IDLE_TIMEOUT, clamp_axis, resolve_manual_packet
+from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, to_mavlink_z
 from attitude_filter import AttitudeFilter
 from rov_gripper import (
     GRIPPER_PWM_NEUTRAL,
@@ -26,6 +26,10 @@ UDP_CMD_PORT = 14550        # command dari laptop ke Pi
 # =========================
 PIXHAWK_PORT = "/dev/ttyACM0"
 PIXHAWK_BAUD = 115200
+
+# Tidak ada satu pun pesan MAVLink selama ini -> link dianggap mati dan
+# disambungkan ulang (USB lepas / Pixhawk re-enumerate).
+LINK_TIMEOUT = 3.0
 
 # =========================
 # Socket UDP
@@ -87,6 +91,46 @@ joystick = {
 
 depth_target = 0.0
 DEPTH_STEP = 0.10
+depth_lock = threading.Lock()
+
+# Mode yang TERAKHIR DIMINTA lewat set_mode. state["mode"] hanya ter-update saat
+# HEARTBEAT datang, jadi tanpa ini gain_inc/gain_dec yang ditekan tepat setelah
+# ganti mode akan diabaikan diam-diam.
+requested_mode = None
+
+# Depth hold didelegasikan ke ALT_HOLD ArduSub; depth_target hanya menggeser
+# setpoint lewat bias kecil pada throttle. Dibatasi supaya tidak pernah bisa
+# melawan operator atau menyelam tak terkendali di kolam dangkal.
+DEPTH_BIAS_GAIN = 200.0   # unit z per meter error
+DEPTH_BIAS_LIMIT = 80     # |bias| maksimum terhadap Z_NEUTRAL (500)
+HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
+
+
+def depth_hold_active():
+    return (requested_mode or state["mode"]) in ("STABILIZE", "ALT_HOLD")
+
+
+def apply_depth_hold_bias(mc, axes):
+    """Geser MANUAL_CONTROL.z sedikit ke arah depth_target saat ALT_HOLD.
+
+    Hanya berlaku kalau stik heave benar-benar netral — begitu operator
+    menyentuh stik, input manual menang mutlak.
+    """
+    if not depth_hold_active():
+        return mc
+    if abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON:
+        return mc
+
+    with depth_lock:
+        target = depth_target
+
+    # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
+    error = target - state["depth"]
+    bias = max(-DEPTH_BIAS_LIMIT, min(DEPTH_BIAS_LIMIT, error * DEPTH_BIAS_GAIN))
+
+    out = dict(mc)
+    out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
+    return out
 
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
 # IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus), berhenti
@@ -132,16 +176,60 @@ gripper_target = float(GRIPPER_PWM_NEUTRAL)
 gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
 gripper_lock = threading.Lock()
 
+_last_telem_log = 0.0
+
 def send_telemetry():
-    state["depth_target"] = depth_target
+    """Kirim state ke laptop 10 Hz, tapi LOG hanya 1 Hz.
+
+    Mencetak tiap paket (10 Hz) plus log joystick 20 Hz membuat stdout yang
+    ter-pipe jadi blocking dan menimbulkan jitter pada loop kontrol di Pi.
+    """
+    global _last_telem_log
+
+    with depth_lock:
+        state["depth_target"] = depth_target
+
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
-    print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+
+    now = time.time()
+    if now - _last_telem_log >= 1.0:
+        _last_telem_log = now
+        print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
 
 def normalize_heading(deg):
     if deg < 0:
         deg += 360.0
     return deg % 360.0
+
+def send_arm_disarm(arm):
+    """Arm/disarm lewat MAV_CMD_COMPONENT_ARM_DISARM (satu jalur untuk keduanya).
+
+    Tidak menunggu ACK — lihat handler COMMAND_ACK di main().
+    """
+    master.mav.command_long_send(
+        master.target_system,
+        master.target_component,
+        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+        0,
+        1 if arm else 0,
+        0, 0, 0, 0, 0, 0,
+    )
+
+
+def send_gcs_heartbeat():
+    """Heartbeat GCS 1 Hz.
+
+    Tanpa ini ArduSub menganggap ground station hilang dan DISARM SENDIRI
+    beberapa detik setelah arm (FS_GCS_ENABLE) — gejalanya arm terlihat
+    "putus-putus" saat mulai trial.
+    """
+    master.mav.heartbeat_send(
+        mavutil.mavlink.MAV_TYPE_GCS,
+        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+        0, 0, 0,
+    )
+
 
 def set_servo_pwm(channel, pwm):
     """
@@ -167,6 +255,7 @@ def command_listener():
     global last_joystick_update
     global gripper_target
     global depth_target
+    global requested_mode
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -203,23 +292,12 @@ def command_listener():
 
         try:
             if name == "arm":
-                if value:
-                    print("[MAV] ARM")
-                    master.mav.command_long_send(
-                        master.target_system,
-                        master.target_component,
-                        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-                        0,
-                        1,      # arm
-                        0,0,0,0,0,0
-                    )
-
-                    ack = master.recv_match(type="COMMAND_ACK", blocking=True, timeout=3)
-
-                    print("ACK =", ack)
-                else:
-                    print("[MAV] DISARM")
-                    master.arducopter_disarm()
+                # ACK TIDAK ditunggu di sini. recv_match(blocking=True) akan
+                # memblokir seluruh thread ini sampai 3 detik DAN mencuri
+                # COMMAND_ACK dari loop RX utama, sehingga status armed telat
+                # sampai ke GUI. ACK ditangani non-blocking di main().
+                print("[MAV] ARM" if value else "[MAV] DISARM")
+                send_arm_disarm(bool(value))
 
             elif name == "control_mode":
 
@@ -256,9 +334,11 @@ def command_listener():
                     continue
 
                 master.set_mode(mode_mapping[pixhawk_mode])
+                requested_mode = pixhawk_mode
 
                 if mode in ("stabilize", "depth_hold"):
-                    depth_target = state["depth"]
+                    with depth_lock:
+                        depth_target = state["depth"]
                     print(f"[DEPTH] Target initialized = {depth_target:.2f} m")
 
                 print("====================================")
@@ -266,56 +346,41 @@ def command_listener():
                 print("====================================")
 
             elif name == "stop":
-                # Failsafe sederhana: disarm
+                # Failsafe sederhana: netralkan axis lalu disarm
                 print("[MAV] STOP -> DISARM")
-                master.arducopter_disarm()
+                with joystick_lock:
+                    joystick.update(AXIS_NEUTRAL)
+                send_arm_disarm(False)
 
             elif name == "light":
                 # Belum dihubungkan ke hardware lampu, simpan status saja
                 state["light"] = bool(value)
                 print(f"[LIGHT] set to {state['light']}")
 
-            elif name == "gain_inc":
+            elif name in ("gain_inc", "gain_dec"):
 
-                if state["mode"] not in ("STABILIZE", "ALT_HOLD"):
+                # Pakai requested_mode juga: state["mode"] baru ter-update saat
+                # HEARTBEAT berikutnya, jadi kalau hanya mengandalkan itu maka
+                # penekanan tepat setelah ganti mode hilang tanpa jejak.
+                if not depth_hold_active():
+                    print(f"[DEPTH] {name} diabaikan — mode bukan depth hold")
                     continue
 
-                depth_target += DEPTH_STEP
-                print(f"[DEPTH] Target = {depth_target:.2f} m")
+                step = DEPTH_STEP if name == "gain_inc" else -DEPTH_STEP
+                with depth_lock:
+                    depth_target = max(0.0, depth_target + step)
+                    shown = depth_target
+                print(f"[DEPTH] Target = {shown:.2f} m")
 
-            elif name == "gain_dec":
-
-                if state["mode"] not in ("STABILIZE", "ALT_HOLD"):
-                    continue
-
-                depth_target -= DEPTH_STEP
-
-                if depth_target < 0:
-                    depth_target = 0.0
-
-                print(f"[DEPTH] Target = {depth_target:.2f} m")
-                
             elif name == "thruster_config":
 
+                # Dijalankan di thread terpisah: loop param_set_send + sleep
+                # menahan listener ini ~0.6 s dan membuat axis/mode ikut tertunda.
                 motors = msg.get("motors", {})
                 print("[DEBUG] Motors received:", motors)
-                
-                for motor, direction in motors.items():
-
-                    motor = int(motor)
-                    direction = int(direction)
-                    param = f"MOT_{motor}_DIRECTION"
-                    print(f"[PARAM] {param} -> {direction}")
-
-                    master.mav.param_set_send(
-                        master.target_system,
-                        master.target_component,
-                        param.encode("utf-8"),
-                        float(direction),
-                        mavutil.mavlink.MAV_PARAM_TYPE_INT8
-                    )
-                    time.sleep(0.1)
-                print("[PARAM] Thruster configuration updated.")
+                threading.Thread(
+                    target=apply_thruster_config, args=(motors,), daemon=True
+                ).start()
 
             elif name == "gripper":
                 # "open"/"close" dari tombol & keyboard H/G, atau angka
@@ -334,6 +399,25 @@ def command_listener():
 
         except Exception as e:
             print("[CMD] error executing command:", e)
+
+def apply_thruster_config(motors):
+    """Tulis MOT_n_DIRECTION satu per satu (perlu jeda antar param_set_send)."""
+    try:
+        for motor, direction in motors.items():
+            param = f"MOT_{int(motor)}_DIRECTION"
+            print(f"[PARAM] {param} -> {int(direction)}")
+            master.mav.param_set_send(
+                master.target_system,
+                master.target_component,
+                param.encode("utf-8"),
+                float(int(direction)),
+                mavutil.mavlink.MAV_PARAM_TYPE_INT8,
+            )
+            time.sleep(0.1)
+        print("[PARAM] Thruster configuration updated.")
+    except Exception as e:
+        print("[PARAM] gagal set thruster config:", e)
+
 
 def handle_manipulator(device, action, direction):
 
@@ -366,60 +450,31 @@ def handle_manipulator(device, action, direction):
             set_servo_pwm(ROTATE_CHANNEL, SERVO_NEUTRAL)
 
 def joystick_sender():
-    """Streaming MANUAL_CONTROL ke Pixhawk 20 Hz.
-
-    Konversi axis GUI -> field MANUAL_CONTROL dilakukan oleh
-    rov_axes.resolve_manual_packet(), termasuk heave -> z (0..1000, netral 500).
-    Ini PENTING: mengirim heave mentah membuat stik netral terbaca sebagai
-    turun penuh oleh ArduSub.
-    """
     global master
-
-    was_stale = None        # None = belum pernah lapor, supaya status awal ikut ter-log
-    last_log = 0.0
-
     while True:
-        if master is None:
-            time.sleep(JOYSTICK_SEND_INTERVAL)
-            continue
-
-        with joystick_lock:
-            axes = dict(joystick)
-            last_update = last_joystick_update
-
-        packet, stale = resolve_manual_packet(axes, last_update, time.time())
-
-        if stale != was_stale:
-            was_stale = stale
-            state["cmd_link"] = "stale" if stale else "ok"
-            if stale:
-                print(f"[FAILSAFE] Tidak ada axis > {IDLE_TIMEOUT}s — kirim NEUTRAL")
-            else:
-                print("[FAILSAFE] Axis mengalir lagi — kontrol manual pulih")
+        if master is not None:
+            print(
+                f"[MANUAL] "
+                f"X={joystick['surge']} "
+                f"Y={joystick['sway']} "
+                f"Z={joystick['heave']} "
+                f"R={joystick['yaw']}"
+            )   
+            print("RAW =", joystick)
 
         try:
             master.mav.manual_control_send(
                 master.target_system,
-                packet["x"],
-                packet["y"],
-                packet["z"],
-                packet["r"],
-                packet["buttons"],
+                joystick["surge"],
+                joystick["sway"],
+                joystick["heave"],
+                joystick["yaw"],
+                0
             )
-        except Exception as e:
-            print("[MANUAL] gagal kirim:", e)
+            
+            print("[MANUAL] sent")
 
-        if VERBOSE_JOYSTICK:
-            now = time.time()
-            if now - last_log >= JOYSTICK_LOG_INTERVAL:
-                last_log = now
-                print(
-                    f"[MANUAL] x={packet['x']} y={packet['y']} "
-                    f"z={packet['z']} r={packet['r']}"
-                    f"{' (STALE)' if stale else ''}"
-                )
-
-        time.sleep(JOYSTICK_SEND_INTERVAL)
+        time.sleep(0.05)
 
 def gripper_sender():
     """Gerakkan servo gripper menuju target 10 Hz dgn rate-limit + EMA.
@@ -473,22 +528,27 @@ def gripper_sender():
 # =========================
 # Main koneksi Pixhawk
 # =========================
-def main():
-    global master, prev_attitude_ts
+def connect_pixhawk():
+    """Buka link serial + tunggu heartbeat + minta stream. Kembalikan koneksi."""
+    global master
 
     print(f"[MAV] Connecting to Pixhawk on {PIXHAWK_PORT} @ {PIXHAWK_BAUD} ...")
-    master = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
+    link = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
 
     print("[MAV] Waiting heartbeat...")
-    master.wait_heartbeat(timeout=30)
+    if link.wait_heartbeat(timeout=30) is None:
+        raise RuntimeError("tidak ada heartbeat dari Pixhawk dalam 30 detik")
+
     print("[MAV] Heartbeat received!")
-    print(f"[MAV] System {master.target_system}, Component {master.target_component}")
+    print(f"[MAV] System {link.target_system}, Component {link.target_component}")
+
+    master = link
 
     # Minta stream data secara periodik
     try:
-        master.mav.request_data_stream_send(
-            master.target_system,
-            master.target_component,
+        link.mav.request_data_stream_send(
+            link.target_system,
+            link.target_component,
             mavutil.mavlink.MAV_DATA_STREAM_ALL,
             10,   # 10 Hz
             1
@@ -496,13 +556,11 @@ def main():
     except Exception as e:
         print("[MAV] request_data_stream_send warning:", e)
 
-    # =========================
     # Request AHRS2 (Depth)
-    # =========================
     try:
-        master.mav.command_long_send(
-            master.target_system,
-            master.target_component,
+        link.mav.command_long_send(
+            link.target_system,
+            link.target_component,
             mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
             0,
             mavutil.mavlink.MAVLINK_MSG_ID_AHRS2,
@@ -512,22 +570,79 @@ def main():
     except Exception as e:
         print("[MAV] AHRS2 request warning:", e)
 
+    return link
+
+
+def drop_link(reason):
+    """Tandai link mati supaya thread sender berhenti mengirim, lalu tutup."""
+    global master
+
+    link, master = master, None
+    print(f"[MAV] link terputus ({reason}) — mencoba sambung ulang...")
+
+    # Jangan tampilkan status basi di GUI.
+    state["armed"] = False
+    state["mode"] = "unknown"
+
+    if link is not None:
+        try:
+            link.close()
+        except Exception:
+            pass
+
+
+def main():
+    global prev_attitude_ts
+
+    connect_pixhawk()
+
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=gripper_sender, daemon=True).start()
 
     last_send = 0
+    last_hb = 0
+    last_rx = time.time()
 
     while True:
-        msg = master.recv_match(blocking=True, timeout=1)
-        if msg is not None and msg.get_type() == "STATUSTEXT":
-           print("[PIXHAWK]", msg.text)
-
-        if msg is None:
+        if master is None:
+            try:
+                connect_pixhawk()
+                last_rx = time.time()
+            except Exception as e:
+                print("[MAV] gagal menyambung ulang:", e)
+                time.sleep(2)
             continue
 
+        try:
+            msg = master.recv_match(blocking=True, timeout=1)
+        except Exception as e:
+            drop_link(f"error baca: {e}")
+            continue
+
+        now = time.time()
+
+        # Heartbeat GCS 1 Hz — WAJIB, kalau tidak ArduSub disarm sendiri.
+        if now - last_hb >= 1.0:
+            try:
+                send_gcs_heartbeat()
+                last_hb = now
+            except Exception as e:
+                drop_link(f"gagal kirim heartbeat: {e}")
+                continue
+
+        if msg is None:
+            # Tidak ada satu pun pesan selama LINK_TIMEOUT -> anggap link mati.
+            if now - last_rx > LINK_TIMEOUT:
+                drop_link("tidak ada data")
+            continue
+
+        last_rx = now
         mtype = msg.get_type()
+
+        if mtype == "STATUSTEXT":
+            print("[PIXHAWK]", msg.text)
 
         # --------------------------------
         # ATTITUDE: roll, pitch, yaw
@@ -555,7 +670,12 @@ def main():
         # tidak pernah terblokir menunggu ACK.
         # --------------------------------
         elif mtype == "COMMAND_ACK":
-            print(f"[MAV] ACK cmd={msg.command} result={msg.result}")
+            if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
+                ok = msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+                print(f"[MAV] ARM/DISARM {'diterima' if ok else 'DITOLAK'} "
+                      f"(result={msg.result})")
+            else:
+                print(f"[MAV] ACK cmd={msg.command} result={msg.result}")
 
         # VFR_HUD.heading sengaja tidak dipakai: ATTITUDE (via attitude_filter)
         # adalah satu-satunya sumber heading, supaya heading yang sudah
@@ -577,8 +697,7 @@ def main():
             # altitude bernilai negatif saat ROV berada di bawah permukaan
             if hasattr(msg, "altitude"):
                 state["depth"] = max(0.0, -float(msg.altitude))
-                if VERBOSE_TELEMETRY:
-                    print(f"[DEPTH] {state['depth']:.2f} m")
+                print(f"[DEPTH] {state['depth']:.2f} m")
         # --------------------------------
         # HEARTBEAT: mode dan armed
         # --------------------------------
@@ -591,8 +710,11 @@ def main():
             base_mode = msg.base_mode
             state["armed"] = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
 
+            # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
+            if requested_mode is not None and state["mode"] == requested_mode:
+                globals()["requested_mode"] = None
+
         # Kirim telemetry periodik ke laptop
-        now = time.time()
         if now - last_send >= 0.1:  # 10 Hz
             send_telemetry()
             last_send = now

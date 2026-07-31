@@ -844,6 +844,9 @@ window.addEventListener("keyup", (e) => {
    hasil mapping axis diambil dari joystick-state / halaman joystick.
    Panel joystick tetap bisa membaca gamepad walaupun activeController
    dashboard masih Keyboard. */
+/* Deadzone/expo diterapkan di mapAxisValue() (joystick-state.js) supaya angka
+   yang dilihat operator di halaman Joystick persis sama dengan yang dikirim. */
+
 function clamp(v, min, max) {
   return Math.max(min, Math.min(max, Math.round(v)));
 }

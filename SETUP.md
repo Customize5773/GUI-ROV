@@ -1,10 +1,14 @@
-# SETUP — GUI-ROV Koneksi & Trial
+# SETUP — GUI-ROV Trial
+
+> Panduan copy-paste untuk setup cepat tiap trial. Baca dari atas ke bawah sesuai mode yang dipakai.
+
+---
 
 ## Prasyarat
 
 - Node.js ≥ 18 (server.js)
 - Python 3 (rov_agent.py di RPI)
-- Ethernet umbilical: laptop ↔ RPI, satu subnet (contoh: laptop `192.168.2.1`, RPI `192.168.2.2`)
+- Ethernet laptop ↔ RPI dalam satu subnet (contoh: laptop `192.168.2.1`, RPI `192.168.2.2`)
 
 ---
 
@@ -26,6 +30,8 @@ sudo systemctl restart rov-agent
 journalctl -u rov-agent -f
 ```
 
+> Jika `status` menunjukkan `active (running)`, RPI siap.
+
 ---
 
 ## 2. Sisi Laptop (Server Node.js)
@@ -34,50 +40,46 @@ journalctl -u rov-agent -f
 # Masuk ke repo
 cd /home/rasya/GUI-ROV
 
-# Install dependency server
-cd server && npm install
+# LIVE (default) — butuh RPI nyala & terhubung
+./start-gui.sh
 
-# Jalankan server (mode LIVE — butuh RPI nyata)
-npm start
-
-# ATAU mode simulasi (tanpa RPI, telemetri palsu)
-npm run sim
+# ATAU simulasi — tanpa RPI
+./start-gui.sh sim
 ```
 
-> Buka browser ke `http://localhost:8080` — dashboard muncul.
+> Buka browser ke `http://localhost:8080`. Dashboard harus muncul.
 
 ---
 
-## 3. Uji Koneksi UDP (Laptop → RPI)
+## 3. Uji Koneksi UDP (Laptop → RPI) — LIVE mode saja
 
 ```bash
-# Dari laptop, kirim test command ke RPI port 14550
+# Kirim test command ke RPI port 14550
 echo '{"name":"light","value":true,"t":'$(date +%s)'}' | nc -u -w1 192.168.2.2 14550
 ```
 
-Di RPI, `journalctl -u rov-agent -f` harus menampilkan command masuk.
+Di RPI (`journalctl -u rov-agent -f`), harus muncul log command masuk.
 
 ---
 
-## 4. Trial (Full End-to-End)
+## 4. Trial (Full End-to-End) — LIVE mode
 
 ```bash
-# Terminal 1 — Start server (LIVE)
-cd /home/rasya/GUI-ROV/server
-npm start
+# Terminal 1 — Start server (script otomatis cek dependency + buka browser)
+cd /home/rasya/GUI-ROV
+./start-gui.sh
 
-# Terminal 2 — Buka dashboard
-# Browser: http://localhost:8080
-
-# Terminal 3 (opsional) — Cek log RPI via SSH
+# Terminal 2 — Cek log RPI via SSH (opsional)
 ssh hydroships@192.168.2.2
 journalctl -u rov-agent -f
 ```
 
-1. Pastikan dashboard menunjukkan status **ONLINE** (link pill hijau).
-2. Klik **ARM** di header → ROV armed.
-3. Gerakkan sumbu keyboard (W/S, A/D, Q/E, R/F) → ROV bergerak.
-4. Tekan **STOP** atau **Spasi** → failsafe, semua thruster netral.
+### Checklist Trial
+
+- [ ] Dashboard menunjukkan status **ONLINE** (link pill hijau)
+- [ ] Klik **ARM** di header → ROV armed
+- [ ] Gerakkan sumbu keyboard (W/S, A/D, Q/E, R/F) → ROV bergerak
+- [ ] Tekan **STOP** atau **Spasi** → failsafe, semua thruster netral
 
 ---
 
@@ -142,19 +144,32 @@ Colok F310, **pastikan switch belakang di posisi `X`**, lalu di `http://localhos
 
 ---
 
-## Tanpa Hardware (Simulasi Saja)
+## 5. Simulasi (Tanpa Hardware)
 
 ```bash
-cd /home/rasya/GUI-ROV/server
-npm run sim
+cd /home/rasya/GUI-ROV
+./start-gui.sh sim
 ```
 
-Buka `http://localhost:8080` — ROV 3D bergerak mengikuti telemetri palsu.
-Tidak ada UDP nyata ke RPI.
+Buka `http://localhost:8080` — ROV 3D bergerak mengikuti telemetri palsu. Tidak ada UDP nyata ke RPI.
 
 ---
 
-## Urutan Cepat (Copy-Paste)
+## 6. Troubleshooting
+
+| Gejala | Solusi |
+|---|---|
+| Dashboard **OFFLINE** | Cek kabel Ethernet, pastikan laptop & RPI di subnet yang sama (`ip a` di kedua sisi) |
+| RPI `active (failed)` | Cek log: `journalctl -u rov-agent -e` — biasanya konfigurasi atau library Python yang error |
+| Port `14550` bentrok | Pastikan hanya satu `rov_agent.py` yang berjalan (`sudo systemctl restart rov-agent`) |
+| Thruster tidak respons | Cek nilai `x`, `y`, `r` di dashboard — harus ada saat joystick digerakkan |
+| Server crash `EADDRINUSE` | Port 8080 dipakai proses lain — kill: `lsof -ti:8080 \| xargs kill -9` |
+
+---
+
+## 7. Urutan Cepat (Copy-Paste)
+
+### LIVE (dengan RPI)
 
 ```bash
 # RPI (via SSH)
@@ -162,6 +177,13 @@ ssh hydroships@192.168.2.2
 sudo systemctl restart rov-agent
 
 # Laptop
-cd /home/rasya/GUI-ROV/server && npm start
-# Buka http://localhost:8080
+cd /home/rasya/GUI-ROV && ./start-gui.sh
+# Browser otomatis buka http://localhost:8080
+```
+
+### SIM (tanpa RPI)
+
+```bash
+cd /home/rasya/GUI-ROV && ./start-gui.sh sim
+# Browser otomatis buka http://localhost:8080
 ```

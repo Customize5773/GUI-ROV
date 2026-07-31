@@ -106,8 +106,25 @@ function findConfigByAssigned(label) {
 /* Satu-satunya sumber kebenaran untuk mapping axis mentah -> nilai keluaran.
    Dipakai runtime (readAssignedAxis) maupun preview di halaman joystick,
    supaya angka yang dilihat operator persis sama dengan yang dikirim. */
+/* Deadzone stik: di bawah ambang ini dianggap diam. Nilai di atas ambang
+   di-rescale ke 0..1 supaya tidak ada lompatan di tepi deadzone. */
+export const AXIS_DEADZONE = 0.12;
+
+/* Expo: >1 membuat gerakan di sekitar tengah lebih halus tanpa mengurangi
+   keluaran maksimum. Penting untuk sway, yang cuma punya satu thruster
+   lateral sehingga input kasar terasa menyentak. */
+const AXIS_EXPO = 1.6;
+
+function applyDeadzoneExpo(v) {
+  const mag = Math.abs(v);
+  if (mag <= AXIS_DEADZONE) return 0;
+
+  const scaled = (mag - AXIS_DEADZONE) / (1 - AXIS_DEADZONE);
+  return Math.sign(v) * Math.pow(scaled, AXIS_EXPO);
+}
+
 export function mapAxisValue(raw, row) {
-  let v = clamp(Number(raw) || 0, -1, 1);
+  let v = applyDeadzoneExpo(normalizeAxis(raw));
 
   // Reverse jika Min > Max
   if (Number(row.min) > Number(row.max)) {
