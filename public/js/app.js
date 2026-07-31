@@ -979,12 +979,12 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= GAIN ================= */
     case "gain_inc": {
-      sendCmd("gain", mode === "hold" ? { dir: "inc", hold: true } : "inc");
+      sendCmd("gain_inc", true);
       return;
     }
 
     case "gain_dec": {
-      sendCmd("gain", mode === "hold" ? { dir: "dec", hold: true } : "dec");
+      sendCmd("gain_dec", true);
       return;
     }
   }
