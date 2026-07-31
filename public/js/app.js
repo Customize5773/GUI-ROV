@@ -40,6 +40,7 @@ const els = {
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
+  depthTarget: $("vDepthTarget"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -270,6 +271,8 @@ function applyTelemetry(d) {
     const m = pageModules[name];
     if (m && m.onTelemetry) { try { m.onTelemetry(d); } catch (e) {} }
   }
+
+  els.depthTarget.textContent = num(d.depth_target, 2);
 }
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
