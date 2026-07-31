@@ -1070,7 +1070,7 @@ function executeJoystickAction(action) {
     }
 
     case "gain_dec": {
-      sendCmd("gain", mode === "hold" ? { dir: "dec", hold: true } : "dec");
+      sendCmd("gain_dec", true);
       return;
     }
   }
