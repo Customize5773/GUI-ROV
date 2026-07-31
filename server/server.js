@@ -25,6 +25,7 @@ const RPI_ADDR = process.env.RPI_ADDR || "192.168.2.2";
 const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
+const SHARED_ROOT = path.join(__dirname, "..", "shared");
 
 const MOTION_AXES = new Set([
     "surge",
@@ -56,162 +57,16 @@ function clampAxis(name, value) {
 }
 
 /* ======================= JOYSTICK CONFIG FILE ======================= */
-const CONFIG_DIR = path.join(__dirname, "config");
-const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
 
-/* Profil lama memetakan tombol ke actuator1_inc/dec, yang tidak punya handler
-   apa pun di sisi ROV (rov_agent.py) — praktis mati. Gripper memakai posisi
-   tombol yang sama, jadi profil tersimpan dimigrasikan otomatis supaya
-   operator tidak perlu menyunting ulang halaman Joystick.
-   Harus sinkron dgn ACTION_MIGRATION di public/js/joystick-state.js. */
-const ACTION_MIGRATION = {
-  actuator1_inc: "grip_close",
-  actuator1_dec: "grip_open",
-};
+/* Skema + I/O profil joystick sekarang tinggal di satu tempat masing-masing:
+   shared/joystick-profile.js (skema, default, validasi, migrasi) dan
+   server/joystick-config.js (lokasi file OS, tulis atomik, pemulihan korup).
+   Sebelumnya default & tabel migrasi ditulis kembar di sini dan di
+   public/js/joystick-state.js. */
+const joyConfig = require("./joystick-config");
 
-function migrateButtonAction(action) {
-  return ACTION_MIGRATION[action] || action;
-}
-
-function defaultButtonLayer() {
-  return [
-    { action: "arm", button: 0, mode: "toggle" },
-    { action: "disarm", button: 1, mode: "toggle" },
-    { action: "mode_manual", button: 2, mode: "toggle" },
-    { action: "mode_stabilize", button: 3, mode: "toggle" },
-    { action: "mode_depth_hold", button: 4, mode: "toggle" },
-    { action: "mount_tilt_up", button: 5, mode: "hold" },
-    { action: "mount_tilt_down", button: 6, mode: "hold" },
-    { action: "mount_center", button: 7, mode: "toggle" },
-    { action: "grip_close", button: 8, mode: "toggle" },
-    { action: "grip_open", button: 9, mode: "toggle" },
-    { action: "lights_brighter", button: 10, mode: "hold" },
-    { action: "lights_dimmer", button: 11, mode: "hold" },
-    { action: "gain_inc", button: 12, mode: "hold" },
-    { action: "gain_dec", button: 13, mode: "hold" },
-    { action: "input_hold_set", button: 14, mode: "toggle" },
-    { action: "no_function", button: 15, mode: "toggle" },
-  ];
-}
-
-function defaultJoystickConfig() {
-  return {
-    enabled: true,
-    shiftButton: 5,
-
-    axisConfig: [
-      { input: "axis 0", assigned: "Axis X", min: -1000, max: 1000, direction: "↔" },
-      { input: "axis 1", assigned: "Axis Y", min: 1000, max: -1000, direction: "↕" },
-      { input: "axis 2", assigned: "Axis R", min: -1000, max: 1000, direction: "↔" },
-      { input: "axis 3", assigned: "Axis Z", min: 1000, max: -1000, direction: "↕" },
-      /* Axis 4 dibiarkan "No function": pada Logitech F310 axis ini sering
-         tidak diekspos browser, dan axis 0-3 sudah dipakai thruster. Operator
-         yang ingin grip analog cukup mengubah dropdown ini ke "Grip" —
-         min/max sudah disiapkan pada skala -1000..1000. */
-      { input: "axis 4", assigned: "No function", min: -1000, max: 1000, direction: "↕" },
-    ],
-
-    buttonConfig: {
-      regular: defaultButtonLayer(),
-      shift: defaultButtonLayer(),
-    },
-  };
-}
-
-function ensureConfigDir() {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
-
-function sanitizeJoystickConfig(data) {
-  const fallback = defaultJoystickConfig();
-  if (!data || typeof data !== "object") return fallback;
-
-  const enabled = data.enabled !== false;
-  const shiftButton = Number.isInteger(Number(data.shiftButton))
-    ? Number(data.shiftButton)
-    : fallback.shiftButton;
-
-  /* ================= AXIS ================= */
-  const srcAxis = Array.isArray(data.axisConfig)
-    ? data.axisConfig
-    : fallback.axisConfig;
-
-  const axisConfig = fallback.axisConfig.map((def, i) => {
-    const row = srcAxis[i] || {};
-    return {
-      input: typeof row.input === "string" ? row.input : def.input,
-      assigned: typeof row.assigned === "string" ? row.assigned : def.assigned,
-      min: Number.isFinite(Number(row.min)) ? Number(row.min) : def.min,
-      max: Number.isFinite(Number(row.max)) ? Number(row.max) : def.max,
-      direction: row.direction === "↕" ? "↕" : "↔",
-    };
-  });
-
-  /* ================= BUTTON ================= */
-  const srcBtnCfg = (data.buttonConfig && typeof data.buttonConfig === "object")
-    ? data.buttonConfig
-    : {};
-
-  const buttonConfig = {
-    regular: fallback.buttonConfig.regular.map((def, i) => {
-      const row = Array.isArray(srcBtnCfg.regular) ? (srcBtnCfg.regular[i] || {}) : {};
-      return {
-        action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
-        button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
-        mode: row.mode === "hold" ? "hold" : "toggle",
-      };
-    }),
-
-    shift: fallback.buttonConfig.shift.map((def, i) => {
-      const row = Array.isArray(srcBtnCfg.shift) ? (srcBtnCfg.shift[i] || {}) : {};
-      return {
-        action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
-        button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
-        mode: row.mode === "hold" ? "hold" : "toggle",
-      };
-    }),
-  };
-
-  return {
-    enabled,
-    shiftButton,
-    axisConfig,
-    buttonConfig,
-  };
-}
-
-function loadJoystickConfig() {
-  try {
-    if (!fs.existsSync(JOY_CFG_FILE)) {
-      const cfg = defaultJoystickConfig();
-      ensureConfigDir();
-      fs.writeFileSync(JOY_CFG_FILE, JSON.stringify(cfg, null, 2), "utf8");
-      console.log("[JOYCFG] file config belum ada, dibuat default");
-      return cfg;
-    }
-
-    const raw = fs.readFileSync(JOY_CFG_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    const cfg = sanitizeJoystickConfig(parsed);
-    console.log("[JOYCFG] config joystick dimuat");
-    return cfg;
-  } catch (err) {
-    console.warn("[JOYCFG] gagal load config, pakai default:", err.message);
-    return defaultJoystickConfig();
-  }
-}
-
-function saveJoystickConfig(data) {
-  const cfg = sanitizeJoystickConfig(data);
-  ensureConfigDir();
-  fs.writeFileSync(JOY_CFG_FILE, JSON.stringify(cfg, null, 2), "utf8");
-  console.log("[JOYCFG] config joystick disimpan ke", JOY_CFG_FILE);
-  return cfg;
-}
-
-let joystickConfig = loadJoystickConfig();
+// Diisi oleh start() sebelum server mulai listen.
+let joystickConfig = null;
 
 /* ----------------------- HTTP static server ----------------------- */
 const MIME = {
@@ -321,8 +176,13 @@ const httpServer = http.createServer((req, res) => {
 
   if (urlPath === "/") urlPath = "/index.html";
 
-  const filePath = path.join(PUBLIC, path.normalize(urlPath));
-  if (!filePath.startsWith(PUBLIC)) {
+  /* shared/ berisi modul skema yang dipakai bersama browser & server, jadi
+     ikut disajikan (read-only) supaya halaman bisa meng-import-nya. */
+  const root = urlPath.startsWith("/shared/") ? SHARED_ROOT : PUBLIC;
+  const filePath = path.join(root, path.normalize(
+    root === SHARED_ROOT ? urlPath.replace("/shared/", "/") : urlPath,
+  ));
+  if (!filePath.startsWith(root)) {
     res.writeHead(403);
     return res.end("Forbidden");
   }
@@ -405,18 +265,20 @@ wss.on("connection", (ws, req) => {
     // ================= JOYSTICK CONFIG SAVE =================
     if (msg.type === "joystick_config_save") {
       try {
-        joystickConfig = saveJoystickConfig(msg.data);
+        const { profile, warnings } = joyConfig.save(msg.data);
+        joystickConfig = profile;
 
         ws.send(JSON.stringify({
           type: "event",
-          text: "Joystick mapping berhasil disimpan",
-          level: "ok",
+          text: warnings.length
+            ? `Mapping disimpan dengan ${warnings.length} koreksi: ${warnings[0]}`
+            : "Joystick mapping berhasil disimpan",
+          level: warnings.length ? "warn" : "ok",
         }));
 
-        ws.send(JSON.stringify({
-          type: "joystick_config",
-          data: joystickConfig,
-        }));
+        /* Disiarkan ke SEMUA dashboard, bukan hanya yang menyimpan — kalau
+           tidak, tab lain tetap memegang profil basi sampai reconnect. */
+        broadcast({ type: "joystick_config", data: joystickConfig });
 
         console.log("[JOYCFG] mapping joystick disimpan oleh dashboard");
       } catch (err) {
@@ -603,11 +465,27 @@ if (SIM) {
   }, 100);
 }
 
-httpServer.listen(WS_PORT, () => {
-  console.log(`\n  HYDROSHIP server aktif`);
-  console.log(`  Dashboard : http://localhost:${WS_PORT}`);
-  console.log(`  WebSocket : ws://localhost:${WS_PORT}`);
-  console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
-  console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
-  console.log(`  Joy cfg   : ${JOY_CFG_FILE}\n`);
-});
+/* Bootstrap async: skema joystick adalah ES module, dimuat lewat await import()
+   (jalan di Node 14+, tidak bergantung require(ESM) yang baru ada di Node
+   >=22.12). Server baru listen setelah profil siap, sehingga handler WS tidak
+   pernah melihat joystickConfig === null. */
+async function start() {
+  try {
+    await joyConfig.loadSchema();
+    joystickConfig = await joyConfig.load();
+  } catch (err) {
+    console.error("[JOYCFG] FATAL: gagal memuat profil joystick:", err.message);
+    process.exit(1);
+  }
+
+  httpServer.listen(WS_PORT, () => {
+    console.log(`\n  HYDROSHIP server aktif`);
+    console.log(`  Dashboard : http://localhost:${WS_PORT}`);
+    console.log(`  WebSocket : ws://localhost:${WS_PORT}`);
+    console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
+    console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
+    console.log(`  Joy cfg   : ${joyConfig.configPath()}\n`);
+  });
+}
+
+start();

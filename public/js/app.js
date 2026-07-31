@@ -8,7 +8,7 @@ import { cameraPage } from "./pages/camera.js";
 import { replayPage } from "./pages/replay.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
-import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,} from "./joystick-state.js";
+import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
 
 /*  elemen DOM  */
@@ -1004,6 +1004,12 @@ function executeJoystickRelease(action) {
             sendPacket(manipulator.stopRotate(), true);
             return;
 
+        /* grip_open/grip_close adalah nama HASIL migrasi dari actuator1_*.
+           Tanpa case ini, gripper mode "hold" tidak pernah berhenti saat
+           tombol dilepas. Nama lama tetap diterima untuk profil yang belum
+           sempat dimigrasikan. */
+        case "grip_open":
+        case "grip_close":
         case "actuator1_inc":
         case "actuator1_dec":
             sendPacket(manipulator.stopGrip(), true);
@@ -1082,6 +1088,21 @@ function processAnalogGrip() {
   sendGripper(Math.round(raw));
 }
 
+/* Peringatan mode non-standard: sekali per sambungan, jangan tiap frame. */
+let warnedNonStandard = false;
+
+function warnNonStandardOnce() {
+  if (warnedNonStandard || !joystickState.nonStandard) return;
+  warnedNonStandard = true;
+  log(
+    "Gamepad bukan mode standard — geser saklar F310 ke posisi X lalu " +
+    "cabut-pasang USB. Buka halaman Joystick untuk memakai paksa.",
+    "err",
+  );
+}
+
+window.addEventListener("gamepaddisconnected", () => { warnedNonStandard = false; });
+
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
 
@@ -1094,6 +1115,18 @@ function pollGamepad() {
 
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
+
+  /* Gate mode X. F310 di posisi D (DirectInput) melaporkan mapping kosong dan
+     indeks axis/tombol-nya berbeda antar OS, sehingga profil yang sama jadi
+     "salah tombol" tanpa gejala yang jelas — persis kelas bug yang ingin
+     dihilangkan. Halaman Joystick menampilkan banner + tombol override. */
+  if (!isJoystickUsable()) {
+    if (gpLast.surge || gpLast.sway || gpLast.yaw || gpLast.heave) {
+      neutralizeGamepadAxes();
+    }
+    warnNonStandardOnce();
+    return;
+  }
 
   /* ================= AUX: GRIPPER =================
      Tidak digerbangi activeController, jadi gripper tetap bisa dioperasikan
