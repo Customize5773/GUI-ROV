@@ -65,3 +65,31 @@ def axes_to_manual_control(surge=0, sway=0, yaw=0, heave=0, buttons=0):
 
 # Perintah netral / fail-safe: diam di tempat, throttle di tengah.
 NEUTRAL = axes_to_manual_control(**AXIS_NEUTRAL)
+
+# Tidak ada axis baru dari GUI selama sekian detik = link/GUI dianggap mati.
+IDLE_TIMEOUT = 0.5
+
+
+def resolve_manual_packet(axes, last_update, now, timeout=IDLE_TIMEOUT):
+    """Tentukan paket MANUAL_CONTROL yang harus dikirim saat ini.
+
+    Dipisah dari rov_agent.joystick_sender() supaya keputusan fail-safe bisa
+    di-unit-test tanpa thread, socket, maupun jam dinding.
+
+    axes        : dict axis GUI terakhir yang diterima (-1000..1000).
+    last_update : time.time() saat axis terakhir masuk.
+    now         : waktu sekarang.
+    timeout     : batas diam sebelum dianggap stale.
+
+    Return (packet, stale). Saat stale -> NEUTRAL (x/y/r = 0, z = 500), yaitu
+    diam di tempat; di ALT_HOLD ini berarti menahan kedalaman, bukan tenggelam.
+    """
+    if not last_update or (now - last_update) > timeout:
+        return dict(NEUTRAL), True
+
+    return axes_to_manual_control(
+        surge=axes.get("surge", 0),
+        sway=axes.get("sway", 0),
+        yaw=axes.get("yaw", 0),
+        heave=axes.get("heave", 0),
+    ), False

@@ -226,9 +226,17 @@ dengan `0` = diam. Konversi ke rentang `z` khas ArduSub dilakukan **hanya** di s
 | yaw      | rotasi           | −1000..1000 (0) | `r`                  | −1000..1000  |
 | heave    | throttle naik/turun | −1000..1000 (0) | `z`               | 0..1000 (netral **500**) |
 
-- **Deadzone** & remap di browser (`GP_DEADZONE = 0.12`, `public/js/app.js`).
-- **Throttle pengiriman ~15 Hz**: axis di-resend berkala walau ditahan konstan, supaya Pi
-  menerima MANUAL_CONTROL berkelanjutan (tidak masuk fail-safe timeout).
+- **Pembentukan respons stik** di browser (`public/js/axis-shaping.js`, disisipkan di
+  `readAssignedAxis`): `deadzone → expo → skala min/max → × gain pilot → rate limit`.
+  Default `deadzone 0.12`, `expo 0.35`, `rate 4000/s`, gain mulai 40% (6 langkah 25–100%,
+  diubah saat operasi lewat LB/RB). Semuanya bisa disetel di halaman Joystick dan ikut
+  tersimpan di profil. Preview di halaman itu memanggil fungsi yang **sama persis**
+  dengan jalur kirim, jadi angka di layar tidak bisa berbeda dari yang diterima ROV.
+- **Heartbeat axis ~15 Hz**: nilai axis di-resend berkala walau ditahan konstan, supaya Pi
+  menerima MANUAL_CONTROL berkelanjutan. Heartbeat ini **tidak** bergantung pada jenis
+  controller — kalau hanya jalur gamepad yang mengirim, mode Keyboard akan terus terbaca
+  "stale" oleh fail-safe Pi padahal normal. Saat E-Stop aktif, yang dikirim adalah **nol
+  eksplisit**, bukan diam.
 - **Validasi ulang di server** (`server/server.js`): axis di-clamp ke −1000..1000 sebelum
   diteruskan (tidak percaya input klien).
 - **Validasi ulang di Pi** (`rov_axes.clamp_axis`): Pi tidak mempercayai paket UDP mentah —
@@ -247,19 +255,32 @@ fisik, jadi aman berdampingan dengan konfigurasi channel/servo di Pixhawk (scope
   koneksi pulih sebelum joystick boleh menggerakkan ROV.
 - **E-Stop / Spasi** → joystick **terkunci** sampai operator ARM ulang; tidak bisa override E-Stop.
 - **Mode Autonomous** → joystick otomatis nonaktif (otoritas GUI vs FSM, mirip prinsip gripper).
-- **Fail-safe Pi**: jika tak ada axis baru > 0.5 s, Pi mengirim satu perintah netral lalu berhenti
-  (command terakhir tidak "nyangkut", tidak mengganggu mode autonomous).
+  Keyboard kini tunduk pada gerbang yang sama — sebelumnya W/A/S/D bisa melewati E-Stop.
+- **Fail-safe Pi** (`rov_axes.resolve_manual_packet`): jika tak ada axis baru > 0.5 s, Pi
+  **terus** mengirim NEUTRAL (`x=y=r=0`, `z=500`) 20 Hz dan menandai `cmd_link: "stale"` di
+  telemetry; dashboard memunculkan banner merah. Sengaja tetap mengirim, bukan berhenti:
+  ArduSub mengharapkan aliran MANUAL_CONTROL kontinu, dan kalau ground station diam maka
+  failsafe pilot-input Pixhawk yang jalan dengan perilaku tergantung parameter. Streaming
+  netral lebih bisa diprediksi — diam di tempat, dan di ALT_HOLD berarti tahan kedalaman.
 
 **Testing:**
-- Unit test mapping (pure function, tanpa hardware): `python3 -m unittest test_rov_axes -v`.
+- Unit test mapping + fail-safe (pure function, tanpa hardware):
+  `python3 -m unittest test_rov_axes -v`.
+- Unit test pembentukan respons stik (tanpa dependensi tambahan):
+  `node --test server/test/*.test.mjs`.
 - Manual test verifikasi command sampai UDP:
   1. `cd server && node server.js --sim` (atau `hydroship` di launch.json).
   2. Buka dashboard, pilih Gamepad + mode Manual, gerakkan stick.
   3. Amati log server `[CMD] surge = ... -> <RPI>:14550` (nilai sudah ter-clamp −1000..1000).
   4. Di Pi, jalankan `rov_agent.py`; amati log `[MANUAL]` dan MANUAL_CONTROL terkirim ke Pixhawk.
 
-**Tombol joystick:** untuk task ini `buttons` MANUAL_CONTROL masih **placeholder = 0** (TODO).
-Aksi tombol (arm/mode/mount/light) sudah ditangani terpisah lewat command GUI existing.
+**Tombol joystick:** `buttons` di MANUAL_CONTROL tetap **0** — aksi tombol ditangani lewat
+command GUI tersendiri (`arm`, `pilot_mode`, `gripper`, `stop`), bukan lewat bitmask MAVLink.
+Profil default F310 lengkap (termasuk D-Pad 12–15 dan trigger analog sebagai button 6/7)
+ada di `public/js/joystick-defaults.json` dan didokumentasikan di
+[CONTROL-MAPPING.md](CONTROL-MAPPING.md). Aksi yang tidak punya hardware di wahana
+(`mount_tilt_*`, `actuator1_*`, `lights_brighter/dimmer`, `input_hold_set`) sudah dihapus
+supaya tidak ada tombol yang diam-diam mati; profil lama dimigrasikan otomatis.
 
 ## 8. Replay Camera & Trajectory (nilai tambah, bukan §4.7.3 wajib)
 
