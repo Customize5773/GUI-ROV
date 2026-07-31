@@ -8,11 +8,14 @@ import {
   getActiveButtonLayerName,
   getButtonPressed,
   getButtonValue,
-  axisOutputFor,
-  readRawInput,
   applyJoystickConfig,
+  mapAxisValue,
+  AXIS_OPTIONS,
+  STANDARD_AXIS_COUNT,
+  STANDARD_BUTTON_COUNT,
 } from "../joystick-state.js";
-import { CONFIG } from "../config.js";
+
+import { axisLabel, buttonLabel } from "/shared/joystick-profile.js";
 
 let root = null;
 let rafId = null;
@@ -20,77 +23,154 @@ let rafId = null;
 let visualMode = "visual"; // visual | table
 let mappingLayer = "regular"; // regular | shift
 
-const AXIS_OPTIONS = ["Axis X", "Axis Y", "Axis Z", "Axis R", "Axis S", "Axis T", "Grip", "No function"];
-/* F310 pada X-Input dilaporkan Chrome sebagai "standard mapping": 17 tombol
-   (0-16), termasuk D-pad di 12-15 dan Guide di 16. Sebelumnya hanya 0-15
-   sehingga D-pad tidak bisa dipetakan sama sekali. */
-const BUTTON_OPTIONS = Array.from({ length: 17 }, (_, i) => i);
+/* F310 mode X (standard mapping) mengekspos 4 axis dan 17 tombol. Daftar lama
+   menawarkan 5 axis dan 16 tombol: "axis 4" tidak pernah ada di perangkatnya,
+   dan tombol Logitech (16) tidak bisa dipilih sama sekali. */
+const BUTTON_OPTIONS = Array.from({ length: STANDARD_BUTTON_COUNT }, (_, i) => i);
+const AXIS_INPUT_OPTIONS = Array.from({ length: STANDARD_AXIS_COUNT }, (_, i) => `axis ${i}`);
 const BUTTON_MODES = ["toggle", "hold"];
+
+/* ===================== MODE BELAJAR ===================== */
+/* Menebak nomor axis di dropdown adalah sumber kesalahan terbesar. Dengan mode
+   belajar operator cukup menggerakkan input yang dimaksud. */
+const LEARN_TIMEOUT_MS = 5000;
+let learn = null; // { kind: "axis"|"button", index, baseline, until }
+
+function startLearn(kind, index) {
+  learn = {
+    kind,
+    index,
+    until: performance.now() + LEARN_TIMEOUT_MS,
+    baseline: {
+      axes: joystickState.rawAxes.slice(),
+      buttons: joystickState.rawButtons.map((b) => !!b.pressed),
+    },
+  };
+  rerender();
+}
+
+function cancelLearn() {
+  learn = null;
+  rerender();
+}
+
+/* Dipanggil tiap frame dari tick(). Mengembalikan true kalau sesuatu berubah. */
+function pollLearn() {
+  if (!learn) return false;
+
+  if (performance.now() > learn.until) {
+    learn = null;
+    return true;
+  }
+
+  if (learn.kind === "axis") {
+    // Ambil axis dengan perubahan terbesar di atas ambang.
+    let best = -1;
+    let bestDelta = 0.5;
+    joystickState.rawAxes.forEach((v, i) => {
+      const d = Math.abs(Number(v) - Number(learn.baseline.axes[i] ?? 0));
+      if (d > bestDelta) { bestDelta = d; best = i; }
+    });
+    if (best < 0) return false;
+
+    const row = joystickState.axisConfig[learn.index];
+    if (!row) { learn = null; return true; }
+
+    row.input = `axis ${best}`;
+
+    /* Arah ikut ditentukan dari tanda perubahan: kalau operator mendorong stik
+       ke arah yang dia anggap "positif", reversal (min > max) menyesuaikan
+       sendiri — tidak perlu menebak tombol ↔/↕ lagi. */
+    const delta = Number(joystickState.rawAxes[best]) - Number(learn.baseline.axes[best] ?? 0);
+    const lo = Math.min(row.min, row.max);
+    const hi = Math.max(row.min, row.max);
+    if (delta < 0) { row.min = hi; row.max = lo; } else { row.min = lo; row.max = hi; }
+
+    learn = null;
+    return true;
+  }
+
+  // kind === "button"
+  const hit = joystickState.rawButtons.findIndex(
+    (b, i) => b && b.pressed && !learn.baseline.buttons[i],
+  );
+  if (hit < 0) return false;
+
+  const layer = joystickState.buttonConfig[mappingLayer];
+  const row = layer && layer[learn.index];
+  if (row) row.button = hit;
+
+  learn = null;
+  return true;
+}
 
 const ACTION_LABELS = {
   no_function: "No function",
   arm: "Arm",
   disarm: "Disarm",
-  e_stop: "E-Stop",
   mode_manual: "Mode manual",
   mode_stabilize: "Mode stabilize",
   mode_depth_hold: "Mode depth hold",
+  input_hold_set: "Input hold set",
+  mount_tilt_up: "Mount tilt up",
+  mount_tilt_down: "Mount tilt down",
+  mount_center: "Mount center",
+  actuator1_inc: "Actuator 1 inc",
+  actuator1_dec: "Actuator 1 dec",
   grip_open: "Gripper open",
   grip_close: "Gripper close",
-  grip_neutral: "Gripper netral",
-  light_toggle: "Lampu on/off",
-  gain_inc: "Gain +",
-  gain_dec: "Gain −",
+  lights_brighter: "Lights brighter",
+  lights_dimmer: "Lights dimmer",
+  gain_inc: "Gain inc",
+  gain_dec: "Gain dec",
 };
 
-/* Diagram kokpit: posisi fisik tombol F310 (standard mapping) -> anchor SVG.
-   Isinya harus mengikuti profil default di joystick-defaults.json. */
 const COCKPIT_LAYOUT = {
   regular: {
     left: [
-      { action: "gain_dec", anchor: "l1" },
-      { action: "no_function", anchor: "l2" },
-      { action: "mode_depth_hold", anchor: "dpad_up" },
-      { action: "mode_stabilize", anchor: "dpad_left" },
-      { action: "light_toggle", anchor: "dpad_right" },
-      { action: "mode_manual", anchor: "dpad_down" },
-      { action: "shift", anchor: "left_stick" },
-      { action: "e_stop", anchor: "left_bottom" },
+      { action: "disarm", anchor: "l1" },
+      { action: "mount_tilt_down", anchor: "l2" },
+      { action: "actuator1_inc", anchor: "dpad_up" },
+      { action: "gain_inc", anchor: "dpad_left" },
+      { action: "lights_dimmer", anchor: "dpad_right" },
+      { action: "lights_brighter", anchor: "dpad_down" },
+      { action: "gain_dec", anchor: "left_stick" },
+      { action: "mount_center", anchor: "left_bottom" },
     ],
     center: { action: "no_function", anchor: "touchpad" },
     right: [
-      { action: "gain_inc", anchor: "r1" },
-      { action: "no_function", anchor: "r2" },
-      { action: "no_function", anchor: "face_up" },
-      { action: "grip_neutral", anchor: "face_left" },
-      { action: "grip_open", anchor: "face_right" },
-      { action: "grip_close", anchor: "face_down" },
-      { action: "no_function", anchor: "right_stick" },
-      { action: "arm", anchor: "right_bottom" },
+      { action: "arm", anchor: "r1" },
+      { action: "mount_tilt_up", anchor: "r2" },
+      { action: "actuator1_dec", anchor: "face_up" },
+      { action: "mode_stabilize", anchor: "face_left" },
+      { action: "mode_manual", anchor: "face_right" },
+      { action: "mode_depth_hold", anchor: "face_down" },
+      { action: "shift", anchor: "right_stick" },
+      { action: "input_hold_set", anchor: "right_bottom" },
     ],
   },
 
   shift: {
     left: [
-      { action: "no_function", anchor: "l1" },
-      { action: "no_function", anchor: "l2" },
-      { action: "no_function", anchor: "dpad_up" },
-      { action: "no_function", anchor: "dpad_left" },
-      { action: "no_function", anchor: "dpad_right" },
-      { action: "no_function", anchor: "dpad_down" },
-      { action: "shift", anchor: "left_stick" },
-      { action: "e_stop", anchor: "left_bottom" },
+      { action: "disarm", anchor: "l1" },
+      { action: "mount_tilt_down", anchor: "l2" },
+      { action: "actuator1_inc", anchor: "dpad_up" },
+      { action: "gain_inc", anchor: "dpad_left" },
+      { action: "lights_dimmer", anchor: "dpad_right" },
+      { action: "lights_brighter", anchor: "dpad_down" },
+      { action: "gain_dec", anchor: "left_stick" },
+      { action: "mount_center", anchor: "left_bottom" },
     ],
     center: { action: "no_function", anchor: "touchpad" },
     right: [
-      { action: "no_function", anchor: "r1" },
-      { action: "no_function", anchor: "r2" },
-      { action: "no_function", anchor: "face_up" },
-      { action: "no_function", anchor: "face_left" },
-      { action: "no_function", anchor: "face_right" },
-      { action: "no_function", anchor: "face_down" },
-      { action: "no_function", anchor: "right_stick" },
-      { action: "disarm", anchor: "right_bottom" },
+      { action: "arm", anchor: "r1" },
+      { action: "mount_tilt_up", anchor: "r2" },
+      { action: "actuator1_dec", anchor: "face_up" },
+      { action: "mode_stabilize", anchor: "face_left" },
+      { action: "mode_manual", anchor: "face_right" },
+      { action: "mode_depth_hold", anchor: "face_down" },
+      { action: "shift", anchor: "right_stick" },
+      { action: "input_hold_set", anchor: "right_bottom" },
     ],
   },
 };
@@ -126,18 +206,18 @@ function axisBarStyle(v) {
   return `left:${50 - width}%;width:${width}%;`;
 }
 
-/* Preview memakai fungsi yang SAMA PERSIS dengan jalur kirim ke ROV
-   (axisOutputFor di joystick-state.js, sudah termasuk deadzone & expo),
-   supaya angka di layar tidak pernah berbeda dari yang dikirim.
+/* Preview memakai mapping yang sama persis dengan runtime (joystick-state.js),
+   supaya angka di layar tidak pernah berbeda dari yang dikirim ke ROV. */
+function axisPreviewValue(raw, row) {
+  return mapAxisValue(raw, row);
+}
 
-   Dua angka ditampilkan per baris:
-     raw    = posisi stik mentah -1..1 (sebelum dibentuk)
-     mapped = nilai keluaran -1000..1000 yang benar-benar dikirim */
-function axisPreview(row) {
-  return {
-    raw: readRawInput(row.input),
-    mapped: axisOutputFor(row),
-  };
+/* Baris ke-N tidak selalu membaca axis fisik ke-N — indeksnya ada di row.input.
+   Preview lama memakai posisi baris, jadi bar bergerak salah kolom begitu
+   operator memindahkan sumbu. */
+function parseAxisIdx(input) {
+  const m = String(input).match(/axis\s+(\d+)/i);
+  return m ? Number(m[1]) : -1;
 }
 
 function getAxisAssignedOptions(current) {
@@ -191,7 +271,9 @@ function getActionTesterValue(layer, actionKey) {
 function buildButtonOptions(current) {
   return BUTTON_OPTIONS.map((n) => {
     const selected = n === current ? "selected" : "";
-    return `<option value="${n}" ${selected}>Button ${n}</option>`;
+    // Label F310 (A/B/X/Y/LB/…) jauh lebih mudah dicocokkan operator
+    // dibanding nomor mentah.
+    return `<option value="${n}" ${selected}>${n} — ${esc(buttonLabel(n))}</option>`;
   }).join("");
 }
 
@@ -229,30 +311,48 @@ function renderAxisMappingPanel() {
         <table class="joy-axis-table">
           <thead>
             <tr>
-              <th class="col-name">Name</th>
+              <th class="col-name">Input</th>
               <th class="col-preview">Preview</th>
               <th class="col-dir">Direction</th>
               <th class="col-min">Min</th>
               <th class="col-axis">Axis</th>
               <th class="col-max">Max</th>
+              <th class="col-dz">Deadzone</th>
+              <th class="col-expo">Expo</th>
             </tr>
           </thead>
           <tbody>
             ${rows.map((row, idx) => {
-              const { raw, mapped } = axisPreview(row);
-              const barStyle = axisBarStyle(mapped);
+              const rawIdx = parseAxisIdx(row.input);
+              const raw = joystickState.rawAxes[rawIdx] ?? 0;
+              const val = axisPreviewValue(raw, row);
+              const barStyle = axisBarStyle(val);
+              const learning = learn && learn.kind === "axis" && learn.index === idx;
 
               return `
-                <tr>
-                  <td class="joy-axis-name">${esc(row.input)}</td>
+                <tr class="${learning ? "is-learning" : ""}">
+                  <td class="joy-axis-name">
+                    <select class="joy-select" data-axis-index="${idx}" data-field="input">
+                      ${AXIS_INPUT_OPTIONS.map((opt) => `
+                        <option value="${esc(opt)}" ${opt === row.input ? "selected" : ""}>
+                          ${esc(opt)} — ${esc(axisLabel(parseAxisIdx(opt)))}
+                        </option>`).join("")}
+                    </select>
+                    <button
+                      class="joy-mini-btn joy-learn-btn ${learning ? "is-learning" : ""}"
+                      data-action="learn-axis"
+                      data-axis-index="${idx}"
+                      type="button"
+                    >${learning ? "Gerakkan…" : "Deteksi"}</button>
+                  </td>
 
                   <td class="joy-axis-preview">
-                    <div class="joy-axis-value">${raw.toFixed(2)}</div>
+                    <div class="joy-axis-value">${val.toFixed(2)}</div>
                     <div class="joy-axis-track">
                       <div class="joy-axis-track__zero"></div>
                       <div class="joy-axis-bar" style="${barStyle}"></div>
                     </div>
-                    <div class="joy-axis-sub">${mapped.toFixed(0)}</div>
+                    <div class="joy-axis-sub">${(val * 1000).toFixed(2)}</div>
                   </td>
 
                   <td class="joy-axis-dir">
@@ -291,6 +391,26 @@ function renderAxisMappingPanel() {
                       value="${esc(row.max)}"
                       data-axis-index="${idx}"
                       data-field="max"
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      class="joy-input joy-input--num"
+                      type="number" step="0.01" min="0" max="0.9"
+                      value="${esc(row.deadzone)}"
+                      data-axis-index="${idx}"
+                      data-field="deadzone"
+                    />
+                  </td>
+
+                  <td>
+                    <input
+                      class="joy-input joy-input--num"
+                      type="number" step="0.1" min="1" max="4"
+                      value="${esc(row.expo)}"
+                      data-axis-index="${idx}"
+                      data-field="expo"
                     />
                   </td>
                 </tr>
@@ -530,6 +650,13 @@ function renderButtonTableForLayer(layer, isRuntimeActive) {
                     >
                       ${buildButtonOptions(row.button)}
                     </select>
+                    ${isRuntimeActive ? `
+                      <button
+                        class="joy-mini-btn joy-learn-btn ${learn && learn.kind === "button" && learn.index === idx ? "is-learning" : ""}"
+                        data-action="learn-button"
+                        data-btn-index="${idx}"
+                        type="button"
+                      >${learn && learn.kind === "button" && learn.index === idx ? "Tekan…" : "Deteksi"}</button>` : ""}
                   </td>
 
                   <td>
@@ -587,6 +714,11 @@ function renderTopSummary() {
         </div>
 
         <button id="joySaveBtn" class="joy-save-btn" type="button">Save Mapping</button>
+        <button id="joyExportBtn" class="joy-mini-btn" type="button">Export</button>
+        <label class="joy-mini-btn joy-import-label">
+          Import
+          <input id="joyImportInput" type="file" accept="application/json,.json" hidden />
+        </label>
 
         <label class="joy-enable-toggle">
           <input id="joyEnabledToggle" type="checkbox" ${joystickState.enabled ? "checked" : ""}/>
@@ -597,51 +729,41 @@ function renderTopSummary() {
   `;
 }
 
-/* Panel tuning respons stik. Nilainya ikut tersimpan bersama profil joystick
-   (tombol Save yang sama), jadi "rasa" stik hasil kalibrasi di kolam tidak
-   hilang saat dashboard di-reload. */
-function renderTuningPanel() {
-  const t = joystickState.tuning || {};
-  const gainSteps = CONFIG.CONTROL.GAIN_STEPS;
-  const gainPct = Math.round((gainSteps[t.gainIndex] ?? gainSteps[0]) * 100);
+/* Gate mode X. F310 di posisi D melaporkan mapping kosong dan indeks axis/tombol
+   berbeda per OS — profil yang sama jadi salah tombol tanpa gejala yang jelas.
+   Tombol override disediakan supaya operator tidak pernah terkunci total di
+   tengah lomba kalau memakai gamepad lain. */
+/* Isi banner dihitung ulang tiap frame lewat patchLiveJoystickUI, BUKAN sekali
+   saat render: halaman ini hanya render sekali di init() (onShow tidak
+   rerender), sedangkan status gamepad berubah kapan saja. */
+function mappingBannerHtml() {
+  if (!joystickState.connected || !joystickState.nonStandard) return "";
 
-  const slider = (id, label, hint, value, min, max, step, suffix) => `
-    <label class="joy-tune">
-      <span class="joy-tune__label">${esc(label)}
-        <b class="joy-tune__value" id="${id}Val">${esc(value)}${esc(suffix)}</b>
-      </span>
-      <input type="range" id="${id}" min="${min}" max="${max}" step="${step}" value="${value}">
-      <small class="joy-tune__hint">${esc(hint)}</small>
-    </label>`;
+  if (joystickState.overrideNonStandard) {
+    return `
+      <div class="joy-banner joy-banner--warn">
+        <strong>Mode non-standard dipakai paksa.</strong>
+        Pemetaan tombol mungkin tidak sesuai profil. Indeks axis/tombol pada mode
+        DirectInput berbeda antar sistem operasi.
+      </div>`;
+  }
 
   return `
-    <section class="joy-card joy-card--tuning">
-      <div class="joy-card__head">
-        <div>
-          <div class="joy-kicker">STICK RESPONSE</div>
-          <h3 class="joy-card__title">Deadzone · Expo · Rate · Gain</h3>
-        </div>
-      </div>
-      <div class="joy-tune-grid">
-        ${slider("joyDeadzone", "Deadzone", "Abaikan drift stik di sekitar tengah.",
-                 t.deadzone ?? 0.12, 0, 0.4, 0.01, "")}
-        ${slider("joyExpo", "Expo", "Melandaikan tengah agar koreksi kecil presisi; thrust maksimum tetap penuh.",
-                 t.expo ?? 0.35, 0, 1, 0.05, "")}
-        ${slider("joySlew", "Rate limit", "Batas perubahan thrust per detik — meredam hentakan stik.",
-                 t.slewPerSec ?? 4000, 500, 12000, 250, " /s")}
-        ${slider("joyGain", "Gain awal", `Pengali output axis saat dashboard dibuka (kini ${gainPct}%). Diubah saat terbang lewat tombol LB/RB.`,
-                 t.gainIndex ?? 1, 0, gainSteps.length - 1, 1, "")}
-      </div>
-    </section>
-  `;
+    <div class="joy-banner joy-banner--err">
+      <strong>Gamepad tidak dalam mode standard (XInput).</strong>
+      Geser saklar di belakang Logitech F310 ke posisi <strong>X</strong>,
+      lalu cabut &amp; pasang kembali kabel USB.
+      Kontrol joystick dinonaktifkan sampai itu dilakukan.
+      <button id="joyOverrideBtn" class="joy-mini-btn" type="button">Pakai apa adanya</button>
+    </div>`;
 }
 
 function renderLayout() {
   return `
     <section class="panel joy-page page--joystick">
       ${renderTopSummary()}
+      <div id="joyBannerSlot"></div>
       ${renderAxisMappingPanel()}
-      ${renderTuningPanel()}
       ${renderButtonMappingPanel()}
     </section>
   `;
@@ -659,25 +781,6 @@ function bindEvents() {
   root.querySelector("#joyEnabledToggle")?.addEventListener("change", (e) => {
     joystickState.enabled = !!e.target.checked;
   });
-
-  /* Tuning berlaku SEKETIKA (joystickState.tuning dibaca tiap frame oleh
-     axisOutputFor), jadi operator bisa mencari deadzone/expo yang pas sambil
-     melihat bar preview bergerak. Tombol Save yang menyimpannya permanen. */
-  const bindTune = (id, key, fmt, suffix = "") => {
-    const el = root.querySelector(`#${id}`);
-    const out = root.querySelector(`#${id}Val`);
-    el?.addEventListener("input", () => {
-      const v = Number(el.value);
-      joystickState.tuning[key] = v;
-      if (out) out.textContent = fmt(v) + suffix;
-    });
-  };
-
-  bindTune("joyDeadzone", "deadzone", (v) => v.toFixed(2));
-  bindTune("joyExpo", "expo", (v) => v.toFixed(2));
-  bindTune("joySlew", "slewPerSec", (v) => String(v), " /s");
-  bindTune("joyGain", "gainIndex", (v) =>
-    `${v} (${Math.round(CONFIG.CONTROL.GAIN_STEPS[v] * 100)}%)`);
 
   root.querySelectorAll("[data-action='toggle-axis-dir']").forEach((btn) => {
     btn.addEventListener("click", () => {
@@ -705,21 +808,54 @@ function bindEvents() {
       if (field === "assigned") {
         row.assigned = e.target.value;
 
-        /* Axis yang sebelumnya "No function" bisa punya rentang sisa yang
-           terlalu kecil (mis. -1..1) sehingga nilainya selalu masuk deadzone
-           gripper dan grip analog tak pernah aktif. Saat operator memilih
-           "Grip", naikkan rentangnya ke skala perintah -1000..1000. */
-        if (row.assigned === "Grip" &&
-            Math.abs(Number(row.max) - Number(row.min)) < 100) {
-          row.min = -1000;
-          row.max = 1000;
-          rerender();
-          return;
+        /* Satu fungsi hanya boleh dipegang satu axis: readAssignedAxis memakai
+           kecocokan pertama, jadi duplikat akan mematikan axis kedua tanpa
+           pesan apa pun. Bebaskan pemilik lama secara eksplisit. */
+        if (row.assigned !== "No function") {
+          joystickState.axisConfig.forEach((other, i) => {
+            if (i !== idx && other.assigned === row.assigned) {
+              other.assigned = "No function";
+            }
+          });
         }
+        rerender();
+        return;
+      } else if (field === "input") {
+        row.input = e.target.value;
+        rerender();
+        return;
       } else if (field === "min" || field === "max") {
+        row[field] = Number(e.target.value);
+      } else if (field === "deadzone" || field === "expo") {
         row[field] = Number(e.target.value);
       }
     });
+  });
+
+  root.querySelectorAll("[data-action='learn-axis']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (learn) return cancelLearn();
+      startLearn("axis", Number(btn.dataset.axisIndex));
+    });
+  });
+
+  root.querySelectorAll("[data-action='learn-button']").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      if (learn) return cancelLearn();
+      startLearn("button", Number(btn.dataset.btnIndex));
+    });
+  });
+
+  root.querySelector("#joyExportBtn")?.addEventListener("click", exportProfile);
+  root.querySelector("#joyImportInput")?.addEventListener("change", importProfile);
+
+  /* Delegasi: tombol override hidup di dalam banner yang di-patch tiap frame,
+     jadi tidak bisa di-bind langsung saat render. */
+  root.addEventListener("click", (e) => {
+    if (e.target && e.target.id === "joyOverrideBtn") {
+      joystickState.overrideNonStandard = true;
+      patchLiveJoystickUI();
+    }
   });
 
   root.querySelectorAll("[data-joy-view]").forEach((btn) => {
@@ -763,12 +899,16 @@ function bindEvents() {
 
 /* ========================= SAVE ========================= */
 
+/* Menunggu echo joystick_config dari server, bukan sekadar menampilkan
+   "Saving...". Sebelumnya kalau WS putus, editan hilang tanpa operator sadar. */
+let savePending = null;
+
 function saveMapping() {
   try {
     const payload = getJoystickConfigPayload();
 
     if (!window.ws || window.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("WebSocket not connected");
+      throw new Error("WebSocket tidak tersambung");
     }
 
     window.ws.send(JSON.stringify({
@@ -776,10 +916,60 @@ function saveMapping() {
       data: payload,
     }));
 
-    flashSaveState("Saving...");
+    flashSaveState("Menyimpan…");
+
+    clearTimeout(savePending);
+    savePending = setTimeout(() => {
+      savePending = null;
+      flashSaveState("Gagal: server tidak menjawab", true);
+    }, 3000);
   } catch (err) {
     console.error("[joystick] save failed:", err);
-    flashSaveState("Save failed", true);
+    flashSaveState(`Gagal: ${err.message}`, true);
+  }
+}
+
+/* ========================= EXPORT / IMPORT ========================= */
+
+/* Inti dari "konsisten di berbagai perangkat": profil bisa dibawa sebagai file
+   biasa antar laptop/OS tanpa konfigurasi ulang. */
+function exportProfile() {
+  const payload = getJoystickConfigPayload();
+  const stamp = new Date().toISOString().slice(0, 10);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `hydroship-joystick-${stamp}.json`;
+  a.click();
+
+  URL.revokeObjectURL(url);
+  flashSaveState("Profil diekspor");
+}
+
+async function importProfile(e) {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    // applyJoystickConfig menjalankan migrateProfile + sanitizeProfile, jadi
+    // profil versi lama atau rusak tidak pernah masuk mentah ke state.
+    const warnings = applyJoystickConfig(JSON.parse(text));
+
+    rerender();
+
+    const summary = warnings.length
+      ? `Diimpor dengan ${warnings.length} koreksi:\n\n${warnings.join("\n")}\n\nSimpan sekarang?`
+      : "Profil valid dan sudah dimuat.\n\nSimpan sekarang?";
+
+    if (window.confirm(summary)) saveMapping();
+  } catch (err) {
+    console.error("[joystick] import failed:", err);
+    flashSaveState(`Import gagal: ${err.message}`, true);
+  } finally {
+    e.target.value = "";
   }
 }
 
@@ -801,6 +991,13 @@ function flashSaveState(text, isError = false) {
 
 function patchLiveJoystickUI() {
   if (!root) return;
+
+  // banner gate mode X — status gamepad bisa berubah kapan saja
+  const bannerSlot = root.querySelector("#joyBannerSlot");
+  if (bannerSlot) {
+    const html = mappingBannerHtml();
+    if (bannerSlot.innerHTML !== html) bannerSlot.innerHTML = html;
+  }
 
   // device card
   const nameEl = root.querySelector(".joy-device-card__name");
@@ -824,15 +1021,19 @@ function patchLiveJoystickUI() {
     const row = joystickState.axisConfig[idx];
     if (!row) return;
 
-    const { raw, mapped } = axisPreview(row);
+    // Indeks axis fisik ada di row.input, bukan posisi baris.
+    const raw = joystickState.rawAxes[parseAxisIdx(row.input)] ?? 0;
+    const mapped = axisPreviewValue(raw, row);
+    const barStyle = axisBarStyle(raw);
 
     const valueEl = tr.querySelector(".joy-axis-value");
     const subValueEl = tr.querySelector(".joy-axis-sub");
     const barEl = tr.querySelector(".joy-axis-bar");
 
-    if (valueEl) valueEl.textContent = raw.toFixed(2);
+    if (valueEl) valueEl.textContent = Number(raw).toFixed(2);
+    // `mappedValue` dulu tidak pernah dideklarasikan — ReferenceError tiap frame.
     if (subValueEl) subValueEl.textContent = mapped.toFixed(0);
-    if (barEl) barEl.style.cssText = axisBarStyle(mapped);
+    if (barEl) barEl.style.cssText = barStyle;
   });
 
   // layer state + tester live
@@ -892,18 +1093,13 @@ function rerender() {
 }
 
 function tick() {
-  /* try/finally: penjadwalan frame berikutnya TIDAK boleh bergantung pada
-     patchLiveJoystickUI() berhasil. Pernah ada ReferenceError di dalamnya yang
-     membuat loop berhenti selamanya setelah satu frame — panel tester beku,
-     dan karena rafId tetap terisi, onShow() pun tidak menghidupkannya lagi. */
-  try {
-    updateJoystickStateFromGamepad();
-    patchLiveJoystickUI();
-  } catch (err) {
-    console.error("[joystick] update panel gagal:", err);
-  } finally {
-    rafId = requestAnimationFrame(tick);
-  }
+  updateJoystickStateFromGamepad();
+
+  // Mode belajar butuh render ulang begitu input terdeteksi.
+  if (pollLearn()) rerender();
+  else patchLiveJoystickUI();
+
+  rafId = requestAnimationFrame(tick);
 }
 
 /* ========================= STYLES ========================= */
@@ -1077,24 +1273,6 @@ function injectJoystickStyles() {
       color:#eef5ff;
       font-weight:800;
     }
-
-    /* ===== stick response tuning ===== */
-    .joy-tune-grid{
-      display:grid;
-      grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
-      gap:16px;
-      padding:14px 16px 18px;
-    }
-    .joy-tune{ display:flex; flex-direction:column; gap:6px; }
-    .joy-tune__label{
-      display:flex; justify-content:space-between; align-items:baseline; gap:10px;
-      font-size:11px; letter-spacing:1px; text-transform:uppercase; color:#8fa6bd;
-    }
-    .joy-tune__value{
-      font-family:"JetBrains Mono",monospace; font-size:12px; color:#2be0d6; font-weight:700;
-    }
-    .joy-tune input[type=range]{ width:100%; accent-color:#2be0d6; cursor:pointer; }
-    .joy-tune__hint{ font-size:10px; line-height:1.4; color:#63788d; }
 
     /* ===== axis table ===== */
     .joy-axis-table-wrap{
@@ -1530,14 +1708,21 @@ export const joystickPage = {
   },
 };
 
+/* Satu-satunya jalur masuk config dari server. Sebelumnya fungsi ini mengganti
+   array secara langsung TANPA validasi dan TANPA migrasi, sementara
+   applyJoystickConfig() yang punya keduanya justru tidak pernah dipanggil. */
 export function handleJoystickConfigMessage(msg) {
   if (!msg || typeof msg !== "object") return;
 
-  /* Delegasi penuh ke applyJoystickConfig(): di sana ada migrasi aksi lama
-     (migrateButtonAction), validasi tuning, dan penandaan configLoaded yang
-     dipakai app.js sebagai gerbang sebelum joystick boleh mengemudi.
-     Sebelumnya fungsi ini menyalin field sendiri dan melewatkan semua itu. */
-  applyJoystickConfig(msg);
+  const warnings = applyJoystickConfig(msg);
+  warnings.forEach((w) => console.warn("[joystick]", w));
+
+  // Save berhasil dikonfirmasi server.
+  if (savePending) {
+    clearTimeout(savePending);
+    savePending = null;
+    flashSaveState(warnings.length ? `Disimpan (${warnings.length} koreksi)` : "Tersimpan");
+  }
 
   if (root) rerender();
 }

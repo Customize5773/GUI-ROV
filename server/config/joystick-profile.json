@@ -1,130 +1,127 @@
 {
-  "enabled": true,
-  "shiftButton": 10,
-  "tuning": {
-    "deadzone": 0.12,
-    "expo": 0.35,
-    "slewPerSec": 4000,
-    "gainIndex": 1
+  "version": 2,
+  "device": {
+    "id": "",
+    "mapping": "standard",
+    "axes": 4,
+    "buttons": 17
   },
+  "enabled": true,
+  "shiftButton": 4,
   "axisConfig": [
     {
       "input": "axis 0",
       "assigned": "Axis R",
       "min": -1000,
       "max": 1000,
-      "direction": "↔"
+      "direction": "↔",
+      "deadzone": 0.12,
+      "expo": 1.6
     },
     {
       "input": "axis 1",
       "assigned": "Axis Z",
       "min": 1000,
       "max": -1000,
-      "direction": "↕"
+      "direction": "↕",
+      "deadzone": 0.12,
+      "expo": 1.6
     },
     {
       "input": "axis 2",
       "assigned": "Axis Y",
       "min": -1000,
       "max": 1000,
-      "direction": "↔"
+      "direction": "↔",
+      "deadzone": 0.12,
+      "expo": 1.6
     },
     {
       "input": "axis 3",
       "assigned": "Axis X",
       "min": 1000,
       "max": -1000,
-      "direction": "↕"
-    },
-    {
-      "input": "triggers",
-      "assigned": "Grip",
-      "min": -1000,
-      "max": 1000,
-      "direction": "↕"
+      "direction": "↕",
+      "deadzone": 0.12,
+      "expo": 1.6
     }
   ],
   "buttonConfig": {
     "regular": [
       {
-        "action": "grip_close",
+        "action": "arm",
         "button": 0,
         "mode": "toggle"
       },
       {
-        "action": "grip_open",
+        "action": "disarm",
         "button": 1,
         "mode": "toggle"
       },
       {
-        "action": "grip_neutral",
+        "action": "mode_manual",
         "button": 2,
         "mode": "toggle"
       },
       {
-        "action": "no_function",
+        "action": "mode_stabilize",
         "button": 3,
         "mode": "toggle"
       },
       {
-        "action": "gain_dec",
-        "button": 4,
-        "mode": "toggle"
-      },
-      {
-        "action": "gain_inc",
+        "action": "mode_depth_hold",
         "button": 5,
         "mode": "toggle"
       },
       {
-        "action": "no_function",
+        "action": "grip_close",
         "button": 6,
-        "mode": "toggle"
+        "mode": "hold"
       },
       {
-        "action": "no_function",
+        "action": "grip_open",
         "button": 7,
-        "mode": "toggle"
+        "mode": "hold"
       },
       {
-        "action": "e_stop",
+        "action": "input_hold_set",
         "button": 8,
         "mode": "toggle"
       },
       {
-        "action": "arm",
+        "action": "mount_center",
         "button": 9,
         "mode": "toggle"
       },
       {
-        "action": "no_function",
-        "button": 10,
-        "mode": "toggle"
-      },
-      {
-        "action": "no_function",
-        "button": 11,
-        "mode": "toggle"
-      },
-      {
-        "action": "mode_depth_hold",
+        "action": "mount_tilt_up",
         "button": 12,
-        "mode": "toggle"
+        "mode": "hold"
       },
       {
-        "action": "mode_manual",
+        "action": "mount_tilt_down",
         "button": 13,
-        "mode": "toggle"
+        "mode": "hold"
       },
       {
-        "action": "mode_stabilize",
+        "action": "gain_dec",
         "button": 14,
         "mode": "toggle"
       },
       {
-        "action": "light_toggle",
+        "action": "gain_inc",
         "button": 15,
         "mode": "toggle"
+      },
+      {
+        "action": "lights_dimmer",
+        "button": 10,
+        "mode": "hold"
+      },
+      {
+        "action": "lights_brighter",
+        "button": 11,
+        "mode": "hold"
       },
       {
         "action": "no_function",
@@ -155,11 +152,6 @@
       },
       {
         "action": "no_function",
-        "button": 4,
-        "mode": "toggle"
-      },
-      {
-        "action": "no_function",
         "button": 5,
         "mode": "toggle"
       },
@@ -174,23 +166,13 @@
         "mode": "toggle"
       },
       {
-        "action": "e_stop",
+        "action": "no_function",
         "button": 8,
         "mode": "toggle"
       },
       {
-        "action": "disarm",
+        "action": "no_function",
         "button": 9,
-        "mode": "toggle"
-      },
-      {
-        "action": "no_function",
-        "button": 10,
-        "mode": "toggle"
-      },
-      {
-        "action": "no_function",
-        "button": 11,
         "mode": "toggle"
       },
       {
@@ -211,6 +193,16 @@
       {
         "action": "no_function",
         "button": 15,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 10,
+        "mode": "toggle"
+      },
+      {
+        "action": "no_function",
+        "button": 11,
         "mode": "toggle"
       },
       {

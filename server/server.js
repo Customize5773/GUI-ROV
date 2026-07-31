@@ -25,6 +25,7 @@ const RPI_ADDR = process.env.RPI_ADDR || "192.168.2.2";
 const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
+const SHARED_ROOT = path.join(__dirname, "..", "shared");
 
 const MOTION_AXES = new Set([
     "surge",
@@ -56,131 +57,16 @@ function clampAxis(name, value) {
 }
 
 /* ======================= JOYSTICK CONFIG FILE ======================= */
-const CONFIG_DIR = path.join(__dirname, "config");
-const JOY_CFG_FILE = path.join(CONFIG_DIR, "joystick-profile.json");
 
-/* Default mapping + daftar aksi dibaca dari file yang SAMA dengan yang dipakai
-   browser (public/js/joystick-state.js mem-fetch-nya). Sebelumnya tabel default
-   disalin verbatim di sini dan di joystick-state.js, dijaga hanya oleh komentar
-   — dan memang sudah hanyut. Sekarang satu file, satu kebenaran. */
-const JOY_DEFAULTS = require(path.join(__dirname, "..", "public", "js", "joystick-defaults.json"));
+/* Skema + I/O profil joystick sekarang tinggal di satu tempat masing-masing:
+   shared/joystick-profile.js (skema, default, validasi, migrasi) dan
+   server/joystick-config.js (lokasi file OS, tulis atomik, pemulihan korup).
+   Sebelumnya default & tabel migrasi ditulis kembar di sini dan di
+   public/js/joystick-state.js. */
+const joyConfig = require("./joystick-config");
 
-const VALID_ACTIONS = new Set(JOY_DEFAULTS.actions);
-const ACTION_MIGRATION = JOY_DEFAULTS.actionMigration;
-
-function migrateButtonAction(action) {
-  const mapped = ACTION_MIGRATION[action] || action;
-  return VALID_ACTIONS.has(mapped) ? mapped : "no_function";
-}
-
-function defaultJoystickConfig() {
-  return structuredClone(JOY_DEFAULTS.profile);
-}
-
-function clampNum(v, lo, hi, fallback) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, n)) : fallback;
-}
-
-function ensureConfigDir() {
-  if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
-
-function sanitizeJoystickConfig(data) {
-  const fallback = defaultJoystickConfig();
-  if (!data || typeof data !== "object") return fallback;
-
-  const enabled = data.enabled !== false;
-  const shiftButton = Number.isInteger(Number(data.shiftButton))
-    ? Number(data.shiftButton)
-    : fallback.shiftButton;
-
-  /* ================= TUNING ================= */
-  // Deadzone/expo/slew/gain ikut tersimpan di profil supaya "rasa" stik yang
-  // sudah dicari operator saat kalibrasi tidak hilang begitu dashboard di-reload.
-  const t = (data.tuning && typeof data.tuning === "object") ? data.tuning : {};
-  const tuning = {
-    deadzone: clampNum(t.deadzone, 0, 0.9, fallback.tuning.deadzone),
-    expo: clampNum(t.expo, 0, 1, fallback.tuning.expo),
-    slewPerSec: clampNum(t.slewPerSec, 100, 20000, fallback.tuning.slewPerSec),
-    gainIndex: Math.round(clampNum(t.gainIndex, 0, 20, fallback.tuning.gainIndex)),
-  };
-
-  /* ================= AXIS ================= */
-  const srcAxis = Array.isArray(data.axisConfig)
-    ? data.axisConfig
-    : fallback.axisConfig;
-
-  const axisConfig = fallback.axisConfig.map((def, i) => {
-    const row = srcAxis[i] || {};
-    return {
-      input: typeof row.input === "string" ? row.input : def.input,
-      assigned: typeof row.assigned === "string" ? row.assigned : def.assigned,
-      min: Number.isFinite(Number(row.min)) ? Number(row.min) : def.min,
-      max: Number.isFinite(Number(row.max)) ? Number(row.max) : def.max,
-      direction: row.direction === "↕" ? "↕" : "↔",
-    };
-  });
-
-  /* ================= BUTTON ================= */
-  const srcBtnCfg = (data.buttonConfig && typeof data.buttonConfig === "object")
-    ? data.buttonConfig
-    : {};
-
-  const sanitizeLayer = (layerName) =>
-    fallback.buttonConfig[layerName].map((def, i) => {
-      const row = Array.isArray(srcBtnCfg[layerName]) ? (srcBtnCfg[layerName][i] || {}) : {};
-      return {
-        action: typeof row.action === "string" ? migrateButtonAction(row.action) : def.action,
-        button: Number.isFinite(Number(row.button)) ? Number(row.button) : def.button,
-        mode: row.mode === "hold" ? "hold" : "toggle",
-      };
-    });
-
-  return {
-    enabled,
-    shiftButton,
-    tuning,
-    axisConfig,
-    buttonConfig: {
-      regular: sanitizeLayer("regular"),
-      shift: sanitizeLayer("shift"),
-    },
-  };
-}
-
-function loadJoystickConfig() {
-  try {
-    if (!fs.existsSync(JOY_CFG_FILE)) {
-      const cfg = defaultJoystickConfig();
-      ensureConfigDir();
-      fs.writeFileSync(JOY_CFG_FILE, JSON.stringify(cfg, null, 2), "utf8");
-      console.log("[JOYCFG] file config belum ada, dibuat default");
-      return cfg;
-    }
-
-    const raw = fs.readFileSync(JOY_CFG_FILE, "utf8");
-    const parsed = JSON.parse(raw);
-    const cfg = sanitizeJoystickConfig(parsed);
-    console.log("[JOYCFG] config joystick dimuat");
-    return cfg;
-  } catch (err) {
-    console.warn("[JOYCFG] gagal load config, pakai default:", err.message);
-    return defaultJoystickConfig();
-  }
-}
-
-function saveJoystickConfig(data) {
-  const cfg = sanitizeJoystickConfig(data);
-  ensureConfigDir();
-  fs.writeFileSync(JOY_CFG_FILE, JSON.stringify(cfg, null, 2), "utf8");
-  console.log("[JOYCFG] config joystick disimpan ke", JOY_CFG_FILE);
-  return cfg;
-}
-
-let joystickConfig = loadJoystickConfig();
+// Diisi oleh start() sebelum server mulai listen.
+let joystickConfig = null;
 
 /* ----------------------- HTTP static server ----------------------- */
 const MIME = {
@@ -290,8 +176,13 @@ const httpServer = http.createServer((req, res) => {
 
   if (urlPath === "/") urlPath = "/index.html";
 
-  const filePath = path.join(PUBLIC, path.normalize(urlPath));
-  if (!filePath.startsWith(PUBLIC)) {
+  /* shared/ berisi modul skema yang dipakai bersama browser & server, jadi
+     ikut disajikan (read-only) supaya halaman bisa meng-import-nya. */
+  const root = urlPath.startsWith("/shared/") ? SHARED_ROOT : PUBLIC;
+  const filePath = path.join(root, path.normalize(
+    root === SHARED_ROOT ? urlPath.replace("/shared/", "/") : urlPath,
+  ));
+  if (!filePath.startsWith(root)) {
     res.writeHead(403);
     return res.end("Forbidden");
   }
@@ -374,18 +265,20 @@ wss.on("connection", (ws, req) => {
     // ================= JOYSTICK CONFIG SAVE =================
     if (msg.type === "joystick_config_save") {
       try {
-        joystickConfig = saveJoystickConfig(msg.data);
+        const { profile, warnings } = joyConfig.save(msg.data);
+        joystickConfig = profile;
 
         ws.send(JSON.stringify({
           type: "event",
-          text: "Joystick mapping berhasil disimpan",
-          level: "ok",
+          text: warnings.length
+            ? `Mapping disimpan dengan ${warnings.length} koreksi: ${warnings[0]}`
+            : "Joystick mapping berhasil disimpan",
+          level: warnings.length ? "warn" : "ok",
         }));
 
-        ws.send(JSON.stringify({
-          type: "joystick_config",
-          data: joystickConfig,
-        }));
+        /* Disiarkan ke SEMUA dashboard, bukan hanya yang menyimpan — kalau
+           tidak, tab lain tetap memegang profil basi sampai reconnect. */
+        broadcast({ type: "joystick_config", data: joystickConfig });
 
         console.log("[JOYCFG] mapping joystick disimpan oleh dashboard");
       } catch (err) {
@@ -441,14 +334,23 @@ wss.on("connection", (ws, req) => {
 
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
-      /* Perintah "manipulator" sudah dihapus: rov_agent.py tidak pernah punya
-         handler untuknya, jadi paketnya selalu berakhir sebagai "unknown
-         command". Seluruh kendali gripper kini lewat perintah "gripper" —
-         satu-satunya jalur yang benar-benar menggerakkan servo. */
+      /* ================= MANIPULATOR ================= */
 
+      if (msg.name === "manipulator") {
+
+          const packet = Buffer.from(JSON.stringify(msg));
+
+          console.log("[MANIPULATOR]", msg);
+
+          udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
+              if (e) console.warn("[UDP] gagal kirim manipulator:", e.message);
+          });
+
+          return;
+      }
+      
       if (MOTION_AXES.has(msg.name)) {
         msg.value = clampAxis(msg.name, msg.value);
-        simLastAxis = Date.now();
       }
 
       // Tap command relevan-trajectory untuk rekaman (surge/sway/dll). Hanya
@@ -518,17 +420,7 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 
 /* ----------------------- simulator (opsional) ----------------------- */
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
-/* mode = string mode ArduSub, persis seperti yang dikirim rov_agent.py dari
-   HEARTBEAT. Dashboard memakainya untuk menyorot tab mode, jadi simulator
-   harus memakai kosakata yang sama (MANUAL/STABILIZE/ALT_HOLD) — bukan
-   manual/autonomous milik control_mode. */
-const PILOT_MODE_TO_ARDUSUB = {
-  manual: "MANUAL",
-  stabilize: "STABILIZE",
-  depth_hold: "ALT_HOLD",
-};
-
-const simState = { armed: false, light: false, mode: "MANUAL", cmdLink: "ok" };
+const simState = { armed: false, light: false, mode: "manual" };
 
 function applySimCommand(name, value) {
   switch (name) {
@@ -541,19 +433,11 @@ function applySimCommand(name, value) {
     case "stop":
       simState.armed = false;
       break; // failsafe: netralkan
-    case "pilot_mode": {
-      const mapped = PILOT_MODE_TO_ARDUSUB[String(value).toLowerCase()];
-      if (mapped) simState.mode = mapped;
+    case "control_mode":
+      simState.mode = value;
       break;
-    }
   }
 }
-
-/* Fail-safe idle ditiru juga di SIM supaya prosedur trial bisa dilatih tanpa
-   wahana: kalau axis berhenti mengalir, dashboard menyalakan banner yang sama
-   seperti saat rov_agent.py mengirim NEUTRAL sendiri. */
-const SIM_IDLE_TIMEOUT_MS = 500;
-let simLastAxis = 0;
 
 if (SIM) {
   console.log("[SIM] menghasilkan telemetri palsu (tanpa Raspi).");
@@ -575,18 +459,33 @@ if (SIM) {
         armed: simState.armed,
         light: simState.light,
         mode: simState.mode,
-        cmd_link: (Date.now() - simLastAxis) > SIM_IDLE_TIMEOUT_MS ? "stale" : "ok",
       },
       recv: Date.now(),
     });
   }, 100);
 }
 
-httpServer.listen(WS_PORT, () => {
-  console.log(`\n  HYDROSHIP server aktif`);
-  console.log(`  Dashboard : http://localhost:${WS_PORT}`);
-  console.log(`  WebSocket : ws://localhost:${WS_PORT}`);
-  console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
-  console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
-  console.log(`  Joy cfg   : ${JOY_CFG_FILE}\n`);
-});
+/* Bootstrap async: skema joystick adalah ES module, dimuat lewat await import()
+   (jalan di Node 14+, tidak bergantung require(ESM) yang baru ada di Node
+   >=22.12). Server baru listen setelah profil siap, sehingga handler WS tidak
+   pernah melihat joystickConfig === null. */
+async function start() {
+  try {
+    await joyConfig.loadSchema();
+    joystickConfig = await joyConfig.load();
+  } catch (err) {
+    console.error("[JOYCFG] FATAL: gagal memuat profil joystick:", err.message);
+    process.exit(1);
+  }
+
+  httpServer.listen(WS_PORT, () => {
+    console.log(`\n  HYDROSHIP server aktif`);
+    console.log(`  Dashboard : http://localhost:${WS_PORT}`);
+    console.log(`  WebSocket : ws://localhost:${WS_PORT}`);
+    console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
+    console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
+    console.log(`  Joy cfg   : ${joyConfig.configPath()}\n`);
+  });
+}
+
+start();
