@@ -1059,16 +1059,12 @@ function executeJoystickAction(action) {
 
     /* ================= GAIN ================= */
     case "gain_inc": {
-      if (setGainIndex(joystickState.tuning.gainIndex + 1)) {
-        log(`Gain pilot: ${Math.round(currentGain() * 100)}%`, "ok");
-      }
+      sendCmd("gain_inc", true);
       return;
     }
 
     case "gain_dec": {
-      if (setGainIndex(joystickState.tuning.gainIndex - 1)) {
-        log(`Gain pilot: ${Math.round(currentGain() * 100)}%`, "ok");
-      }
+      sendCmd("gain", mode === "hold" ? { dir: "dec", hold: true } : "dec");
       return;
     }
   }

@@ -85,6 +85,9 @@ joystick = {
     "yaw": 0,
 }
 
+depth_target = 0.0
+DEPTH_STEP = 0.10
+
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
 # IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus), berhenti
 # memakai axis terakhir dan streaming NEUTRAL sebagai gantinya.
@@ -130,6 +133,7 @@ gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
 gripper_lock = threading.Lock()
 
 def send_telemetry():
+    state["depth_target"] = depth_target
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
     print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
@@ -159,7 +163,11 @@ def set_servo_pwm(channel, pwm):
 # Command handler dari laptop
 # =========================
 def command_listener():
-    global master, last_joystick_update, gripper_target
+    global master
+    global last_joystick_update
+    global gripper_target
+    global depth_target
+
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
         try:
@@ -249,6 +257,10 @@ def command_listener():
 
                 master.set_mode(mode_mapping[pixhawk_mode])
 
+                if mode in ("stabilize", "depth_hold"):
+                    depth_target = state["depth"]
+                    print(f"[DEPTH] Target initialized = {depth_target:.2f} m")
+
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 print("====================================")
@@ -263,6 +275,26 @@ def command_listener():
                 state["light"] = bool(value)
                 print(f"[LIGHT] set to {state['light']}")
 
+            elif name == "gain_inc":
+
+                if state["mode"] not in ("STABILIZE", "ALT_HOLD"):
+                    continue
+
+                depth_target += DEPTH_STEP
+                print(f"[DEPTH] Target = {depth_target:.2f} m")
+
+            elif name == "gain_dec":
+
+                if state["mode"] not in ("STABILIZE", "ALT_HOLD"):
+                    continue
+
+                depth_target -= DEPTH_STEP
+
+                if depth_target < 0:
+                    depth_target = 0.0
+
+                print(f"[DEPTH] Target = {depth_target:.2f} m")
+                
             elif name == "thruster_config":
 
                 motors = msg.get("motors", {})
@@ -285,8 +317,17 @@ def command_listener():
                     time.sleep(0.1)
                 print("[PARAM] Thruster configuration updated.")
 
-            elif name in ["surge", "sway", "yaw", "heave"]:
-                joystick[name] = int(value)
+            elif name == "gripper":
+                # "open"/"close" dari tombol & keyboard H/G, atau angka
+                # -1000..1000 dari axis analog gamepad. Yang disimpan hanya
+                # TARGET; gripper_sender() yang menggerakkannya perlahan.
+                with gripper_lock:
+                    gripper_target = gripper_value_to_pwm(value)
+
+            elif name in AXIS_RANGE:
+                with joystick_lock:
+                    joystick[name] = clamp_axis(name, value)
+                    last_joystick_update = time.time()
 
             else:
                 print(f"[CMD] unknown command: {name} = {value}")
