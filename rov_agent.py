@@ -68,6 +68,11 @@ state = {
     "armed": False,
     "light": False,
     "mode": "unknown",
+    # "ok" selama axis dari GUI masih mengalir, "stale" saat fail-safe idle
+    # aktif dan Pi mengirim netral sendiri. Sengaja BUKAN "link": sisi browser
+    # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
+    # ke GUI); yang ini menandai perintah tidak sampai ke Pi.
+    "cmd_link": "ok",
 }
 
 master = None
@@ -128,11 +133,35 @@ def apply_depth_hold_bias(mc, axes):
     return out
 
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
-# JOYSTICK_IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus),
-# kirim SATU perintah netral lalu berhenti sampai ada perintah manual lagi.
-JOYSTICK_IDLE_TIMEOUT = 0.5
+# IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus), berhenti
+# memakai axis terakhir dan streaming NEUTRAL sebagai gantinya.
+#
+# Kenapa TETAP streaming (bukan berhenti mengirim)? ArduSub mengharapkan aliran
+# MANUAL_CONTROL yang kontinu; kalau kita diam, failsafe pilot-input Pixhawk
+# yang jalan dan perilakunya tergantung parameter. Mengirim netral terus jauh
+# lebih bisa diprediksi: diam di tempat, dan di ALT_HOLD berarti tahan
+# kedalaman.
+JOYSTICK_SEND_INTERVAL = 0.05   # 20 Hz
 last_joystick_update = 0.0
 joystick_lock = threading.Lock()
+
+# Log axis per-iterasi membanjiri console Pi (20 baris/detik) dan memakan CPU
+# yang dibutuhkan link serial. Nyalakan hanya saat debugging.
+VERBOSE_JOYSTICK = False
+JOYSTICK_LOG_INTERVAL = 1.0
+
+# Telemetry keluar 10 Hz; mencetaknya juga hanya menutupi log yang penting.
+VERBOSE_TELEMETRY = False
+
+# Perintah yang memang hanya mengubah tampilan/state di dashboard dan tidak
+# punya padanan di wahana. Didaftarkan eksplisit supaya log "unknown command"
+# benar-benar hanya berisi hal yang perlu diperiksa.
+GUI_ONLY_COMMANDS = frozenset({
+    "controller",     # tab Keyboard/Gamepad di dashboard
+    "set_surface",    # reset acuan permukaan (dihitung sisi GUI)
+    "snapshot",       # tangkapan frame di browser
+    "record",         # perekaman di browser
+})
 
 # =========================
 # Gripper
@@ -240,7 +269,6 @@ def command_listener():
 
         try:
             msg = json.loads(data.decode("utf-8"))
-            print("RAW UDP:", msg)
         except Exception:
             print("[UDP] invalid JSON command")
             continue
@@ -367,7 +395,7 @@ def command_listener():
                     last_joystick_update = time.time()
 
             else:
-                print(f"[CMD] unknown command: {name}")
+                print(f"[CMD] unknown command: {name} = {value}")
 
         except Exception as e:
             print("[CMD] error executing command:", e)
@@ -444,6 +472,7 @@ def joystick_sender():
 
             mc = apply_depth_hold_bias(mc, axes)
 
+        try:
             master.mav.manual_control_send(
                 master.target_system,
                 mc["x"], mc["y"], mc["z"], mc["r"], mc["buttons"],
