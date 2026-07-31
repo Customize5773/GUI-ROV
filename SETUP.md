@@ -83,6 +83,8 @@ journalctl -u rov-agent -f
 
 ---
 
+---
+
 ## 5. Checklist Trial Gamepad F310
 
 Kerjakan berurutan. **Jangan lanjut ke tahap berikutnya sebelum tahap sebelumnya
@@ -124,7 +126,7 @@ Colok F310, **pastikan switch belakang di posisi `X`**, lalu di `http://localhos
       bila ada yang terbalik.
 - [ ] **Tutup tab browser saat ter-ARM** → dalam ≤0,5 detik log Pi menampilkan
       `[FAILSAFE] ... kirim NEUTRAL` dan thruster netral. Buka lagi → `kontrol manual pulih`.
-- [ ] **Cabut USB F310** saat stik terdefleksi → axis langsung dinetralkan.
+- [ ] **Cabut USB F310 saat stik terdefleksi** → axis langsung dinetralkan.
 - [ ] Gripper: A menutup, B membuka, X netral, RT/LT proporsional — gerakannya
       halus (bukan menyentak).
 - [ ] Pindah MANUAL → STABILIZE → DEPTH HOLD dari D-Pad **dan** dari tab GUI;

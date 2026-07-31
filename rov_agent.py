@@ -5,7 +5,7 @@ import threading
 import math
 from pymavlink import mavutil
 
-from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, to_mavlink_z
+from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, NEUTRAL, axes_to_manual_control, clamp_axis
 from attitude_filter import AttitudeFilter
 from rov_gripper import (
     GRIPPER_PWM_NEUTRAL,
@@ -450,29 +450,33 @@ def handle_manipulator(device, action, direction):
             set_servo_pwm(ROTATE_CHANNEL, SERVO_NEUTRAL)
 
 def joystick_sender():
+    """Kirim MANUAL_CONTROL 20 Hz.
+
+    PENTING: konversi axis -> field MAVLink WAJIB lewat axes_to_manual_control()
+    (rov_axes.py). Konvensi GUI adalah -1000..1000 dengan 0 = diam untuk KEEMPAT
+    axis, sedangkan ArduSub mengharapkan z pada 0..1000 dengan 500 = netral.
+    Mengirim heave mentah sebagai z membuat "diam" berarti MENYELAM PENUH —
+    termasuk saat E-Stop dan saat link GUI putus.
+    """
     global master
+
     while True:
         if master is not None:
-            print(
-                f"[MANUAL] "
-                f"X={joystick['surge']} "
-                f"Y={joystick['sway']} "
-                f"Z={joystick['heave']} "
-                f"R={joystick['yaw']}"
-            )   
-            print("RAW =", joystick)
+            with joystick_lock:
+                axes = dict(joystick)
+                idle = (time.time() - last_joystick_update) > JOYSTICK_IDLE_TIMEOUT
+
+            # Fail-safe: GUI diam terlalu lama (crash / joystick dicabut / link
+            # putus) -> tahan posisi netral, jangan ulangi input terakhir.
+            mc = NEUTRAL if idle else axes_to_manual_control(**axes)
+
+            mc = apply_depth_hold_bias(mc, axes)
 
         try:
             master.mav.manual_control_send(
                 master.target_system,
-                joystick["surge"],
-                joystick["sway"],
-                joystick["heave"],
-                joystick["yaw"],
-                0
+                mc["x"], mc["y"], mc["z"], mc["r"], mc["buttons"],
             )
-            
-            print("[MANUAL] sent")
 
         time.sleep(0.05)
 
@@ -697,7 +701,6 @@ def main():
             # altitude bernilai negatif saat ROV berada di bawah permukaan
             if hasattr(msg, "altitude"):
                 state["depth"] = max(0.0, -float(msg.altitude))
-                print(f"[DEPTH] {state['depth']:.2f} m")
         # --------------------------------
         # HEARTBEAT: mode dan armed
         # --------------------------------
