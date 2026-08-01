@@ -10,6 +10,36 @@
 - Python 3 (rov_agent.py di RPI)
 - Ethernet laptop ↔ RPI dalam satu subnet (contoh: laptop `192.168.2.1`, RPI `192.168.2.2`)
 
+### Dependency Python
+
+```bash
+pip install -r requirements.txt          # rov_agent.py + unit test di root
+pip install -r autonomy/requirements.txt # opsional: stack autonomy/visi
+```
+
+### Konfigurasi environment
+
+Semua port, alamat, dan port serial punya default yang sudah benar untuk
+topologi tether standar. Kalau perlu mengubahnya, salin contohnya:
+
+```bash
+cp .env.example .env
+```
+
+`.env` tidak di-commit. Cara memuatnya:
+
+```bash
+# Laptop — start-gui.sh memuatnya otomatis kalau ada.
+./start-gui.sh sim
+
+# Manual, shell POSIX:
+set -a; . ./.env; set +a
+
+# RPI — lewat systemd:
+#   [Service]
+#   EnvironmentFile=/home/hydroships/GUI-ROV/.env
+```
+
 ---
 
 ## 1. Sisi RPI (ROV)
@@ -91,6 +121,28 @@ cd /home/rasya/GUI-ROV
 ```
 
 Buka `http://localhost:8080` — ROV 3D bergerak mengikuti telemetri palsu. Tidak ada UDP nyata ke RPI.
+
+**Pakai mode ini untuk semua sesi coding.** Kalau laptop Anda tidak sesubnet
+dengan RPI (mis. laptop di `192.168.67.x` sedangkan RPI di `192.168.2.2`), mode
+LIVE hanya akan menghasilkan log "gagal kirim command" — bukan bug.
+
+Yang bisa diuji di mode sim tanpa hardware sama sekali:
+
+- Tab **Manual / Stabilize / Depth Hold / Acro** — server SIM sekarang menerima
+  `pilot_mode` dan memantulkannya sebagai field `mode` pada telemetri, persis
+  seperti HEARTBEAT dari Pixhawk. Jadi sorotan tab, badge mode aktual, dialog
+  konfirmasi ACRO, dan badge peringatan ACRO semuanya berperilaku nyata.
+- Arm/disarm, lampu, E-Stop, rekaman, halaman replay.
+
+Yang **tidak** bisa diuji di sini: apa pun yang butuh MAVLink sungguhan (mode
+ditolak firmware, respons thruster). Untuk itu pakai mock MAVLink:
+
+```bash
+python autonomy/sitl_mock.py --mavlink udpout:127.0.0.1:14555
+python autonomy/rov_link.py --server 127.0.0.1 --mavlink udpin:0.0.0.0:14555
+```
+
+Detailnya di [`autonomy/SITL_SETUP.md`](autonomy/SITL_SETUP.md).
 
 ---
 

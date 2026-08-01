@@ -1,0 +1,11 @@
+# Dependency Python untuk agent sisi ROV (rov_agent.py) dan unit test di root.
+#
+#   pip install -r requirements.txt
+#
+# Sengaja MINIMAL: rov_agent.py hanya butuh pymavlink; modul murni
+# (rov_axes.py, rov_gripper.py, rov_modes.py, attitude_filter.py) dan
+# test unittest-nya tidak butuh dependency sama sekali.
+#
+# Untuk stack autonomy (visi, ArUco/QR, CNN, pytest) pakai file terpisah:
+#   pip install -r autonomy/requirements.txt
+pymavlink>=2.4.0

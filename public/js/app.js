@@ -40,6 +40,7 @@ const els = {
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   depthTarget: $("vDepthTarget"),
+  modeActual: $("modeActual"), modeWarn: $("modeWarn"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -260,6 +261,16 @@ function applyTelemetry(d) {
 
   if (typeof d.armed === "boolean") confirmArm(d.armed);
   if (typeof d.light === "boolean") confirmLight(d.light);
+
+  // Mode pilot: satu-satunya penggerak sorotan tab adalah mode yang dilaporkan
+  // Pixhawk lewat HEARTBEAT, bukan klik operator.
+  if (typeof d.mode === "string") {
+    if (d.mode !== lastPilotMode) {
+      lastPilotMode = d.mode;
+      log(`Mode pilot aktif: ${d.mode}`, RISKY_ARDUSUB_MODES.has(d.mode) ? "warn" : "ok");
+    }
+    syncModeTabs(d.mode);
+  }
 
   applyMission5(d.mission5);
 
@@ -686,20 +697,98 @@ const camFs = makeFullscreen(els.camStage, {
 });
 els.btnCamFull.onclick = () => camFs.toggle();
 
-/* pilot mode tabs: Standby | Dry Cal | Manual | Hold */
-let pilotMode = "manual";
+/* pilot mode tabs: Manual | Stabilize | Depth Hold | Acro
+ *
+ * Sorotan tab TIDAK diset saat diklik. Klik hanya MEMINTA mode; yang menyorot
+ * adalah syncModeTabs() dari HEARTBEAT Pixhawk (lihat applyTelemetry). Dengan
+ * begitu tab GUI dan tombol gamepad selalu menunjukkan mode yang sama dengan
+ * yang benar-benar dijalankan wahana — kalau Pixhawk menolak, tab tidak
+ * berbohong. Selama menunggu konfirmasi, tab yang diminta ditandai "pending".
+ */
+requestPilotMode.pending = null;
+requestPilotMode.pendingSince = 0;
+
+function requestPilotMode(mode, label) {
+  // ACRO: tanpa stabilisasi attitude dan throttle netral TIDAK menahan
+  // kedalaman — di kolam dangkal ini paling mudah membuat ROV terguling.
+  if (mode === "acro" && !confirm(ACRO_CONFIRM)) {
+    log("Mode ACRO dibatalkan", "warn");
+    return;
+  }
+  requestPilotMode.pending = mode;
+  requestPilotMode.pendingSince = performance.now();
+  sendCmd("pilot_mode", mode);
+  log(`Minta mode pilot: ${label}`, "ok");
+  syncModeTabs(lastPilotMode);
+}
+
+const ACRO_CONFIRM =
+  "Masuk mode ACRO?\n\n" +
+  "• Tidak ada stabilisasi attitude — stik memerintahkan RATE, bukan sudut.\n" +
+  "• Throttle netral TIDAK menahan kedalaman.\n" +
+  "• Depth hold (gain +/-) dinonaktifkan selama ACRO.";
+
+// Nama mode ArduSub (dari HEARTBEAT) -> data-mode tab GUI. Padanan
+// rov_modes.PILOT_MODE_MAP di sisi Python; jaga keduanya tetap sinkron.
+const ARDUSUB_MODE_TO_TAB = {
+  MANUAL: "manual",
+  STABILIZE: "stabilize",
+  ALT_HOLD: "depth_hold",
+  ACRO: "acro",
+};
+
+// Mode yang perlu peringatan menonjol (padanan rov_modes.RISKY_MODES).
+const RISKY_ARDUSUB_MODES = new Set(["ACRO"]);
+
+// Pixhawk tidak menerima mode yang diminta dalam waktu ini -> beri peringatan.
+const MODE_CONFIRM_TIMEOUT_MS = 2000;
+
+let lastPilotMode = null;
+let modeTimeoutWarned = false;
+
+function syncModeTabs(actualMode) {
+  const actual = typeof actualMode === "string" ? actualMode : null;
+  const activeTab = actual ? ARDUSUB_MODE_TO_TAB[actual] : null;
+
+  // Permintaan sudah terkonfirmasi Pixhawk -> tidak ada yang pending lagi.
+  if (requestPilotMode.pending && requestPilotMode.pending === activeTab) {
+    requestPilotMode.pending = null;
+    modeTimeoutWarned = false;
+  }
+
+  document.querySelectorAll("#modeBar .mode").forEach((b) => {
+    const isActive = b.dataset.mode === activeTab;
+    const isPending = b.dataset.mode === requestPilotMode.pending;
+    b.classList.toggle("mode--active", isActive);
+    b.classList.toggle("mode--pending", isPending && !isActive);
+    if (isActive) b.setAttribute("aria-selected", "true");
+    else b.removeAttribute("aria-selected");
+  });
+
+  // Mode aktual apa adanya — termasuk mode di luar keempat tab (SURFACE,
+  // POSHOLD, ...) yang memang tidak punya tab sendiri.
+  if (els.modeActual) els.modeActual.textContent = actual || "—";
+
+  if (els.modeWarn) {
+    const risky = actual && RISKY_ARDUSUB_MODES.has(actual);
+    els.modeWarn.hidden = !risky;
+    if (risky) els.modeWarn.textContent = `⚠ ${actual} — TANPA STABILISASI`;
+  }
+
+  // Diminta tapi tak kunjung dikonfirmasi: kemungkinan firmware menolak
+  // (mis. ACRO tidak tersedia di build ini) atau link command putus.
+  if (
+    requestPilotMode.pending &&
+    !modeTimeoutWarned &&
+    performance.now() - requestPilotMode.pendingSince > MODE_CONFIRM_TIMEOUT_MS
+  ) {
+    modeTimeoutWarned = true;
+    log(`Pixhawk belum mengonfirmasi mode ${requestPilotMode.pending.toUpperCase()}`, "warn");
+  }
+}
+
 document.querySelectorAll("#modeBar .mode").forEach((btn) => {
-  btn.onclick = () => {
-    document.querySelectorAll("#modeBar .mode").forEach((b) => {
-      b.classList.remove("mode--active");
-      b.removeAttribute("aria-selected");
-    });
-    btn.classList.add("mode--active");
-    btn.setAttribute("aria-selected", "true");
-    pilotMode = btn.dataset.mode;
-    sendCmd("mode", pilotMode);
-    log(`Mode pilot: ${btn.textContent}`, "ok");
-  };
+  btn.onclick = () => requestPilotMode(btn.dataset.mode, btn.textContent.trim());
 });
 
 /* controller tabs: Keyboard | Gamepad */
@@ -908,20 +997,30 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= CONTROL MODE ================= */
     case "mode_manual": {
-      sendCmd("pilot_mode", "manual");
-      log("Pilot mode: MANUAL", "ok");
+      requestPilotMode("manual", "MANUAL");
       return;
     }
 
     case "mode_stabilize": {
-      sendCmd("pilot_mode", "stabilize");
-      log("Pilot mode: STABILIZE", "ok");
+      requestPilotMode("stabilize", "STABILIZE");
       return;
     }
 
     case "mode_depth_hold": {
-      sendCmd("pilot_mode", "depth_hold");
-      log("Pilot mode: DEPTH HOLD", "ok");
+      requestPilotMode("depth_hold", "DEPTH HOLD");
+      return;
+    }
+
+    case "mode_acro": {
+      // Sengaja MELEWATI dialog konfirmasi: tombol fisik hanya bisa ditekan
+      // operator yang memang sedang memegang gamepad, dan sebuah dialog modal
+      // di tengah manuver justru berbahaya. Peringatan tetap muncul di log +
+      // badge #modeWarn begitu Pixhawk mengonfirmasi ACRO.
+      requestPilotMode.pending = "acro";
+      requestPilotMode.pendingSince = performance.now();
+      sendCmd("pilot_mode", "acro");
+      log("Minta mode pilot: ACRO — tanpa stabilisasi, depth hold nonaktif", "warn");
+      syncModeTabs(lastPilotMode);
       return;
     }
 

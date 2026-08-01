@@ -30,6 +30,10 @@ export const BUTTON_ACTIONS = [
   "mode_manual",
   "mode_stabilize",
   "mode_depth_hold",
+  // ACRO tidak ter-bind di defaultButtonLayer(): ke-16 tombol pad sudah
+  // terpakai, dan mode ini terlalu berisiko untuk menggeser binding yang sudah
+  // dihafal operator. Bind manual lewat halaman Setup > Joystick.
+  "mode_acro",
   "input_hold_set",
   "mount_tilt_up",
   "mount_tilt_down",

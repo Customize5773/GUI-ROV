@@ -1,3 +1,6 @@
+# Konfigurasi environment lokal — salin dari .env.example, jangan commit.
+.env
+
 # Python
 **/__pycache__/
 *.pyc

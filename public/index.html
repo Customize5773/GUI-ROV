@@ -137,7 +137,13 @@
                 <button class="mode" data-mode="manual" role="tab">Manual</button>
                 <button class="mode" data-mode="stabilize" role="tab">Stabilize</button>
                 <button class="mode" data-mode="depth_hold" role="tab">Depth Hold</button>
+                <!-- ACRO: tanpa stabilisasi attitude, dan throttle netral TIDAK
+                     menahan kedalaman. Diberi kelas mode--risky supaya jelas
+                     berbeda, dan klik-nya meminta konfirmasi di app.js. -->
+                <button class="mode mode--risky" data-mode="acro" role="tab"
+                        title="Tanpa stabilisasi attitude — stik = rate, depth hold nonaktif">Acro</button>
                 <span class="modebar__actual" id="modeActual" title="Mode aktif menurut Pixhawk">—</span>
+                <span class="modebar__warn" id="modeWarn" role="status" hidden></span>
               </div>
 
               <div class="stage" id="stage">
