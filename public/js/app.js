@@ -10,6 +10,7 @@ import { setupPage, loadSetup } from "./pages/setup.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
+import { ACRO_CONFIRM, ARDUSUB_MODE_TO_TAB, RISKY_ARDUSUB_MODES } from "/shared/rov-modes.js";
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -710,6 +711,9 @@ requestPilotMode.pendingSince = 0;
 function requestPilotMode(mode, label) {
   // ACRO: tanpa stabilisasi attitude dan throttle netral TIDAK menahan
   // kedalaman — di kolam dangkal ini paling mudah membuat ROV terguling.
+  // Berlaku untuk SEMUA jalur input (tab GUI maupun tombol gamepad) — lihat
+  // case "mode_acro" di executeJoystickAction, yang memanggil fungsi ini
+  // juga supaya gerbang konfirmasi konsisten di kedua sisi.
   if (mode === "acro" && !confirm(ACRO_CONFIRM)) {
     log("Mode ACRO dibatalkan", "warn");
     return;
@@ -721,23 +725,8 @@ function requestPilotMode(mode, label) {
   syncModeTabs(lastPilotMode);
 }
 
-const ACRO_CONFIRM =
-  "Masuk mode ACRO?\n\n" +
-  "• Tidak ada stabilisasi attitude — stik memerintahkan RATE, bukan sudut.\n" +
-  "• Throttle netral TIDAK menahan kedalaman.\n" +
-  "• Depth hold (gain +/-) dinonaktifkan selama ACRO.";
-
-// Nama mode ArduSub (dari HEARTBEAT) -> data-mode tab GUI. Padanan
-// rov_modes.PILOT_MODE_MAP di sisi Python; jaga keduanya tetap sinkron.
-const ARDUSUB_MODE_TO_TAB = {
-  MANUAL: "manual",
-  STABILIZE: "stabilize",
-  ALT_HOLD: "depth_hold",
-  ACRO: "acro",
-};
-
-// Mode yang perlu peringatan menonjol (padanan rov_modes.RISKY_MODES).
-const RISKY_ARDUSUB_MODES = new Set(["ACRO"]);
+// ARDUSUB_MODE_TO_TAB / RISKY_ARDUSUB_MODES / ACRO_CONFIRM sekarang di
+// shared/rov-modes.js (padanan rov_modes.py sisi Python), diimpor di atas.
 
 // Pixhawk tidak menerima mode yang diminta dalam waktu ini -> beri peringatan.
 const MODE_CONFIRM_TIMEOUT_MS = 2000;
@@ -1017,15 +1006,9 @@ function executeJoystickAction(action, mode = "toggle") {
     }
 
     case "mode_acro": {
-      // Sengaja MELEWATI dialog konfirmasi: tombol fisik hanya bisa ditekan
-      // operator yang memang sedang memegang gamepad, dan sebuah dialog modal
-      // di tengah manuver justru berbahaya. Peringatan tetap muncul di log +
-      // badge #modeWarn begitu Pixhawk mengonfirmasi ACRO.
-      requestPilotMode.pending = "acro";
-      requestPilotMode.pendingSince = performance.now();
-      sendCmd("pilot_mode", "acro");
-      log("Minta mode pilot: ACRO — tanpa stabilisasi, depth hold nonaktif", "warn");
-      syncModeTabs(lastPilotMode);
+      // Sama seperti tab GUI: lewat requestPilotMode() supaya dialog
+      // konfirmasi ACRO konsisten di semua jalur input, bukan hanya tab.
+      requestPilotMode("acro", "ACRO");
       return;
     }
 
