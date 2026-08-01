@@ -18,18 +18,48 @@ export class ManipulatorProtocol {
      */
     static create(device, action, direction = null, data = {}) {
 
+        let name = "";
+
+        let value = "";
+
+        if (device === "grip") {
+
+            name = "gripper";
+
+            if (action === "start")
+                value = direction;
+
+            else
+                value = "stop";
+
+        }
+
+        else if (device === "rotate") {
+
+            name = "gripper_rotate";
+
+            if (action === "start")
+                value = direction;
+
+            else
+                value = "stop";
+
+        }
+
         return {
+
             version: ProtocolVersion,
+
             timestamp: Date.now(),
 
             type: "cmd",
-            name: "manipulator",
 
-            device,
-            action,
-            direction,
+            name,
+
+            value,
 
             data
+
         };
 
     }

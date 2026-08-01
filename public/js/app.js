@@ -54,7 +54,6 @@ const pages = {
 };
 
 const navLinks = document.querySelectorAll(".sidebar__link");
-const manipulator = new Manipulator();
 
 // modul per-halaman (Control tidak punya modul; logikanya inline di app.js)
 const pageModules = {
@@ -428,7 +427,7 @@ function sendPacket(packet, quiet = false) {
 
   if (!quiet) {
     console.log("[MANIPULATOR]", packet);
-    log(`CMD ${packet.name} → ${packet.device}`);
+    log(`CMD ${packet.name} = ${packet.value}`);
   }
 }
 
@@ -818,13 +817,11 @@ function logGamepadStatus() {
   }
 }
 
-const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0, grip: 0 };
+const gpLast = { surge: 0, sway: 0, yaw: 0, heave: 0};
 
 /* Perintah gripper terakhir yang dikirim ("open" | "close" | null).
    Dipakai untuk dedupe: tombol mode "hold" dan keyboard bisa memanggil aksi
    gripper berulang, sedangkan yang dibutuhkan hanya satu perintah posisi. */
-let lastGripCmd = null;
-
 /* E-Stop mengunci joystick sampai operator arm ulang (lihat btnStop/btnArm). */
 let estopLatched = false;
 
@@ -860,25 +857,32 @@ function gpPressed(pad, idx) {
    force: true untuk klik tombol GUI eksplisit — selalu kirim + beri log,
           walau posisinya sama, agar operator dapat umpan balik.
    Return true bila perintah benar-benar dikirim. */
-function sendGripper(cmd, force = false) {
-  // Gripper adalah aktuator payload: sama seperti thruster, ia tidak boleh
-  // digerakkan GUI saat FSM autonomous memegang kendali atau E-Stop aktif.
-  if (controlMode !== "manual" || estopLatched) return false;
 
-  if (typeof cmd === "number") {
-    if (cmd === gpLast.grip) return false;
-    gpLast.grip = cmd;
-    lastGripCmd = null;   // posisi diubah analog — open/close berikutnya sah
-    sendCmd("gripper", cmd, true);
+function sendRotate(cmd) {
+
+    if (controlMode !== "manual" || estopLatched)
+        return false;
+
+    switch (cmd) {
+
+        case "left":
+            sendPacket(Manipulator.rotateLeft(), true);
+            break;
+
+        case "right":
+            sendPacket(Manipulator.rotateRight(), true);
+            break;
+
+        case "stop":
+            sendPacket(Manipulator.stopRotate(), true);
+            break;
+
+        default:
+            return false;
+    }
+
     return true;
-  }
 
-  if (!force && lastGripCmd === cmd) return false;
-  lastGripCmd = cmd;
-  gpLast.grip = 0;
-  sendCmd("gripper", cmd);
-  log(`Gripper: ${cmd === "close" ? "CLOSE" : "OPEN"}`, "ok");
-  return true;
 }
 
 function neutralizeGamepadAxes() {
@@ -892,6 +896,7 @@ function neutralizeGamepadAxes() {
 }
 
 function executeJoystickAction(action, mode = "toggle") {
+  console.log("[ACTION]", action, mode);
   if (!action || action === "no_function") return;
 
   switch (action) {
@@ -933,12 +938,12 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= CAMERA / MOUNT ================= */
     case "mount_tilt_up": {
-      sendPacket(manipulator.rotateLeft(), true);
+      sendRotate("left");
       return;
     }
 
     case "mount_tilt_down": {
-      sendPacket(manipulator.rotateRight(), true);
+      sendRotate("right");
       return;
     }
 
@@ -950,24 +955,28 @@ function executeJoystickAction(action, mode = "toggle") {
 
     /* ================= ACTUATOR ================= */
     case "actuator1_inc": {
-      sendPacket(manipulator.openGrip(), true);
+      sendPacket(Manipulator.openGrip(), true);
       return;
     }
 
     case "actuator1_dec": {
-      sendPacket(manipulator.closeGrip(), true);
+      sendPacket(Manipulator.closeGrip(), true);
       return;
     }
 
     /* ================= GRIPPER ================= */
     case "grip_open": {
-      sendGripper("open");
-      return;
+        const pkt = Manipulator.openGrip();
+        console.log("OPEN =", pkt);
+        sendPacket(pkt);
+        return;
     }
 
     case "grip_close": {
-      sendGripper("close");
-      return;
+        const pkt = Manipulator.closeGrip();
+        console.log("CLOSE =", pkt);
+        sendPacket(pkt);
+        return;
     }
 
     /* ================= LIGHT ================= */
@@ -1001,7 +1010,7 @@ function executeJoystickRelease(action) {
 
         case "mount_tilt_up":
         case "mount_tilt_down":
-            sendPacket(manipulator.stopRotate(), true);
+            sendPacket(Manipulator.stopRotate(), true);
             return;
 
         /* grip_open/grip_close adalah nama HASIL migrasi dari actuator1_*.
@@ -1012,7 +1021,7 @@ function executeJoystickRelease(action) {
         case "grip_close":
         case "actuator1_inc":
         case "actuator1_dec":
-            sendPacket(manipulator.stopGrip(), true);
+            sendPacket(Manipulator.stopGrip(), true);
             return;
     }
 }
@@ -1076,18 +1085,6 @@ function commitButtonCache() {
   });
 }
 
-/* Axis analog gripper (opsional — hanya aktif kalau operator meng-assign
-   sebuah axis ke "Grip" di halaman Joystick). Deadzone menahan jitter stick;
-   di dalam deadzone tidak ada perintah dikirim sama sekali, jadi posisi
-   gripper dari tombol/keyboard tidak ikut tergeser saat stick diam. */
-const GRIP_AXIS_DEADZONE = 150;
-
-function processAnalogGrip() {
-  const raw = Number(joystickState.mapped.grip) || 0;
-  if (Math.abs(raw) < GRIP_AXIS_DEADZONE) return;
-  sendGripper(Math.round(raw));
-}
-
 /* Peringatan mode non-standard: sekali per sambungan, jangan tiap frame. */
 let warnedNonStandard = false;
 
@@ -1134,7 +1131,6 @@ function pollGamepad() {
      lihat handler keyboard H/G). Otoritas manual/E-Stop tetap ditegakkan di
      dalam sendGripper(). */
   processMappedGamepadButtons(isGripAction);
-  processAnalogGrip();
 
   // thruster control hanya aktif kalau dashboard controller = Gamepad
   if (activeController !== "Gamepad") {
@@ -1217,30 +1213,30 @@ $("btnSetSurface").onclick = () => {
 
 /* ---------- Grip Open ---------- */
 els.btnGripOpen.addEventListener("pointerdown", () => {
-    sendPacket(manipulator.openGrip());
+    sendPacket(Manipulator.openGrip());
     log("Grip OPEN", "ok");
 });
 
 els.btnGripOpen.addEventListener("pointerup", () => {
-    sendPacket(manipulator.stopGrip(), true);
+    sendPacket(Manipulator.stopGrip(), true);
 });
 
 els.btnGripOpen.addEventListener("pointerleave", () => {
-    sendPacket(manipulator.stopGrip(), true);
+    sendPacket(Manipulator.stopGrip(), true);
 });
 
 /* ---------- Grip Close ---------- */
 els.btnGripClose.addEventListener("pointerdown", () => {
-    sendPacket(manipulator.closeGrip());
+    sendPacket(Manipulator.closeGrip());
     log("Grip CLOSE", "ok");
 });
 
 els.btnGripClose.addEventListener("pointerup", () => {
-    sendPacket(manipulator.stopGrip(), true);
+    sendPacket(Manipulator.stopGrip(), true);
 });
 
 els.btnGripClose.addEventListener("pointerleave", () => {
-    sendPacket(manipulator.stopGrip(), true);
+    sendPacket(Manipulator.stopGrip(), true);
 });
 
 window.addEventListener("keydown", (e) => {

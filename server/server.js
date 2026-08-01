@@ -240,11 +240,21 @@ wss.on("connection", (ws, req) => {
   ws.send(JSON.stringify({ type: "record_status", data: recording.status() }));
 
   ws.on("message", (raw) => {
+
+
+    console.log("WS RAW =", raw.toString());
+
+
     let msg;
     try {
-      msg = JSON.parse(raw);
-    } catch {
-      return;
+        msg = JSON.parse(raw);
+
+        console.log("TYPE =", msg.type);
+        console.log("NAME =", msg.name);
+
+    } catch (e) {
+        console.error("JSON ERROR:", e);
+        return;
     }
 
     // ================= PING =================
@@ -333,6 +343,7 @@ wss.on("connection", (ws, req) => {
     }
 
     // ================= COMMAND KE ROV =================
+    console.log("MASUK IF CMD");
     if (msg.type === "cmd") {
       /* ================= MANIPULATOR ================= */
 
@@ -341,7 +352,8 @@ wss.on("connection", (ws, req) => {
           const packet = Buffer.from(JSON.stringify(msg));
 
           console.log("[MANIPULATOR]", msg);
-
+          console.log("KIRIM UDP =", msg);
+          
           udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
               if (e) console.warn("[UDP] gagal kirim manipulator:", e.message);
           });
