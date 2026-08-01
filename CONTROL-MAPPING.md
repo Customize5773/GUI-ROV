@@ -1,225 +1,252 @@
 # CONTROL-MAPPING.md
 
 GUI-ROV HYDROSHIP — Input Mapping Reference
-Version: 1.0 | Last Updated: 2026-07-30
+Version: 2.0 | Last Updated: 2026-07-30 | Wahana: **BlueROV1 frame, 6 thruster 6-DoF** (`FRAME_CONFIG = 0`)
+
+> Sumber kebenaran mapping default: [`public/js/joystick-defaults.json`](public/js/joystick-defaults.json).
+> File itu dibaca oleh server (`require`) **dan** browser (`fetch`), jadi tidak ada
+> lagi tabel default yang disalin ganda. Profil aktif operator tersimpan di
+> [`server/config/joystick-profile.json`](server/config/joystick-profile.json)
+> dan menang atas default. Dokumen ini menjelaskan isi keduanya — kalau berbeda,
+> **file JSON yang benar**.
 
 ---
 
-## 1. Keyboard Controls
+## 1. Logitech Gamepad F310 — WAJIB mode X-Input
 
-### 1.1 Movement (Thrust)
+Geser switch di belakang controller ke posisi **`X`**. Browser lalu melaporkannya
+sebagai *standard mapping* Xbox-style.
 
-| Key | Axis | Value | Direction |
-|-----|------|-------|-----------|
-| `W` | `surge` | +50 | Maju (forward) |
-| `S` | `surge` | −50 | Mundur (backward) |
-| `D` | `sway` | +50 | Kanan (right) |
-| `A` | `sway` | −50 | Kiri (left) |
-| `E` | `yaw` | +50 | Rotasi searah jarum jam |
-| `Q` | `yaw` | −50 | Rotasi berlawanan jarum jam |
-| `R` | `heave` | +50 | Naik (ascend) |
-| `F` | `heave` | −50 | Turun (descend) |
+### 1.1 Fakta penting standard mapping
 
-- Tahan key untuk gerakan terus-menerus (±50).
-- Lepas key → axis dinetralkan ke `0`.
-- Hanya aktif saat tab controller = **Keyboard**.
+| | |
+|---|---|
+| Jumlah axis | **4 saja** — `0`=Left X, `1`=Left Y, `2`=Right X, `3`=Right Y |
+| Trigger LT/RT | **BUKAN axis.** Keduanya adalah *button analog* nomor **6** dan **7** |
+| Jumlah button | **17** (0–16), termasuk D-Pad di **12–15** dan Guide di **16** |
 
-### 1.2 Gripper / Manipulator
+Inilah sebabnya grip analog memakai sumber virtual bernama **`triggers`**
+(nilai = `RT − LT`) dan bukan "axis 4" — axis 4 tidak pernah ada di F310 X-Input.
 
-| Key | Action | Command |
-|-----|--------|---------|
-| `H` | Gripper OPEN | `gripper="open"` |
-| `G` | Gripper CLOSE | `gripper="close"` |
+### 1.2 Axis (gerak wahana)
 
-### 1.3 System Toggles
+| Input | Assigned | Stik fisik | Arah |
+|---|---|---|---|
+| `axis 0` | `Axis R` → **yaw** | Kiri ↔ | Kanan = putar CW |
+| `axis 1` | `Axis Z` → **heave** | Kiri ↕ | Dorong ke atas = naik |
+| `axis 2` | `Axis Y` → **sway** | Kanan ↔ | Kanan = geser kanan |
+| `axis 3` | `Axis X` → **surge** | Kanan ↕ | Dorong ke atas = maju |
+| `triggers` | `Grip` | LT / RT | RT = menutup, LT = membuka (proporsional) |
 
-| Key | Action | Command |
-|-----|--------|---------|
-| `Space` | Emergency STOP (failsafe) | `stop=true` |
+Konvensi `min`/`max`: bila **min > max**, axis dibalik. Sumbu Y gamepad bernilai
+negatif saat didorong ke atas, jadi `heave` dan `surge` memang dibalik.
 
-- `Space` aktif **di semua mode** controller, tidak peduli apakah Keyboard atau Gamepad.
-- E-Stop mengunci joystick sampai operator ARM ulang.
+### 1.3 Button — layer Regular
 
----
+| Btn | F310 | Aksi |
+|---|---|---|
+| 0 | A | `grip_close` |
+| 1 | B | `grip_open` |
+| 2 | X | `grip_neutral` |
+| 3 | Y | — |
+| 4 | LB | `gain_dec` |
+| 5 | RB | `gain_inc` |
+| 6 | LT | *(grip analog)* |
+| 7 | RT | *(grip analog)* |
+| 8 | Back | **`e_stop`** |
+| 9 | Start | `arm` |
+| 10 | LS klik | **shift modifier** |
+| 11 | RS klik | — |
+| 12 | D-Pad ↑ | `mode_depth_hold` |
+| 13 | D-Pad ↓ | `mode_manual` |
+| 14 | D-Pad ← | `mode_stabilize` |
+| 15 | D-Pad → | `light_toggle` |
+| 16 | Guide | — |
 
-## 2. Logitech Gamepad F310 — X-Input Mode (Default)
+### 1.4 Button — layer Shift (tahan **LS klik**)
 
-F310 harus di-set ke mode **X-Input** (switch di belakang controller → posisi `X`).
-Dalam mode ini, controller terlihat seperti Xbox 360 controller oleh browser.
+| Btn | F310 | Aksi |
+|---|---|---|
+| 8 | Back | **`e_stop`** |
+| 9 | Start | `disarm` |
+| sisanya | | — |
 
-### 2.1 Axis Mapping (Movement)
+> **`e_stop` sengaja ada di KEDUA layer.** Penekanan shift yang tidak disengaja
+> tidak boleh pernah menghilangkan tombol darurat.
+>
+> Shift memakai LS klik (bukan tombol muka) supaya A/B/X/Y tetap bebas. Profil
+> lama memakai `shiftButton: 0` — tombol A — sehingga A praktis tidak bisa dipakai.
 
-| F310 Input | Assigned GUI Axis | GUI Nilai | Arah |
-|------------|-------------------|-----------|------|
-| Left Stick X (`axis 0`) | `surge` | −1000 ↔ +1000 | ↔ Maju/Mundur |
-| Left Stick Y (`axis 1`) | `heave` | +1000 ↔ −1000 | ↕ Naik/Turun |
-| Right Stick X (`axis 2`) | `yaw` | −1000 ↔ +1000 | ↔ Rotasi CW/CCW |
-| Right Stick Y (`axis 3`) | `sway` | +1000 ↔ −1000 | ↕ Kanan/Kiri |
-| LT/RT (`axis 4`) | `no_function` | −1 ↔ +1 | — |
+### 1.5 Daftar aksi yang sah
 
-- Deadzone: `GP_DEADZONE = 0.12` (12% stick offset diabaikan).
-- Nilai di-clamp ke −1000..1000 oleh server sebelum diteruskan ke UDP.
-- Saat gamepad disconnect, semua axis dinetralkan otomatis.
+`no_function`, `arm`, `disarm`, `e_stop`, `mode_manual`, `mode_stabilize`,
+`mode_depth_hold`, `grip_open`, `grip_close`, `grip_neutral`, `light_toggle`,
+`gain_inc`, `gain_dec`.
 
-### 2.2 Button Mapping — Regular Layer
-
-| F310 Button | Action | Mode | Perintah yang Dikirim |
-|-------------|--------|------|----------------------|
-| `A` (Btn 0) | `arm` | toggle | `arm=true/false` |
-| `B` (Btn 1) | `disarm` | toggle | `arm=false` |
-| `X` (Btn 2) | `mode_manual` | toggle | `pilot_mode="manual"` |
-| `Y` (Btn 3) | `mode_stabilize` | toggle | `pilot_mode="stabilize"` |
-| `LB` (Btn 4) | `mode_depth_hold` | toggle | `pilot_mode="depth_hold"` |
-| `LT` (Btn 5) | `mount_tilt_up` | hold | `mount_tilt={dir:"up",hold:true}` |
-| `RT` (Btn 6) | `mount_tilt_down` | hold | `mount_tilt={dir:"down",hold:true}` |
-| `Back` (Btn 7) | `mount_center` | toggle | `mount_center=true` |
-| `Start` (Btn 8) | `actuator1_inc` | hold | `actuator1={dir:"inc",hold:true}` |
-| `LS` (Btn 9) | `actuator1_dec` | hold | `actuator1={dir:"dec",hold:true}` |
-| `RS` (Btn 10) | `lights_brighter` | hold | `light_level={dir:"up",hold:true}` |
-| `RS` (Btn 11) | `lights_dimmer` | hold | `light_level={dir:"down",hold:true}` |
-
-### 2.3 Button Mapping — Shift Layer
-
-Shift layer pada F310 (tombol `Guide` / tombol tengah) saat ini **belum dimapping** — semua tombol di shift layer bernilai `no_function`. Shift layer dapat dikonfigurasi ulang di `server/config/joystick-profile.json`.
-
-### 2.4 D-Pad (Hat Switch)
-
-| Arah | Biasanya | Status |
-|------|----------|--------|
-| Up | — | Tidak terpakai (default `no_function`) |
-| Down | — | Tidak terpakai |
-| Left | — | Tidak terpakai |
-| Right | — | Tidak terpakai |
-
-D-Pad dapat dimapping dengan mengedit `joystick-profile.json`.
+Aksi lama (`mount_tilt_*`, `mount_center`, `actuator1_*`, `lights_brighter/dimmer`,
+`input_hold_set`) **sudah dihapus** — wahana tidak punya hardware-nya dan
+`rov_agent.py` tidak pernah punya handler-nya, jadi tombolnya diam-diam mati.
+Profil tersimpan yang masih memuatnya dimigrasikan otomatis saat dimuat.
 
 ---
 
-## 3. F310 X-Input vs DirectInput
+## 2. Respons stik: deadzone → expo → gain → rate limit
 
-### 3.1 Perbedaan Utama
-
-| Aspek | X-Input Mode | DirectInput Mode |
-|-------|-------------|-----------------|
-| Switch di belakang | Posisi `X` | Posisi `D` |
-| Terlihat oleh browser | Sebagai Xbox 360 controller | Sebagai perangkat input generik |
-| Jumlah axis | 6 (0–5) | 8 (0–7) |
-| Jumlah tombol | 11 (0–10) + D-Pad | 12 (0–11) |
-| Nomorasi button | A=0, B=1, X=2, Y=3, LB=4, RB=5, Back=6, Start=7, LS=8, RS=9, Guide=10 | Berbeda — tergantung driver |
-| Nomorasi axis | Konsisten (Xbox-style) | Berbeda — tergantung driver |
-| Kompatibilitas | Tinggi (standar gaming) | Legacy (kompatibel dengan game lama) |
-
-### 3.2 Konfigurasi di `joystick-profile.json`
-
-File `server/config/joystick-profile.json` berisi mapping yang **saat ini aktif** untuk mode X-Input.
-
-Untuk beralih ke DirectInput, ubah `axisConfig` dan `buttonConfig` sesuai nomorasi DirectInput:
-
-```json
-{
-  "axisConfig": [
-    { "input": "axis 0", "assigned": "Axis X",  "min": -1000, "max": 1000, "direction": "↔" },
-    { "input": "axis 1", "assigned": "Axis Y",  "min": 1000,  "max": -1000, "direction": "↕" },
-    { "input": "axis 2", "assigned": "Axis R",  "min": -1000, "max": 1000, "direction": "↔" },
-    { "input": "axis 3", "assigned": "Axis Z",  "min": 1000,  "max": -1000, "direction": "↕" },
-    { "input": "axis 4", "assigned": "No function", "min": -1, "max": 1, "direction": "↕" },
-    { "input": "axis 5", "assigned": "No function", "min": -1, "max": 1, "direction": "↕" },
-    { "input": "axis 6", "assigned": "No function", "min": -1, "max": 1, "direction": "↕" },
-    { "input": "axis 7", "assigned": "No function", "min": -1, "max": 1, "direction": "↕" }
-  ],
-  "buttonConfig": {
-    "regular": [
-      { "action": "no_function", "button": 0, "mode": "toggle" },
-      ...
-    ]
-  }
-}
-```
-
-> **Catatan:** Setelah mengubah `joystick-profile.json`, restart `rov-agent` di RPI (`sudo systemctl restart rov-agent`) dan restart server Node.js (`Ctrl+C` → `npm start`).
-
-### 3.3 Cara Mendeteksi Mode F310
-
-Buka browser → dashboard → tab **Controller** → badge akan menampilkan nama gamepad yang terdeteksi:
-- X-Input: `Logitech Gamepad F310` (terlihat sebagai Xbox 360 controller)
-- DirectInput: `Logitech Gamepad F310` (terlihat sebagai perangkat DirectInput)
-
-Atau gunakan `navigator.getGamepads()` di console browser untuk melihat `gamepad.id`.
-
----
-
-## 4. Command Flow (Input → ROV)
+Empat parameter, semuanya bisa disetel di halaman **Joystick** dan ikut tersimpan
+di profil. Implementasi murni ada di
+[`public/js/axis-shaping.js`](public/js/axis-shaping.js).
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│  INPUT (Keyboard / Gamepad)                                        │
-│  app.js / joystick-state.js                                        │
-│  ├─ Keyboard → KEY_AXIS → sendCmd(axis, val)                      │
-│  └─ Gamepad → pollGamepad → executeJoystickAction → sendCmd()     │
-└──────────────────────────┬──────────────────────────────────────────┘
-                           │ WebSocket (ws://localhost:8080)
-                           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  SERVER (Node.js / server.js)                                      │
-│  ├─ Terima command via WebSocket                                   │
-│  ├─ Clamp axis ke −1000..1000                                     │
-│  ├─ Format UDP JSON: { name, value, t }                           │
-│  └─ Kirim via UDP ke RPI                                           │
-└──────────────────────────┬──────────────────────────────────────────┘
-                           │ UDP JSON :14550
-                           ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│  RASPBERRY PI (rov_agent.py)                                       │
-│  ├─ Terima UDP di port 14550                                      │
-│  ├─ Decode JSON → command name + value                             │
-│  ├─ Clamp & validasi ulang (rov_axes.clamp_axis)                  │
-│  ├─ Encode ke MAVLink MANUAL_CONTROL (pymavlink)                  │
-│  └─ Kirim ke Pixhawk via serial (/dev/ttyACM0)                    │
-└─────────────────────────────────────────────────────────────────────┘
+raw(-1..1) → deadzone → expo → skala min/max(±1000) → × gain → rate limit → kirim
 ```
 
----
+| Parameter | Default | Guna |
+|---|---|---|
+| **Deadzone** | `0.12` | Drift stik di sekitar tengah jadi **tepat 0**. Memakai *rescale*, jadi keluaran mulai dari 0 di tepi zona — tidak melompat. |
+| **Expo** | `0.35` | Melandaikan bagian tengah untuk koreksi halus. Defleksi penuh **tetap** ±1000. |
+| **Gain** | 6 langkah `25%…100%`, mulai di `40%` | Membatasi thrust maksimum. Diubah saat operasi lewat **LB/RB**, tampil di HUD. Berlaku untuk keyboard juga. |
+| **Rate limit** | `4000 /detik` | Meredam hentakan stik jadi lonjakan arus baterai. Sapuan penuh ≈ 0,5 detik. |
 
-## 5. Safety & Failsafe
-
-| Skenario | Respons Otomatis |
-|----------|-----------------|
-| WebSocket putus | E-Stop dikunci (`estopLatched`), semua axis dinetralkan |
-| Gamepad disconnect | Semua axis dinetralkan, thruster berhenti |
-| Tombol `Space` ditekan | Failsafe: semua thruster netral, ROV disarm |
-| Tidak ada axis baru > 0.5 s (Pi) | Pi kirim perintah netral, berhenti kirim (mencegah fail-safe timeout) |
-| Mode Autonomous | Joystick dinonaktifkan secara otomatis |
-| ARM ulang setelah E-Stop | Kunci E-Stop dilepas, joystick aktif kembali |
-
-### Urutan Darurat
-
-1. Tekan **STOP** (tombol header) atau **Spasi** → semua thruster netral seketika.
-2. Jika tidak respons, tekan **ARM** untuk disarm.
-3. Setelah aman, ARM ulang untuk mengaktifkan kembali kontrol.
+Preview di halaman Joystick memanggil **fungsi yang sama persis** dengan jalur
+kirim (`axisOutputFor`), jadi angka di layar dijamin identik dengan yang diterima ROV.
 
 ---
 
-## 6. Reference: UDP Command Structure
+## 3. Keyboard (cadangan)
 
-Perintah yang dikirim dari server ke RPI via UDP (JSON):
+Hanya aktif saat tab controller = **Keyboard**.
+
+| Key | Axis | | Key | Aksi |
+|---|---|---|---|---|
+| `W` / `S` | surge maju / mundur | | `H` | Gripper OPEN |
+| `A` / `D` | sway kiri / kanan | | `G` | Gripper CLOSE |
+| `Q` / `E` | yaw CCW / CW | | `Space` | **E-Stop** |
+| `R` / `F` | heave naik / turun | | | |
+
+Besar langkah = `CONFIG.CONTROL.KEY_AXIS_STEP` (default **400**) dikali gain.
+Keyboard tunduk pada gerbang otoritas yang sama dengan gamepad: input ditolak
+saat mode Autonomous atau E-Stop terkunci. `Space` dan `H`/`G` aktif tanpa
+memandang tab controller.
+
+---
+
+## 4. Mode kontrol
+
+### 4.1 Mode ArduSub (`pilot_mode`)
+
+| Tab GUI | D-Pad | Perintah | Mode Pixhawk |
+|---|---|---|---|
+| Manual | ↓ | `pilot_mode="manual"` | `MANUAL` |
+| Stabilize | ← | `pilot_mode="stabilize"` | `STABILIZE` |
+| Depth Hold | ↑ | `pilot_mode="depth_hold"` | `ALT_HOLD` |
+
+Sorotan tab **tidak** diset lokal saat diklik — sumbernya hanya string mode dari
+HEARTBEAT di telemetry. Karena itu tab GUI dan D-Pad selalu sinkron, dan tab
+tidak pernah membohongi operator kalau Pixhawk menolak perpindahan mode (mis.
+`ALT_HOLD` ditolak saat sumber kedalaman belum sehat). Tab yang menunggu
+konfirmasi tampil putus-putus; setelah 2 detik tanpa konfirmasi muncul peringatan.
+
+Mode di luar ketiga tab (`SURFACE`, `POSHOLD`, …) tetap terbaca pada badge di
+sebelah kanan tab bar.
+
+### 4.2 Konvensi throttle di ketiga mode
+
+`MANUAL_CONTROL.z` ArduSub adalah **0..1000 dengan 500 = diam** — berbeda dari
+tiga axis lain yang −1000..1000. Konversinya dilakukan
+[`rov_axes.to_mavlink_z()`](rov_axes.py) di sisi Pi.
+
+| Mode | Arti `z = 500` |
+|---|---|
+| MANUAL | Nol thrust vertikal |
+| STABILIZE | Nol thrust vertikal, attitude diratakan |
+| ALT_HOLD | **Tahan kedalaman** |
+
+Karena netral bermakna benar di ketiganya, tidak ada penanganan khusus per-mode
+di jalur axis.
+
+### 4.3 Manual vs Autonomous (`control_mode`)
+
+Gerbang otoritas GUI. Saat Autonomous, thruster dan gripper dari GUI diblokir di
+sisi klien; FSM yang memegang kendali. Di luar cakupan trial ini.
+
+---
+
+## 5. Frame & mixing
+
+Wahana memakai **BlueROV1** (6 thruster, 6-DoF) — `FRAME_CONFIG = 0`.
+
+**Tidak ada mixing di repo ini.** GUI hanya mengirim `MANUAL_CONTROL` (x/y/z/r);
+ArduSub di Pixhawk yang membagi ke keenam motor sesuai `FRAME_CONFIG`. Satu-satunya
+kendali level motor dari dashboard adalah pembalik arah (`MOT_n_DIRECTION`) di
+halaman Setup.
+
+Gripper: servo **channel 10** (`SERVO10_FUNCTION = 7`), PWM buka `1900` / tutup
+`1100` / netral `1500`, dengan rate-limit + EMA di
+[`rov_gripper.py`](rov_gripper.py) supaya tidak menyentak.
+
+---
+
+## 6. Safety & failsafe
+
+| Skenario | Respons | Diimplementasi di |
+|---|---|---|
+| Axis berhenti sampai ke Pi > 0,5 dtk | Pi **streaming NEUTRAL** (`z=500`, sisanya 0) dan menandai `cmd_link: "stale"`; dashboard menampilkan banner merah | [`rov_axes.resolve_manual_packet`](rov_axes.py), `joystick_sender` di [`rov_agent.py`](rov_agent.py) |
+| WebSocket putus | E-Stop dikunci, semua axis dinetralkan | `app.js` |
+| Gamepad dicabut | Semua axis dinetralkan seketika | `gamepaddisconnected` |
+| `Space` / Back / tombol STOP | Netralkan seluruh thruster + disarm, joystick terkunci | `btnStop` |
+| Mode Autonomous | Thruster & gripper dari GUI diblokir | gerbang di `pollGamepad`, keydown, dan `sendGripper` |
+| ARM ulang | Melepas kunci E-Stop | `btnArm` |
+
+**Kenapa Pi tetap mengirim saat stale, bukan diam?** ArduSub mengharapkan aliran
+`MANUAL_CONTROL` yang kontinu. Kalau ground station diam, failsafe pilot-input
+Pixhawk yang jalan dan perilakunya tergantung parameter. Streaming netral jauh
+lebih bisa diprediksi: diam di tempat, dan di ALT_HOLD berarti tahan kedalaman.
+
+**Heartbeat axis.** Dashboard mengirim ulang nilai axis saat ini ~15 Hz tanpa
+memandang jenis controller — dan tetap mengirim **nol eksplisit** saat E-Stop
+aktif. Dengan begitu `stale` benar-benar berarti link/GUI mati, bukan sekadar
+operator sedang tidak menyentuh stik.
+
+### Urutan darurat
+
+1. **Back** (gamepad) / **Spasi** / tombol **STOP** → thruster netral seketika.
+2. Bila tidak respons, **ARM** untuk disarm.
+3. Setelah aman, **Start** (ARM ulang) untuk mengaktifkan kembali kontrol.
+
+---
+
+## 7. Alur perintah
+
+```
+Gamepad / Keyboard
+  app.js · joystick-state.js (deadzone → expo → gain → rate limit)
+        │  WebSocket :8080   {type:"cmd", name, value}
+  server/server.js  (clamp ±1000, tap rekaman)
+        │  UDP JSON :14550   {name, value, t}
+  rov_agent.py  (clamp ulang, fail-safe idle, heave → z 0..1000)
+        │  pymavlink MANUAL_CONTROL / MAV_CMD_DO_SET_SERVO
+  Pixhawk ArduSub  (mixing BlueROV1 → 6 thruster)
+```
+Telemetry balik: Pixhawk → `rov_agent.py` → UDP :14551 → server → WS → dashboard.
+
+---
+
+## 8. Reference: perintah UDP
 
 | `name` | `value` | Keterangan |
-|--------|---------|------------|
+|---|---|---|
 | `arm` | `true`/`false` | ARM / DISARM |
-| `light` | `true`/`false` | Lampu on/off |
-| `stop` | `true` | Failsafe: netralkan semua thruster |
-| `surge` | −1000..1000 | Maju/mundur |
-| `sway` | −1000..1000 | Kiri/kanan |
-| `yaw` | −1000..1000 | Rotasi |
-| `heave` | −1000..1000 | Naik/turun |
-| `pilot_mode` | `"manual"`/`"stabilize"`/`"depth_hold"` | Mode kontrol |
-| `control_mode` | `"manual"`/`"autonomous"` | Manual vs Autonomous |
-| `gripper` | `"open"`/`"close"` | Gripper |
-| `mount_tilt` | `"up"`/`"down"`/`{dir,hold}`/`{dir:"stop"}` | Gimbal mount |
-| `actuator1` | `"inc"`/`"dec"`/`{dir,hold}`/`{dir:"stop"}` | Aktuator |
-| `light_level` | `"up"`/`"down"`/`{dir,hold}` | Level lampu |
-| `gain` | `"inc"`/`"dec"`/`{dir,hold}` | Gain PID |
-| `input_hold_set` | `true` | Set input hold |
-| `set_surface` | `true` | Set depth = 0 |
-| `snapshot` | `true` | Ambil foto |
-| `record` | `true`/`false` | Mulai/hentikan rekam |
+| `stop` | `true` | Failsafe: disarm |
+| `surge` `sway` `yaw` `heave` | −1000..1000 | Axis gerak (netral 0) |
+| `pilot_mode` | `"manual"`/`"stabilize"`/`"depth_hold"` | Mode ArduSub |
+| `control_mode` | `"manual"`/`"autonomous"` | Gerbang otoritas GUI |
+| `gripper` | `"open"`/`"close"`/`-1000..1000` | Posisi gripper |
+| `light` | `true`/`false` | Lampu (belum terhubung hardware) |
+| `thruster_config` | `{motors:{1..6: ±1}}` | `MOT_n_DIRECTION` |
+
+Diterima tanpa aksi (murni state dashboard): `controller`, `set_surface`,
+`snapshot`, `record`. Selain daftar di atas akan tercatat sebagai
+`unknown command` di log Pi — itu memang sinyal ada yang perlu diperiksa.
+
+Telemetry balik menambahkan `cmd_link: "ok" | "stale"` selain `heading`, `depth`,
+`roll`, `pitch`, `temp`, `voltage`, `armed`, `light`, `mode`.

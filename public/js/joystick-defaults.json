@@ -1,0 +1,104 @@
+{
+  "_comment": [
+    "SATU-SATUNYA sumber kebenaran untuk default mapping joystick.",
+    "Dibaca server.js lewat require() dan browser lewat fetch() di joystick-state.js,",
+    "jadi tidak ada lagi tabel default yang disalin ganda dan bisa hanyut.",
+    "",
+    "Profil default disusun untuk Logitech F310 pada mode X-Input, yang dilaporkan",
+    "Chrome sebagai 'standard mapping': 4 axis (0=LX, 1=LY, 2=RX, 3=RY) dan 17 button.",
+    "LT/RT BUKAN axis — keduanya button analog 6 dan 7, karena itu grip analog",
+    "memakai sumber virtual 'triggers' (nilai = RT - LT).",
+    "",
+    "Konvensi min/max: min > max berarti axis dibalik (mapAxisValue). Sumbu Y",
+    "gamepad bernilai negatif saat didorong ke ATAS, jadi heave & surge dibalik",
+    "supaya dorong-ke-atas = naik / maju."
+  ],
+
+  "actions": [
+    "no_function",
+    "arm",
+    "disarm",
+    "e_stop",
+    "mode_manual",
+    "mode_stabilize",
+    "mode_depth_hold",
+    "grip_open",
+    "grip_close",
+    "grip_neutral",
+    "light_toggle",
+    "gain_inc",
+    "gain_dec"
+  ],
+
+  "actionMigration": {
+    "actuator1_inc": "grip_close",
+    "actuator1_dec": "grip_open",
+    "mount_tilt_up": "no_function",
+    "mount_tilt_down": "no_function",
+    "mount_center": "no_function",
+    "lights_brighter": "light_toggle",
+    "lights_dimmer": "no_function",
+    "input_hold_set": "no_function"
+  },
+
+  "profile": {
+    "enabled": true,
+    "shiftButton": 10,
+
+    "tuning": {
+      "deadzone": 0.12,
+      "expo": 0.35,
+      "slewPerSec": 4000,
+      "gainIndex": 1
+    },
+
+    "axisConfig": [
+      { "input": "axis 0", "assigned": "Axis R", "min": -1000, "max": 1000, "direction": "↔" },
+      { "input": "axis 1", "assigned": "Axis Z", "min": 1000, "max": -1000, "direction": "↕" },
+      { "input": "axis 2", "assigned": "Axis Y", "min": -1000, "max": 1000, "direction": "↔" },
+      { "input": "axis 3", "assigned": "Axis X", "min": 1000, "max": -1000, "direction": "↕" },
+      { "input": "triggers", "assigned": "Grip", "min": -1000, "max": 1000, "direction": "↕" }
+    ],
+
+    "buttonConfig": {
+      "regular": [
+        { "action": "grip_close", "button": 0, "mode": "toggle" },
+        { "action": "grip_open", "button": 1, "mode": "toggle" },
+        { "action": "grip_neutral", "button": 2, "mode": "toggle" },
+        { "action": "no_function", "button": 3, "mode": "toggle" },
+        { "action": "gain_dec", "button": 4, "mode": "toggle" },
+        { "action": "gain_inc", "button": 5, "mode": "toggle" },
+        { "action": "no_function", "button": 6, "mode": "toggle" },
+        { "action": "no_function", "button": 7, "mode": "toggle" },
+        { "action": "e_stop", "button": 8, "mode": "toggle" },
+        { "action": "arm", "button": 9, "mode": "toggle" },
+        { "action": "no_function", "button": 10, "mode": "toggle" },
+        { "action": "no_function", "button": 11, "mode": "toggle" },
+        { "action": "mode_depth_hold", "button": 12, "mode": "toggle" },
+        { "action": "mode_manual", "button": 13, "mode": "toggle" },
+        { "action": "mode_stabilize", "button": 14, "mode": "toggle" },
+        { "action": "light_toggle", "button": 15, "mode": "toggle" },
+        { "action": "no_function", "button": 16, "mode": "toggle" }
+      ],
+      "shift": [
+        { "action": "no_function", "button": 0, "mode": "toggle" },
+        { "action": "no_function", "button": 1, "mode": "toggle" },
+        { "action": "no_function", "button": 2, "mode": "toggle" },
+        { "action": "no_function", "button": 3, "mode": "toggle" },
+        { "action": "no_function", "button": 4, "mode": "toggle" },
+        { "action": "no_function", "button": 5, "mode": "toggle" },
+        { "action": "no_function", "button": 6, "mode": "toggle" },
+        { "action": "no_function", "button": 7, "mode": "toggle" },
+        { "action": "e_stop", "button": 8, "mode": "toggle" },
+        { "action": "disarm", "button": 9, "mode": "toggle" },
+        { "action": "no_function", "button": 10, "mode": "toggle" },
+        { "action": "no_function", "button": 11, "mode": "toggle" },
+        { "action": "no_function", "button": 12, "mode": "toggle" },
+        { "action": "no_function", "button": 13, "mode": "toggle" },
+        { "action": "no_function", "button": 14, "mode": "toggle" },
+        { "action": "no_function", "button": 15, "mode": "toggle" },
+        { "action": "no_function", "button": 16, "mode": "toggle" }
+      ]
+    }
+  }
+}
