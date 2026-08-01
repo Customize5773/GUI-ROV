@@ -432,7 +432,22 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 
 /* ----------------------- simulator (opsional) ----------------------- */
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
-const simState = { armed: false, light: false, mode: "manual" };
+// Padanan rov_modes.PILOT_MODE_MAP di sisi Python — dipakai agar telemetri SIM
+// melaporkan nama mode ArduSub yang sama dengan yang dikirim Pixhawk sungguhan,
+// sehingga tab mode & badge peringatan ACRO bisa diuji tanpa hardware.
+const PILOT_MODE_MAP = {
+  manual: "MANUAL",
+  stabilize: "STABILIZE",
+  depth_hold: "ALT_HOLD",
+  acro: "ACRO",
+};
+
+const simState = {
+  armed: false,
+  light: false,
+  controlMode: "manual", // gate otoritas GUI: manual | autonomous
+  pilotMode: "MANUAL",   // mode ArduSub yang "dilaporkan" wahana palsu
+};
 
 function applySimCommand(name, value) {
   switch (name) {
@@ -446,8 +461,19 @@ function applySimCommand(name, value) {
       simState.armed = false;
       break; // failsafe: netralkan
     case "control_mode":
-      simState.mode = value;
+      simState.controlMode = value;
       break;
+    case "pilot_mode": {
+      // Tolak nama tak dikenal, persis seperti rov_agent.py — supaya bug
+      // penamaan ketahuan di SIM, bukan baru di kolam.
+      const mapped = PILOT_MODE_MAP[String(value).toLowerCase()];
+      if (!mapped) {
+        console.warn(`[SIM] pilot_mode tidak dikenal: ${value}`);
+        break;
+      }
+      simState.pilotMode = mapped;
+      break;
+    }
   }
 }
 
@@ -470,7 +496,10 @@ if (SIM) {
         voltage: 15.7 + 0.2 * Math.sin(t),
         armed: simState.armed,
         light: simState.light,
-        mode: simState.mode,
+        // Sama seperti ROV sungguhan: field `mode` adalah mode ArduSub dari
+        // HEARTBEAT, bukan control_mode.
+        mode: simState.pilotMode,
+        control_mode: simState.controlMode,
       },
       recv: Date.now(),
     });

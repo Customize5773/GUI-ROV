@@ -58,6 +58,18 @@ LIGHT_PWM_OFF = 1100
 # Surge/sway/yaw: -1000..1000 dgn 0 = netral. VERIFIKASI arah/tanda saat uji SITL.
 Z_NEUTRAL = 500
 
+# Nama mode GUI -> nama mode ArduSub. Sengaja diduplikasi (bukan import) supaya
+# rov_link.py tetap bisa dijalankan langsung dari dalam autonomy/ tanpa root repo
+# di sys.path — tapi HARUS tetap sinkron dengan rov_modes.PILOT_MODE_MAP.
+#
+# ACRO: tanpa stabilisasi attitude; z = 500 di sini BUKAN "tahan kedalaman".
+PILOT_MODE_MAP = {
+    "manual": "MANUAL",
+    "stabilize": "STABILIZE",
+    "depth_hold": "ALT_HOLD",
+    "acro": "ACRO",
+}
+
 # Kill-switch: abaikan noise/jitter joystick fisik (mis. drift Logitech F310/DS4) di
 # bawah ambang ini (skala sama dgn axis GUI -100..100) agar tidak salah trigger abort
 # tepat setelah autonomy dimulai.
@@ -196,6 +208,12 @@ class RovLink:
             close = (value == "close") or (value is True)
             self.set_servo(GRIPPER_SERVO_CH, GRIPPER_PWM_CLOSE if close else GRIPPER_PWM_OPEN)
             print(f"[CMD] gripper {'CLOSE' if close else 'OPEN'}")
+        elif name == "pilot_mode":
+            ardusub_mode = PILOT_MODE_MAP.get(str(value).strip().lower())
+            if ardusub_mode is None:
+                print(f"[MODE] pilot_mode tidak dikenal: {value}")
+            else:
+                self.set_mode(ardusub_mode)
         elif name == "control_mode":
             self.control_mode = str(value)
             self.set_mode("ALT_HOLD" if self.control_mode == "autonomous" else "MANUAL")
@@ -293,6 +311,13 @@ class RovLink:
                     self.telem["voltage"] = round(msg.voltage_battery / 1000.0, 1)
             elif t == "HEARTBEAT":
                 self.telem["armed"] = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+                # Mode ArduSub yang BENAR-BENAR aktif. GUI memakai field ini
+                # untuk menyorot tab mode, jadi ia harus datang dari wahana —
+                # bukan dari control_mode (gate otoritas GUI, lihat loop_telem_tx).
+                try:
+                    self.telem["mode"] = mavutil.mode_string_v10(msg)
+                except Exception:
+                    pass
 
     def loop_manual_tx(self):
         while True:
@@ -303,7 +328,10 @@ class RovLink:
         while True:
             with self.lock:
                 self.telem["light"] = self.light_on
-                self.telem["mode"] = self.control_mode
+                # `mode` diisi dari HEARTBEAT (lihat loop_rx). control_mode
+                # adalah hal berbeda — gate otoritas GUI — jadi dikirim
+                # sebagai field-nya sendiri.
+                self.telem["control_mode"] = self.control_mode
             out = dict(self.telem)
             out["ts"] = time.time()
             if self.mission5_fsm is not None:

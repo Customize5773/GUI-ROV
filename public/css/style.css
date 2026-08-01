@@ -809,6 +809,26 @@ body[data-theme="light"] .theme__icon::after {
 }
 /* menunggu konfirmasi HEARTBEAT dari Pixhawk */
 .mode--pending { opacity: .55; border-style: dashed; }
+/* mode berisiko (ACRO): tanpa stabilisasi attitude, throttle netral TIDAK
+   menahan kedalaman. Sengaja beda warna supaya tidak tertekan tanpa sadar. */
+.mode--risky { color: var(--amber); border-color: rgba(245,165,36,.28); }
+.mode--risky:hover { color: var(--amber); border-color: rgba(245,165,36,.5); background: rgba(245,165,36,.08); }
+.mode--risky.mode--active {
+  color: var(--amber); border-color: rgba(245,165,36,.6);
+  background: rgba(245,165,36,.14);
+  box-shadow: 0 0 14px rgba(245,165,36,.22);
+}
+/* peringatan yang tampil selama Pixhawk benar-benar melaporkan mode berisiko */
+.modebar__warn {
+  align-self: center; padding: 2px 8px; border-radius: 4px;
+  background: rgba(245,165,36,.16); border: 1px solid rgba(245,165,36,.45);
+  font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 1px;
+  color: var(--amber); white-space: nowrap;
+  animation: modewarn-pulse 1.4s ease-in-out infinite;
+}
+.modebar__warn[hidden] { display: none; }
+@keyframes modewarn-pulse { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .modebar__warn { animation: none; } }
 /* mode Pixhawk sebenarnya — termasuk mode di luar ketiga tab (SURFACE, POSHOLD, ...) */
 .modebar__actual {
   align-self: center; padding: 0 4px;
