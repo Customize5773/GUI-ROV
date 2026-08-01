@@ -141,7 +141,10 @@ memandang tab controller.
 
 Peta nama mode punya **satu sumber kebenaran** per bahasa —
 [`rov_modes.PILOT_MODE_MAP`](rov_modes.py) di sisi Python dan
-`ARDUSUB_MODE_TO_TAB` di `public/js/app.js`. Tambah mode baru di keduanya.
+[`shared/rov-modes.js`](shared/rov-modes.js) (`PILOT_MODE_MAP`,
+`ARDUSUB_MODE_TO_TAB`, `RISKY_ARDUSUB_MODES`, `ACRO_CONFIRM`) di sisi JS —
+diimpor langsung oleh `public/js/app.js`, bukan didefinisikan ulang di sana.
+Tambah mode baru di kedua file.
 
 | Tab GUI | D-Pad | Perintah | Mode Pixhawk |
 |---|---|---|---|
@@ -196,14 +199,25 @@ Tiga pengaman yang dipasang:
    bernilai false: `gain_inc`/`gain_dec` ditolak dengan log, dan
    `apply_depth_hold_bias()` mengembalikan paket apa adanya. Tanpa ini, bias
    throttle akan mendorong wahana tanpa satu pun umpan balik yang menstabilkan.
-2. **Konfirmasi di GUI.** Klik tab **Acro** memunculkan dialog konfirmasi.
-   Membatalkan = tidak ada command yang dikirim sama sekali. Jalur tombol
-   gamepad (`mode_acro`) sengaja **melewati** dialog — tombol fisik hanya bisa
-   ditekan operator yang sedang memegang pad, dan modal di tengah manuver justru
-   berbahaya.
+2. **Konfirmasi di GUI, seragam di semua jalur input.** Klik tab **Acro**
+   maupun tombol gamepad `mode_acro` sama-sama lewat `requestPilotMode()`
+   (`public/js/app.js`), yang menampilkan dialog `ACRO_CONFIRM` sebelum
+   mengirim apa pun. Membatalkan = tidak ada command yang dikirim sama
+   sekali, dari jalur mana pun.
+   > Riwayat: versi awal sengaja melewati dialog untuk jalur gamepad
+   > (alasannya: tombol fisik hanya bisa ditekan operator yang sedang
+   > memegang pad). Audit berikutnya menandai ini sebagai gerbang keamanan
+   > yang tidak seragam antar jalur input, jadi diseragamkan — sekarang
+   > gamepad juga wajib konfirmasi seperti tab GUI.
 3. **Peringatan visual.** Selama HEARTBEAT melaporkan `ACRO`, badge
    `⚠ ACRO — TANPA STABILISASI` tampil di tab bar dan tab Acro diberi warna
    amber. Peringatan mengikuti mode **aktual**, bukan yang diminta.
+
+**Cakupan test:** ketiga pengaman di atas punya unit test otomatis —
+`test_rov_modes.py` (Python, gating depth-hold) dan
+`server/test/mode-gating.test.mjs` (JS, pemetaan mode/risky/teks konfirmasi),
+keduanya ikut jalan di `python3 -m unittest test_rov_modes` dan `npm test`
+di `server/`.
 
 ### 4.3 Manual vs Autonomous (`control_mode`)
 
