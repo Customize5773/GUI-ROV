@@ -5,15 +5,6 @@ import threading
 import math
 from pymavlink import mavutil
 
-from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, to_mavlink_z
-from attitude_filter import AttitudeFilter
-from rov_gripper import (
-    GRIPPER_PWM_NEUTRAL,
-    GRIPPER_SERVO_CH,
-    gripper_value_to_pwm,
-    slew_toward,
-)
-
 # =========================
 # Konfigurasi jaringan
 # =========================
@@ -35,21 +26,21 @@ cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.bind(("0.0.0.0", UDP_CMD_PORT))
 cmd_sock.settimeout(0.2)
 
+# =========================
+# Depth Target
+# =========================
+depth_target = 0.0
+DEPTH_STEP = 0.10
+# =========================
+# Depth PID
+# =========================
+KP_DEPTH = 250
+KI_DEPTH = 0
+KD_DEPTH = 80
 
-# ==========================
-# Manipulator Configuration
-# ==========================
-
-GRIP_CHANNEL = 7
-ROTATE_CHANNEL = 8
-
-SERVO_NEUTRAL = 1500
-
-GRIP_OPEN_PWM = 1900
-GRIP_CLOSE_PWM = 1100
-
-ROTATE_LEFT_PWM = 1100
-ROTATE_RIGHT_PWM = 1900
+depth_integral = 0.0
+depth_prev_error = 0.0
+last_depth_time = time.time()
 
 # =========================
 # Status telemetry lokal
@@ -68,45 +59,21 @@ state = {
 
 master = None
 
-# Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
-# attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
-attitude_filter = AttitudeFilter()
-prev_attitude_ts = None
-
 joystick = {
     "surge": 0,
     "sway": 0,
     "heave": 0,
     "yaw": 0,
 }
-
-depth_target = 0.0
-DEPTH_STEP = 0.10
-
-# Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
-# JOYSTICK_IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus),
-# kirim SATU perintah netral lalu berhenti sampai ada perintah manual lagi.
-JOYSTICK_IDLE_TIMEOUT = 0.5
-last_joystick_update = 0.0
-joystick_lock = threading.Lock()
-
 # =========================
-# Gripper
-# =========================
-# Target = posisi yang diminta operator (keyboard/tombol/axis gamepad).
-# Filtered = posisi yang benar-benar dikirim ke servo, hasil rate-limit + EMA
-# di rov_gripper.slew_toward() supaya gerakan halus dan tidak menyentak.
-GRIPPER_SEND_INTERVAL = 0.1     # 10 Hz
-GRIPPER_SEND_EPSILON = 1.0      # jangan spam MAVLink kalau beda < 1 PWM
-
-gripper_target = float(GRIPPER_PWM_NEUTRAL)
-gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
-gripper_lock = threading.Lock()
-
+# Utility
+# ========================
 def send_telemetry():
     state["depth_target"] = depth_target
+
     payload = json.dumps(state).encode("utf-8")
     telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
+
     print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
 
 def normalize_heading(deg):
@@ -114,29 +81,11 @@ def normalize_heading(deg):
         deg += 360.0
     return deg % 360.0
 
-def set_servo_pwm(channel, pwm):
-    """
-    Mengirim PWM ke output servo Pixhawk.
-    Channel menggunakan nomor SERVO (1-14).
-    """
-
-    master.mav.command_long_send(
-        master.target_system,
-        master.target_component,
-        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-        0,
-        channel,
-        pwm,
-        0, 0, 0, 0, 0
-    )
-
 # =========================
 # Command handler dari laptop
 # =========================
 def command_listener():
     global master
-    global last_joystick_update
-    global gripper_target
     global depth_target
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
@@ -158,16 +107,8 @@ def command_listener():
 
         name = msg.get("name")
         value = msg.get("value")
-
-        # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console.
-        # Gripper analog (nilai angka dari axis gamepad) juga bisa datang cepat;
-        # open/close diskrit dari tombol/keyboard tetap di-log.
-        quiet = name in AXIS_RANGE or (
-            name == "gripper" and isinstance(value, (int, float))
-            and not isinstance(value, bool)
-        )
-        if not quiet:
-            print(f"[CMD] {name} = {value} from {addr}")
+        print(f"[CMD] {name} = {value} from {addr}")
+        print("FULL CMD =", msg)
 
         if master is None:
             print("[CMD] Pixhawk not connected yet")
@@ -228,15 +169,20 @@ def command_listener():
                     continue
 
                 master.set_mode(mode_mapping[pixhawk_mode])
+                if mode == "depth_hold":
 
-                if mode in ("stabilize", "depth_hold"):
                     depth_target = state["depth"]
+
+                    depth_integral = 0.0
+                    depth_prev_error = 0.0
+                    last_depth_time = time.time()
+
                     print(f"[DEPTH] Target initialized = {depth_target:.2f} m")
 
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 print("====================================")
-
+                
             elif name == "stop":
                 # Failsafe sederhana: disarm
                 print("[MAV] STOP -> DISARM")
@@ -266,7 +212,7 @@ def command_listener():
                     depth_target = 0.0
 
                 print(f"[DEPTH] Target = {depth_target:.2f} m")
-                
+
             elif name == "thruster_config":
 
                 motors = msg.get("motors", {})
@@ -289,17 +235,8 @@ def command_listener():
                     time.sleep(0.1)
                 print("[PARAM] Thruster configuration updated.")
 
-            elif name == "gripper":
-                # "open"/"close" dari tombol & keyboard H/G, atau angka
-                # -1000..1000 dari axis analog gamepad. Yang disimpan hanya
-                # TARGET; gripper_sender() yang menggerakkannya perlahan.
-                with gripper_lock:
-                    gripper_target = gripper_value_to_pwm(value)
-
-            elif name in AXIS_RANGE:
-                with joystick_lock:
-                    joystick[name] = clamp_axis(name, value)
-                    last_joystick_update = time.time()
+            elif name in ["surge", "sway", "yaw", "heave"]:
+                joystick[name] = int(value)
 
             else:
                 print(f"[CMD] unknown command: {name}")
@@ -307,116 +244,81 @@ def command_listener():
         except Exception as e:
             print("[CMD] error executing command:", e)
 
-def handle_manipulator(device, action, direction):
-
-    print(f"[MANIP] {device} | {action} | {direction}")
-
-    if device == "grip":
-
-        if action == "start":
-
-            if direction == "open":
-                set_servo_pwm(GRIP_CHANNEL, GRIP_OPEN_PWM)
-
-            elif direction == "close":
-                set_servo_pwm(GRIP_CHANNEL, GRIP_CLOSE_PWM)
-
-        elif action == "stop":
-            set_servo_pwm(GRIP_CHANNEL, SERVO_NEUTRAL)
-
-    elif device == "rotate":
-
-        if action == "start":
-
-            if direction == "left":
-                set_servo_pwm(ROTATE_CHANNEL, ROTATE_LEFT_PWM)
-
-            elif direction == "right":
-                set_servo_pwm(ROTATE_CHANNEL, ROTATE_RIGHT_PWM)
-
-        elif action == "stop":
-            set_servo_pwm(ROTATE_CHANNEL, SERVO_NEUTRAL)
-
 def joystick_sender():
     global master
+    global depth_integral
+    global depth_prev_error
+    global last_depth_time
+
     while True:
+
         if master is not None:
-            print(
-                f"[MANUAL] "
-                f"X={joystick['surge']} "
-                f"Y={joystick['sway']} "
-                f"Z={joystick['heave']} "
-                f"R={joystick['yaw']}"
-            )   
-            print("RAW =", joystick)
+
+            heave = joystick["heave"]
+
+            # ALT HOLD
+            if state["mode"] == "ALT_HOLD":
+
+                now = time.time()
+                dt = now - last_depth_time
+
+                if dt <= 0:
+                    dt = 0.05
+
+                last_depth_time = now
+
+                error = depth_target - state["depth"]
+                if abs(error) < 0.03:
+                    error = 0.0 
+
+                depth_integral += error * dt
+                depth_integral = max(-1.0, min(1.0, depth_integral))
+
+                derivative = (error - depth_prev_error) / dt
+
+                depth_prev_error = error
+
+                pid = (
+                    KP_DEPTH * error +
+                    KI_DEPTH * depth_integral +
+                    KD_DEPTH * derivative
+                )
+
+                heave = int(500 + pid)
+
+                heave = max(0, min(1000, heave))
+
+                print(
+                    f"[DEPTH PID] "
+                    f"Target={depth_target:.2f} "
+                    f"Current={state['depth']:.2f} "
+                    f"Error={error:.2f} "
+                    f"Heave={heave}"
+                )
 
             master.mav.manual_control_send(
                 master.target_system,
                 joystick["surge"],
                 joystick["sway"],
-                joystick["heave"],
+                heave,
                 joystick["yaw"],
                 0
             )
-            
-            print("[MANUAL] sent")
+
+            # Mapping trigger sway
+            sway = joystick["sway"]
+
+            if sway <= 1500:
+                sway = 1750
+            else:
+                sway = 1250
 
         time.sleep(0.05)
-
-def gripper_sender():
-    """Gerakkan servo gripper menuju target 10 Hz dgn rate-limit + EMA.
-
-    Sengaja dipisah dari command_listener: perintah dari GUI hanya mengubah
-    TARGET, sedangkan thread ini yang menggeser posisi servo sedikit demi
-    sedikit. Efeknya gripper tidak menyentak walau operator menekan
-    open/close berulang cepat, dan posisi terakhir DITAHAN (tidak balik
-    sendiri) saat tidak ada perintah baru.
-    """
-    global gripper_filtered
-
-    last_sent_pwm = None
-    last_ts = time.time()
-
-    while True:
-        if master is None:
-            time.sleep(0.1)
-            last_ts = time.time()
-            continue
-
-        now = time.time()
-        dt = now - last_ts
-        last_ts = now
-
-        with gripper_lock:
-            target = gripper_target
-
-        gripper_filtered = slew_toward(gripper_filtered, target, dt)
-
-        # Hanya kirim kalau posisi benar-benar berubah — hindari membanjiri
-        # link serial 115200 yang dipakai bersama telemetry.
-        if last_sent_pwm is None or abs(gripper_filtered - last_sent_pwm) >= GRIPPER_SEND_EPSILON:
-            pwm = int(round(gripper_filtered))
-            try:
-                master.mav.command_long_send(
-                    master.target_system,
-                    master.target_component,
-                    mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-                    0,
-                    GRIPPER_SERVO_CH,
-                    pwm,
-                    0, 0, 0, 0, 0
-                )
-                last_sent_pwm = gripper_filtered
-            except Exception as e:
-                print("[GRIPPER] gagal kirim:", e)
-
-        time.sleep(GRIPPER_SEND_INTERVAL)
-
 # =========================
 # Main koneksi Pixhawk
 # =========================
 def main():
-    global master, prev_attitude_ts
+    global master
 
     print(f"[MAV] Connecting to Pixhawk on {PIXHAWK_PORT} @ {PIXHAWK_BAUD} ...")
     master = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
@@ -457,7 +359,6 @@ def main():
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
-    threading.Thread(target=gripper_sender, daemon=True).start()
 
     last_send = 0
 
@@ -475,33 +376,17 @@ def main():
         # ATTITUDE: roll, pitch, yaw
         # --------------------------------
         if mtype == "ATTITUDE":
-            now_ts = msg._timestamp
-            dt = (now_ts - prev_attitude_ts) if prev_attitude_ts is not None else 0.1
-            roll_f, pitch_f, yaw_f = attitude_filter.update(
-                math.degrees(msg.roll),
-                math.degrees(msg.pitch),
-                normalize_heading(math.degrees(msg.yaw)),
-                math.degrees(msg.rollspeed),
-                math.degrees(msg.pitchspeed),
-                math.degrees(msg.yawspeed),
-                dt,
-            )
-            state["roll"] = roll_f
-            state["pitch"] = pitch_f
-            state["heading"] = yaw_f
-            prev_attitude_ts = now_ts
+            state["roll"] = math.degrees(msg.roll)
+            state["pitch"] = math.degrees(msg.pitch)
+            yaw_deg = math.degrees(msg.yaw)
+            state["heading"] = normalize_heading(yaw_deg)
 
         # --------------------------------
-        # COMMAND_ACK: hasil ARM/DISARM dsb.
-        # Ditangani di sini (bukan di command_listener) supaya thread command
-        # tidak pernah terblokir menunggu ACK.
+        # VFR_HUD: heading kadang tersedia di sini juga
         # --------------------------------
-        elif mtype == "COMMAND_ACK":
-            print(f"[MAV] ACK cmd={msg.command} result={msg.result}")
-
-        # VFR_HUD.heading sengaja tidak dipakai: ATTITUDE (via attitude_filter)
-        # adalah satu-satunya sumber heading, supaya heading yang sudah
-        # difilter tidak ditimpa nilai mentah.
+        elif mtype == "VFR_HUD":
+            if hasattr(msg, "heading"):
+                state["heading"] = float(msg.heading)
 
         # --------------------------------
         # SYS_STATUS: tegangan baterai
