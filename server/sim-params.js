@@ -1,0 +1,155 @@
+/* sim-params.js — tabel parameter palsu untuk `node server.js --sim`.
+ *
+ * Kenapa perlu: di mode SIM tidak ada Pixhawk maupun rov_agent.py yang
+ * menjawab, sementara command TETAP dikirim ke UDP (lihat server.js). Tanpa
+ * modul ini halaman Vehicle selalu kosong dan fitur param hanya bisa
+ * dikembangkan sambil menyalakan SITL atau menyolok hardware.
+ *
+ * Sumber datanya BUKAN karangan: parameters_ardusub.params di root repo adalah
+ * dump QGroundControl yang diambil langsung dari Pixhawk wahana (ArduSub 4.5.7),
+ * jadi nama, nilai, dan tipe yang tampil di SIM sama persis dengan yang nanti
+ * dilihat operator di kolam.
+ *
+ * Nol dependency baru — sama seperti keputusan frame-store di fitur Replay.
+ */
+
+const fs = require("fs");
+const path = require("path");
+
+const DUMP_PATH = path.join(__dirname, "..", "parameters_ardusub.params");
+
+// Padanan rov_params.PARAM_TYPES di sisi Python. Nilai enum MAV_PARAM_TYPE
+// bagian dari wire format MAVLink, jadi aman disalin.
+const INTEGER_TYPES = new Set([1, 2, 3, 4, 5, 6, 7, 8]);
+const KNOWN_TYPES = new Set([...INTEGER_TYPES, 9, 10]);
+
+const PARAM_NAME_MAX = 16;
+
+/* Batasi ukuran satu batch persis seperti rov_agent.PARAM_BATCH_SIZE, supaya
+   perilaku progresif yang dilihat GUI di SIM sama dengan di wahana nyata. */
+const BATCH_SIZE = 50;
+const BATCH_INTERVAL_MS = 60;
+
+/** Normalisasi nama param — padanan rov_params.normalize_param_name. */
+function normalizeName(name) {
+  if (typeof name !== "string") return null;
+  const c = name.trim().toUpperCase();
+  if (!c || c.length > PARAM_NAME_MAX) return null;
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(c)) return null;
+  return c;
+}
+
+/** Baca dump format QGroundControl -> Map(nama -> {value, ptype}). */
+function parseDump(text) {
+  const out = new Map();
+  for (const line of text.split(/\r?\n/)) {
+    const t = line.trim();
+    if (!t || t.startsWith("#")) continue;
+
+    const parts = t.split(/\s+/);
+    if (parts.length < 5) continue;
+
+    const name = normalizeName(parts[2]);
+    if (name === null) continue;
+
+    const value = Number(parts[3]);
+    const ptype = Number(parts[4]);
+    if (!Number.isFinite(value) || !KNOWN_TYPES.has(ptype)) continue;
+
+    out.set(name, { value, ptype });
+  }
+  return out;
+}
+
+class SimParams {
+  constructor(params) {
+    this.params = params;
+    // Urutan indeks dibekukan sekali: param_index/param_count yang dikirim ke
+    // GUI harus konsisten antar permintaan, kalau tidak progress bar melompat.
+    this.order = [...params.keys()];
+    this._timers = new Set();
+  }
+
+  static load(dumpPath = DUMP_PATH) {
+    return new SimParams(parseDump(fs.readFileSync(dumpPath, "utf8")));
+  }
+
+  get size() {
+    return this.params.size;
+  }
+
+  get(name) {
+    const key = normalizeName(name);
+    if (key === null) return null;
+    const entry = this.params.get(key);
+    return entry ? { name: key, ...entry } : null;
+  }
+
+  /** Satu entri siap kirim, lengkap dengan index/count. */
+  entryAt(i) {
+    const name = this.order[i];
+    const { value, ptype } = this.params.get(name);
+    return { name, value, ptype, index: i, count: this.order.length };
+  }
+
+  /**
+   * Tulis satu param. Mengembalikan {ok, reason, entry}.
+   *
+   * Menirukan perilaku ArduPilot yang penting untuk diuji di GUI: nama tak
+   * dikenal TIDAK diterima diam-diam, dan tipe integer dibulatkan sehingga
+   * nilai yang di-echo balik belum tentu sama dengan yang diketik operator.
+   */
+  set(name, value) {
+    const key = normalizeName(name);
+    if (key === null) return { ok: false, reason: "nama param tidak valid" };
+
+    const entry = this.params.get(key);
+    if (!entry) return { ok: false, reason: "param tidak dikenal di FC" };
+
+    let v = Number(value);
+    if (!Number.isFinite(v)) return { ok: false, reason: "nilai bukan angka" };
+
+    if (INTEGER_TYPES.has(entry.ptype)) v = Math.round(v);
+
+    entry.value = v;
+    return { ok: true, entry: { name: key, value: v, ptype: entry.ptype } };
+  }
+
+  /**
+   * Kirim seluruh tabel sebagai rentetan batch, meniru param_request_list yang
+   * datang bertahap dari FC (bukan sekaligus) supaya progress bar di GUI
+   * benar-benar teruji.
+   *
+   * `emit(msg)` dipanggil per batch. Mengembalikan fungsi pembatal.
+   */
+  streamAll(emit) {
+    let i = 0;
+    const total = this.order.length;
+
+    const timer = setInterval(() => {
+      if (i >= total) {
+        clearInterval(timer);
+        this._timers.delete(timer);
+        return;
+      }
+
+      const params = [];
+      for (let n = 0; n < BATCH_SIZE && i < total; n++, i++) {
+        params.push(this.entryAt(i));
+      }
+
+      emit({ type: "param_batch", params, done: i >= total });
+    }, BATCH_INTERVAL_MS);
+
+    this._timers.add(timer);
+    return () => { clearInterval(timer); this._timers.delete(timer); };
+  }
+
+  /** Hentikan semua stream yang sedang jalan (dipakai saat test selesai). */
+  stopAll() {
+    for (const t of this._timers) clearInterval(t);
+    this._timers.clear();
+  }
+}
+
+module.exports = { SimParams, parseDump, normalizeName, DUMP_PATH, BATCH_SIZE };

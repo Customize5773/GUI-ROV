@@ -7,6 +7,8 @@ import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
 import { replayPage } from "./pages/replay.js";
 import { setupPage, loadSetup } from "./pages/setup.js";
+import { vehiclePage } from "./pages/vehicle.js";
+import { analyzePage } from "./pages/analyze.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
@@ -51,6 +53,8 @@ const pages = {
   mission: $("page-mission"),
   telemetry: $("page-telemetry"),
   setup: $("page-setup"),
+  vehicle: $("page-vehicle"),
+  analyze: $("page-analyze"),
   joystick: $("page-joystick"),
   replay: $("page-replay"),
 };
@@ -63,6 +67,8 @@ const pageModules = {
   mission: missionPage,
   telemetry: telemetryPage,
   setup: setupPage,
+  vehicle: vehiclePage,
+  analyze: analyzePage,
   joystick: joystickPage,
   replay: replayPage,
 };
@@ -113,6 +119,14 @@ navLinks.forEach(link => {
     const pageName = link.getAttribute("data-page");
     showPage(pageName);
   });
+});
+
+/* Navigasi antar halaman dari dalam modul halaman (halaman Vehicle menautkan
+   ke Setup & Joystick alih-alih menduplikasi form-nya). Lewat event supaya
+   modul halaman tidak perlu mengimpor app.js — pola yang sama dengan
+   "hydroship:pool-depth" & "hydroship:camera-url". */
+window.addEventListener("hydroship:goto-page", (e) => {
+  if (e.detail && pages[e.detail]) showPage(e.detail);
 });
 
 // Restore last visited page on load
@@ -417,7 +431,28 @@ function connect() {
     // halaman Replay belum pernah dibuka.
     try { if (replayPage.onRecordStatus) replayPage.onRecordStatus(msg.data); } catch (e) {}
   }
+  /* Kanal QGC-lite. Semuanya diarahkan lewat toPage(), yang hanya mengirim ke
+     halaman yang SUDAH di-init — kedua halaman meminta datanya sendiri saat
+     dibuka, jadi pesan yang datang sebelum itu memang tidak ada gunanya. */
+  else if (msg.type === "param_batch") { toPage("vehicle", "onParamBatch", msg); }
+  else if (msg.type === "param_ack")   { toPage("vehicle", "onParamAck", msg); }
+  else if (msg.type === "mavlink_msg") { toPage("analyze", "onMavlinkMsg", msg); }
+  else if (msg.type === "statustext") {
+    // STATUSTEXT dari FC: inilah cara ArduSub melaporkan penolakan param &
+    // error pre-arm. Tanpa ini pesannya cuma muncul di stdout Raspberry Pi.
+    // severity MAVLink: 0..3 darurat/kritis, 4 warning, 5+ informasi.
+    const sev = Number(msg.severity);
+    log(`FC: ${msg.text}`, sev <= 3 ? "err" : sev === 4 ? "warn" : "");
+  }
 };
+}
+
+/* Kirim pesan ke satu modul halaman, hanya bila halaman itu sudah di-init. */
+function toPage(name, method, arg) {
+  if (!initedModules.has(name)) return;
+  const mod = pageModules[name];
+  if (!mod || !mod[method]) return;
+  try { mod[method](arg); } catch (e) { console.error(`${name}.${method} gagal`, e); }
 }
 
 let reconnectTimer = null;

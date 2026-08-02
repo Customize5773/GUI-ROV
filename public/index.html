@@ -44,6 +44,12 @@
         <a class="sidebar__link" href="#" data-page="setup" title="Setup & Config">
           <span class="sidebar__label">Setup</span>
         </a>
+        <a class="sidebar__link" href="#" data-page="vehicle" title="Vehicle Configuration (parameter ArduSub)">
+          <span class="sidebar__label">Vehicle</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="analyze" title="Analyze (MAVLink Inspector)">
+          <span class="sidebar__label">Analyze</span>
+        </a>
         <a class="sidebar__link" href="#" data-page="joystick" title="Joystick Control">
           <span class="sidebar__label">Joystick</span>
         </a>
@@ -288,10 +294,16 @@
         <!-- PAGE 5: SETUP (diisi oleh js/pages/setup.js) -->
         <div class="page page--setup" id="page-setup" data-page="setup" style="display:none;"></div>
 
-        <!-- PAGE 6: JOYSTICK (diisi oleh js/pages/joystick.js) -->
+        <!-- PAGE 6: VEHICLE (diisi oleh js/pages/vehicle.js) — parameter ArduSub -->
+        <div class="page page--vehicle" id="page-vehicle" data-page="vehicle" style="display:none;"></div>
+
+        <!-- PAGE 7: ANALYZE (diisi oleh js/pages/analyze.js) — MAVLink Inspector -->
+        <div class="page page--analyze" id="page-analyze" data-page="analyze" style="display:none;"></div>
+
+        <!-- PAGE 8: JOYSTICK (diisi oleh js/pages/joystick.js) -->
         <div class="page page--joystick" id="page-joystick" data-page="joystick" style="display:none;"></div>
 
-        <!-- PAGE 7: REPLAY (diisi oleh js/pages/replay.js) — rekam & putar ulang -->
+        <!-- PAGE 9: REPLAY (diisi oleh js/pages/replay.js) — rekam & putar ulang -->
         <div class="page page--replay" id="page-replay" data-page="replay" style="display:none;"></div>
 
       </div>
