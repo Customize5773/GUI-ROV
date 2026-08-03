@@ -229,6 +229,21 @@ gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
 gripper_lock = threading.Lock()
 
 # =========================
+# Rotate (pitch gripper)
+# =========================
+# Sama seperti gripper di atas: target diubah oleh handle_manipulator(),
+# rotate_sender() yang menggeser posisi servo perlahan lewat slew_toward()
+# supaya motor T-200 pitch tidak menyentak full-speed instan.
+ROTATE_SEND_INTERVAL = 0.1      # 10 Hz
+ROTATE_SEND_EPSILON = 1.0       # jangan spam MAVLink kalau beda < 1 PWM
+ROTATE_MAX_SPEED_PWM_S = 500.0  # bisa disetel beda dari grip kalau perlu
+ROTATE_EMA_ALPHA = 0.35
+
+rotate_target = float(SERVO_NEUTRAL)
+rotate_filtered = float(SERVO_NEUTRAL)
+rotate_lock = threading.Lock()
+
+# =========================
 # Parameter FC (halaman Vehicle)
 # =========================
 # PARAM_VALUE hanya ditangani di loop RX main(). Alasannya sama persis dengan
@@ -872,16 +887,17 @@ def handle_manipulator(device, action, direction):
 
     elif device == "rotate":
 
-        if action == "start":
+        global rotate_target
 
-            if direction == "left":
-                set_servo_pwm(ROTATE_CHANNEL, ROTATE_LEFT_PWM)
+        with rotate_lock:
+            if action == "start" and direction == "left":
+                rotate_target = ROTATE_LEFT_PWM
 
-            elif direction == "right":
-                set_servo_pwm(ROTATE_CHANNEL, ROTATE_RIGHT_PWM)
+            elif action == "start" and direction == "right":
+                rotate_target = ROTATE_RIGHT_PWM
 
-        elif action == "stop":
-            set_servo_pwm(ROTATE_CHANNEL, SERVO_NEUTRAL)
+            elif action == "stop":
+                rotate_target = SERVO_NEUTRAL
 
 def joystick_sender():
     """Kirim MANUAL_CONTROL 20 Hz.
@@ -972,6 +988,57 @@ def gripper_sender():
                 print("[GRIPPER] gagal kirim:", e)
 
         time.sleep(GRIPPER_SEND_INTERVAL)
+
+def rotate_sender():
+    """Gerakkan servo pitch gripper menuju target 10 Hz dgn rate-limit + EMA.
+
+    Pola sama persis dengan gripper_sender(): perintah dari GUI hanya
+    mengubah rotate_target, thread ini yang menggeser posisi servo sedikit
+    demi sedikit lewat rov_gripper.slew_toward(), supaya motor T-200 pitch
+    tidak menyentak full-speed instan seperti sebelumnya.
+    """
+    global rotate_filtered
+
+    last_sent_pwm = None
+    last_ts = time.time()
+
+    while True:
+        if master is None:
+            time.sleep(0.1)
+            last_ts = time.time()
+            continue
+
+        now = time.time()
+        dt = now - last_ts
+        last_ts = now
+
+        with rotate_lock:
+            target = rotate_target
+
+        rotate_filtered = slew_toward(
+            rotate_filtered, target, dt,
+            max_speed=ROTATE_MAX_SPEED_PWM_S, ema_alpha=ROTATE_EMA_ALPHA,
+        )
+
+        # Hanya kirim kalau posisi benar-benar berubah — hindari membanjiri
+        # link serial 115200 yang dipakai bersama telemetry.
+        if last_sent_pwm is None or abs(rotate_filtered - last_sent_pwm) >= ROTATE_SEND_EPSILON:
+            pwm = int(round(rotate_filtered))
+            try:
+                master.mav.command_long_send(
+                    master.target_system,
+                    master.target_component,
+                    mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+                    0,
+                    ROTATE_CHANNEL,
+                    pwm,
+                    0, 0, 0, 0, 0
+                )
+                last_sent_pwm = rotate_filtered
+            except Exception as e:
+                print("[ROTATE] gagal kirim:", e)
+
+        time.sleep(ROTATE_SEND_INTERVAL)
 
 # =========================
 # Main koneksi Pixhawk
@@ -1065,6 +1132,7 @@ def main():
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=gripper_sender, daemon=True).start()
+    threading.Thread(target=rotate_sender, daemon=True).start()
 
     last_send = 0
     last_hb = 0
