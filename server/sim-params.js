@@ -25,6 +25,71 @@ const KNOWN_TYPES = new Set([...INTEGER_TYPES, 9, 10]);
 
 const PARAM_NAME_MAX = 16;
 
+/* Padanan PID_PARAM_MAP di rov_pid.py — nama, rentang aman, dan urutan tulis
+   harus sama persis dengan sisi Python, kalau tidak mode SIM akan meloloskan
+   gain yang ditolak wahana (atau sebaliknya) dan justru menyembunyikan bug
+   yang seharusnya ketahuan sebelum turun ke kolam. */
+const PID_PARAM_MAP = [
+  ["yaw", "p", "ATC_RAT_YAW_P", 0.0, 1.0],
+  ["yaw", "i", "ATC_RAT_YAW_I", 0.0, 1.0],
+  ["yaw", "d", "ATC_RAT_YAW_D", 0.0, 0.05],
+  ["depth", "p", "PSC_ACCZ_P", 0.2, 1.5],
+  ["depth", "i", "PSC_ACCZ_I", 0.0, 3.0],
+  ["depth", "d", "PSC_ACCZ_D", 0.0, 0.4],
+];
+
+/**
+ * Terjemahkan payload command `pid` jadi daftar tulis + penolakan.
+ * Padanan rov_pid.resolve_pid_writes(). Mengembalikan {writes, rejects}.
+ */
+function resolvePidWrites(payload) {
+  const writes = [];
+  const rejects = [];
+
+  if (!payload || typeof payload !== "object") {
+    return { writes, rejects: [["pid", "payload bukan objek"]] };
+  }
+
+  const axisRejected = new Set();
+
+  for (const [axis, gain, name, lo, hi] of PID_PARAM_MAP) {
+    const section = payload[axis];
+    if (section === undefined || section === null) continue;
+    if (typeof section !== "object") {
+      if (!axisRejected.has(axis)) { axisRejected.add(axis); rejects.push([axis, "bagian bukan objek"]); }
+      continue;
+    }
+    if (!(gain in section)) continue;
+
+    const raw = section[gain];
+    /* Number(null), Number("") dan Number([]) semuanya 0 di JavaScript —
+       tanpa saringan ini gain kosong akan diam-diam ditulis sebagai 0,
+       sementara float(None) di rov_pid.py menolaknya. Dua sisi harus sepakat. */
+    if (raw === null || raw === "" || typeof raw === "boolean" || typeof raw === "object") {
+      rejects.push([name, `nilai bukan angka: ${raw}`]);
+      continue;
+    }
+
+    const value = Number(raw);
+    if (!Number.isFinite(value)) { rejects.push([name, `nilai bukan angka: ${raw}`]); continue; }
+
+    if (value < lo || value > hi) {
+      rejects.push([name,
+        `${value} di luar rentang aman ${lo}..${hi} — ` +
+        "periksa satuan (nilai ArduSub, bukan skala GUI lama)"]);
+      continue;
+    }
+
+    writes.push([name, value]);
+  }
+
+  if (!writes.length && !rejects.length) {
+    rejects.push(["pid", "tidak ada gain yang dikenali di payload"]);
+  }
+
+  return { writes, rejects };
+}
+
 /* Batasi ukuran satu batch persis seperti rov_agent.PARAM_BATCH_SIZE, supaya
    perilaku progresif yang dilihat GUI di SIM sama dengan di wahana nyata. */
 const BATCH_SIZE = 50;
@@ -152,4 +217,7 @@ class SimParams {
   }
 }
 
-module.exports = { SimParams, parseDump, normalizeName, DUMP_PATH, BATCH_SIZE };
+module.exports = {
+  SimParams, parseDump, normalizeName, resolvePidWrites,
+  DUMP_PATH, BATCH_SIZE, PID_PARAM_MAP,
+};

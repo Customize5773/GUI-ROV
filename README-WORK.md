@@ -64,9 +64,9 @@ ROLL · PITCH · TEMP · VOLT · LATENCY. Readout DEPTH **berkedip merah + alarm
 | `mode` | standby/drycal/manual/hold | tab mode pilot |
 | `controller` | Keyboard/Gamepad/Meta Quest | tab controller |
 | `thruster_config` | objek mixer/PWM/gain/reverse | Setup → Thruster |
-| `pid` | gain yaw/depth | Setup → PID |
-| `pool_depth` | meter | Setup → Test Pool |
-| `viewer_access` | true/false | Setup → Mobile Companion |
+| `pid` | gain yaw/depth | Setup → PID → tulis `ATC_RAT_YAW_*` + `PSC_ACCZ_*` (lihat §10) |
+| `pool_depth` | meter | Setup → Test Pool → batas bawah `depth_target` (lihat §10) |
+| `viewer_access` | true/false | Setup → Mobile Companion (murni sisi GUI/server) |
 | `param_list` | true | Vehicle → Muat Ulang Semua (minta seluruh tabel param FC) |
 | `param_get` | nama param | Vehicle (baca ulang satu param) |
 | `param_set` | `{name, value, type}` | Vehicle → edit nilai, **setelah gerbang konfirmasi** |
@@ -504,3 +504,77 @@ di-echo balik belum tentu sama dengan yang diketik operator.
 > (unpkg/jsdelivr) lewat importmap. Di venue tanpa internet, **seluruh dashboard gagal
 > dimuat** — bukan hanya grafiknya. Ini kondisi yang sudah ada sebelum fitur ini dan
 > belum diperbaiki di sini; lihat catatan di akhir §9 pada `Planning/PLAN-QgroundControl.md`.
+
+---
+
+## 10. PID & kedalaman kolam benar-benar sampai ke wahana
+
+Tombol **Apply PID Gains** dan **Apply Pool** di halaman Setup sudah ada sejak awal,
+tetapi `rov_agent.py` **tidak punya handler untuk keduanya** — command-nya jatuh ke
+`unknown command` dan **tidak berefek apa pun pada wahana**. Bagian ini menjelaskan
+kondisi setelah keduanya disambungkan.
+
+### 10.1 PID → parameter ArduSub
+
+| Kolom di Setup | Parameter ArduSub | Rentang aman yang diterima |
+|---|---|---|
+| Yaw P / I / D | `ATC_RAT_YAW_P` / `_I` / `_D` | 0–1 · 0–1 · 0–0.05 |
+| Depth P / I / D | `PSC_ACCZ_P` / `_I` / `_D` | 0.2–1.5 · 0–3 · 0–0.4 |
+
+**Kenapa depth → `PSC_ACCZ_*`.** Depth hold ArduSub adalah kaskade tiga loop
+(`PSC_POSZ` → `PSC_VELZ` → `PSC_ACCZ`); tidak ada satu "PID depth". `ACCZ` dipilih
+karena itu knob tuning depth-hold standar di panduan ArduPilot **dan** satu-satunya dari
+ketiganya yang punya P, I, dan D lengkap, sehingga form 3 kolom cocok apa adanya tanpa
+kolom yang menganggur.
+
+**Nilai di form dibaca dari FC, bukan dari GUI.** Halaman Setup mengirim `param_get`
+untuk keenam param setiap kali dibuka; badge **Dari FC · <jam>** menandai kapan terakhir
+dibaca, dan tombol **Baca dari FC** memuat ulang manual. Gain **tidak lagi disimpan ke
+localStorage** — sumber kebenarannya flight controller.
+
+> **Kenapa ini penting.** Default PID lama di `public/js/config.js` bukan satuan ArduSub:
+> `yaw.p = 2.0` padahal `ATC_RAT_YAW_P` di wahana **0.18** (~11×), `depth.p = 10.0`
+> padahal `PSC_ACCZ_P` **0.5** (~20×). Kalau `pid` disambungkan begitu saja, sekali klik
+> Apply PID bisa membuat wahana berosilasi hebat. Karena itu ada dua lapis pengaman:
+> form selalu mulai dari nilai FC, dan `rov_pid.py` **menolak** (bukan menjepit) nilai di
+> luar rentang. Menjepit diam-diam akan membuat operator mengira menulis 2.0 padahal yang
+> masuk 1.0 — salah paham yang lebih berbahaya daripada perintah yang gagal terang-terangan.
+
+Rentang di tabel atas **ditulis tangan**, bukan dibaca dari metadata param (metadata
+ArduSub memang tidak tersedia offline — lihat `Planning/PLAN-QgroundControl.md` §6).
+Tujuannya menyaring kesalahan besaran, **bukan** menjamin kestabilan: menyetel gain tetap
+butuh uji kolam. Gain yang ditolak dilaporkan per-param di console dashboard lengkap
+dengan alasannya; yang lolos ditulis lewat `set_param()` yang sama dengan halaman Vehicle,
+jadi ikut terverifikasi lewat echo `PARAM_VALUE`.
+
+Untuk param di luar keenam gain ini, pakai halaman **Vehicle** (§9.1) — form Setup hanya
+pintasan ke enam param yang sama.
+
+### 10.2 `pool_depth` membatasi setpoint kedalaman
+
+Sebelumnya `depth_target` hanya dibatasi di 0 m (permukaan) dan **tidak punya batas
+bawah**: di kolam KKI 0.9 m, menahan `gain_inc` bisa menyetel target belasan meter.
+Bias throttle memang dibatasi `DEPTH_BIAS_LIMIT` sehingga bukan runaway, tapi ROV tetap
+ditekan ke dasar tanpa henti dan target butuh puluhan penekanan `gain_dec` untuk kembali
+masuk akal.
+
+Sekarang `pool_depth` jadi batas bawahnya (`rov_pid.clamp_depth_target`), berlaku di dua
+tempat `depth_target` disetel: tombol `gain_inc`/`gain_dec` dan inisialisasi saat masuk
+mode depth-hold. Memperkecil pool depth saat target sudah lebih dalam **langsung**
+menurunkan target, tidak menunggu penekanan tombol berikutnya.
+
+Dashboard mengirim `pool_depth` otomatis setiap kali WebSocket tersambung (bukan hanya
+saat Apply ditekan), supaya jepitan ini aktif juga setelah `rov_agent.py` restart.
+Nilai yang benar-benar diketahui wahana dipantulkan balik di telemetry sebagai
+`pool_depth` — `null` berarti jepitan belum aktif.
+
+### 10.3 Testing
+
+- `python3 -m unittest test_rov_pid -v` — pemetaan gain, penolakan nilai di luar rentang,
+  jepitan `depth_target`, dan **regresi eksplisit bahwa default GUI lama ditolak**.
+- `cd server && npm test` — mock SIM memakai nama param & rentang yang sama dengan sisi
+  Python; ada test yang menjaga keduanya tetap sepakat.
+- Manual di `node server.js --sim`: buka **Setup**, kolom PID harus terisi `0.18/0.018/0`
+  dan `0.5/0.1/0` (nilai FC), bukan `2.0/10.0`. Isi `ATC_RAT_YAW_P` dengan `2.0` → ditolak
+  dengan alasan jelas dan nilai di halaman **Vehicle** tidak berubah. Ketik angka lalu
+  pindah ke halaman Vehicle dan kembali → angka yang belum di-Apply tidak tertimpa.

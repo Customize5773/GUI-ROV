@@ -6,13 +6,31 @@ import { log, sendCmd, wsSend } from "../core.js";
 
 const LS_KEY = "hydroship-setup";
 
+/* Padanan PID_PARAM_MAP di rov_pid.py. Ketiga sisi (agent, mock SIM, GUI)
+   harus memakai nama param yang sama; kalau berbeda, form akan diam-diam
+   menampilkan gain yang bukan gain yang ditulis. */
+const PID_FIELD_BY_PARAM = {
+  ATC_RAT_YAW_P: { id: "suYawP", path: ["yaw", "p"] },
+  ATC_RAT_YAW_I: { id: "suYawI", path: ["yaw", "i"] },
+  ATC_RAT_YAW_D: { id: "suYawD", path: ["yaw", "d"] },
+  PSC_ACCZ_P: { id: "suDepP", path: ["depth", "p"] },
+  PSC_ACCZ_I: { id: "suDepI", path: ["depth", "i"] },
+  PSC_ACCZ_D: { id: "suDepD", path: ["depth", "d"] },
+};
+const PID_PARAM_NAMES = Object.keys(PID_FIELD_BY_PARAM);
+
 function saveSetup() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
       TEAM_NAME: CONFIG.TEAM_NAME, UNIVERSITY: CONFIG.UNIVERSITY,
-      CAMERAS: CONFIG.CAMERAS, THRUSTER: CONFIG.THRUSTER, PID: CONFIG.PID,
+      CAMERAS: CONFIG.CAMERAS, THRUSTER: CONFIG.THRUSTER,
       POOL_DEPTH: CONFIG.POOL_DEPTH, DANGER_DEPTH: CONFIG.DANGER_DEPTH,
     }));
+    /* PID SENGAJA TIDAK ikut disimpan: sumber kebenarannya sekarang flight
+       controller, dibaca ulang tiap kali halaman ini dibuka. Menyimpannya
+       berarti nilai basi di localStorage bisa menimpa nilai FC yang benar —
+       termasuk skala LAMA yang berbahaya (yaw.p 2.0) dari versi sebelum
+       gain dipetakan ke param ArduSub. */
   } catch (_) {}
 }
 export function loadSetup() {
@@ -23,7 +41,8 @@ export function loadSetup() {
     if (typeof s.UNIVERSITY === "string") CONFIG.UNIVERSITY = s.UNIVERSITY;
     if (Array.isArray(s.CAMERAS)) CONFIG.CAMERAS = s.CAMERAS;
     if (s.THRUSTER) Object.assign(CONFIG.THRUSTER, s.THRUSTER);
-    if (s.PID) CONFIG.PID = s.PID;
+    // s.PID sengaja DIABAIKAN — lihat catatan di saveSetup(). Entri lama yang
+    // masih ada di localStorage operator lama ikut terbuang di sini.
     if (Number.isFinite(s.POOL_DEPTH)) CONFIG.POOL_DEPTH = s.POOL_DEPTH;
     if (Number.isFinite(s.DANGER_DEPTH)) CONFIG.DANGER_DEPTH = s.DANGER_DEPTH;
   } catch (_) {}
@@ -97,16 +116,24 @@ export const setupPage = {
           <div class="card">
             <span class="panel__eyebrow">PID SETUP</span>
             <h3 class="card__title">Hold Control Gains</h3>
-            <p class="card__desc">Gain kontrol hold untuk Yaw &amp; Depth.</p>
-            <label class="card__label">Yaw</label>
+            <p class="card__desc">
+              Gain kontrol hold Yaw &amp; Depth. Nilainya dibaca langsung dari flight
+              controller — Yaw = <code>ATC_RAT_YAW_*</code>, Depth = <code>PSC_ACCZ_*</code>.
+              Untuk param lain pakai halaman <b>Vehicle</b>.
+            </p>
+            <span class="badge" id="suPidSrc">Belum dibaca dari FC</span>
+            <label class="card__label">Yaw <small>ATC_RAT_YAW</small></label>
             <div class="card__row card__row--wrap">
-              ${numField("suYawP", "P", P.yaw.p, "0.1")} ${numField("suYawI", "I", P.yaw.i, "0.01")} ${numField("suYawD", "D", P.yaw.d, "0.1")}
+              ${numField("suYawP", "P", P.yaw.p, "0.01")} ${numField("suYawI", "I", P.yaw.i, "0.001")} ${numField("suYawD", "D", P.yaw.d, "0.001")}
             </div>
-            <label class="card__label">Depth</label>
+            <label class="card__label">Depth <small>PSC_ACCZ</small></label>
             <div class="card__row card__row--wrap">
-              ${numField("suDepP", "P", P.depth.p, "0.1")} ${numField("suDepI", "I", P.depth.i, "0.01")} ${numField("suDepD", "D", P.depth.d, "0.1")}
+              ${numField("suDepP", "P", P.depth.p, "0.01")} ${numField("suDepI", "I", P.depth.i, "0.01")} ${numField("suDepD", "D", P.depth.d, "0.01")}
             </div>
-            <button class="btn-wide" id="suApplyPid">Apply PID Gains</button>
+            <div class="card__row">
+              <button class="btn-wide btn-wide--inline" id="suApplyPid">Apply PID Gains</button>
+              <button class="chip" id="suReadPid">Baca dari FC</button>
+            </div>
           </div>
 
           <!-- TEST POOL -->
@@ -210,12 +237,51 @@ export const setupPage = {
     };
 
     /* PID */
+    this.els.pidSrc = root.querySelector("#suPidSrc");
+
+    /* Tandai kolom yang sudah disentuh operator tapi belum di-Apply, supaya
+       param_batch yang masuk belakangan tidak menghapus angka yang sedang
+       disiapkan. Menjaga `document.activeElement` saja tidak cukup: begitu
+       operator mengklik kolom lain, fokusnya pindah dan nilainya jadi rawan
+       tertimpa oleh batch berikutnya (mis. saat halaman Vehicle memuat ulang
+       seluruh tabel param). */
+    this.pidDirty = new Set();
+    for (const name of PID_PARAM_NAMES) {
+      const input = root.querySelector(`#${PID_FIELD_BY_PARAM[name].id}`);
+      if (input) input.addEventListener("input", () => this.pidDirty.add(name));
+    }
+
+    // Tombol ini niat eksplisit operator untuk membuang draft dan memakai
+    // nilai FC — jadi boleh menimpa kolom yang sudah disentuh.
+    root.querySelector("#suReadPid").onclick = () => {
+      this.pidDirty.clear();
+      this.readPidFromVehicle();
+    };
+
     root.querySelector("#suApplyPid").onclick = () => {
-      const g = (id) => parseFloat(root.querySelector(id).value) || 0;
-      CONFIG.PID = { yaw: { p: g("#suYawP"), i: g("#suYawI"), d: g("#suYawD") }, depth: { p: g("#suDepP"), i: g("#suDepI"), d: g("#suDepD") } };
-      saveSetup();
+      /* Sengaja BUKAN `parseFloat(...) || 0`: kolom kosong atau salah ketik
+         akan diam-diam jadi 0, dan 0 adalah nilai yang sah untuk beberapa gain
+         (mis. ATC_RAT_YAW_P = 0 mematikan kendali rate yaw). Kolom yang tidak
+         berisi angka harus menggagalkan perintah, bukan menulis 0. */
+      const kosong = [];
+      const g = (id, label) => {
+        const v = parseFloat(root.querySelector(id).value);
+        if (!Number.isFinite(v)) kosong.push(label);
+        return v;
+      };
+      const next = {
+        yaw: { p: g("#suYawP", "Yaw P"), i: g("#suYawI", "Yaw I"), d: g("#suYawD", "Yaw D") },
+        depth: { p: g("#suDepP", "Depth P"), i: g("#suDepI", "Depth I"), d: g("#suDepD", "Depth D") },
+      };
+      if (kosong.length) { log(`PID tidak dikirim — kolom kosong/tidak valid: ${kosong.join(", ")}`, "warn"); return; }
+
+      CONFIG.PID = next;
+      // Sudah dikirim: kolom tidak lagi "draft", jadi echo dari FC boleh
+      // menimpanya (dan memang harus — itu bukti nilai benar-benar masuk).
+      this.pidDirty.clear();
+      // PID tidak ikut saveSetup(): sumber kebenarannya FC, bukan localStorage.
       sendCmd("pid", CONFIG.PID);
-      log("PID dikirim", "ok");
+      log("PID dikirim — menunggu konfirmasi FC", "");
     };
 
     /* POOL + DANGER */
@@ -249,5 +315,52 @@ export const setupPage = {
       sendCmd("viewer_access", open);
       log(`Viewer access ${open ? "dibuka" : "ditutup"}`, open ? "ok" : "warn");
     };
+
+    this.readPidFromVehicle();
+  },
+
+  /* Baca ulang tiap kali halaman dibuka: init() hanya jalan sekali seumur
+     sesi, jadi tanpa ini form jadi basi setelah FC tersambung ulang atau
+     setelah param diubah dari halaman Vehicle. */
+  onShow() { this.readPidFromVehicle(); },
+
+  readPidFromVehicle() {
+    for (const name of PID_PARAM_NAMES) sendCmd("param_get", name);
+  },
+
+  /* Isi kolom PID dari PARAM_VALUE yang dikirim wahana.
+     Dicocokkan berdasarkan NAMA, bukan `index`: di wahana nyata jawaban
+     param_get lewat jalur batch yang sama dengan param_list sehingga membawa
+     index asli dari FC, sedangkan mock SIM mengirim -1. Nama satu-satunya
+     kunci yang konsisten di kedua sisi. */
+  onParamBatch(msg) {
+    if (!msg || !Array.isArray(msg.params) || !this.els.pidSrc) return;
+
+    let terisi = 0;
+    for (const p of msg.params) {
+      const field = PID_FIELD_BY_PARAM[p && p.name];
+      if (!field) continue;
+
+      const input = document.getElementById(field.id);
+      if (!input || !Number.isFinite(Number(p.value))) continue;
+
+      /* Jangan menimpa yang sedang disiapkan operator. param_batch bisa datang
+         kapan saja — terutama saat halaman Vehicle memuat ulang seluruh tabel
+         param — dan menimpa angka yang sedang diketik akan menghapusnya tanpa
+         jejak. Tombol "Baca dari FC" membersihkan penanda ini kalau operator
+         memang ingin membuang draft-nya. */
+      if (document.activeElement === input || this.pidDirty.has(p.name)) continue;
+
+      input.value = String(Number(Number(p.value).toFixed(6)));
+      const [axis, gain] = field.path;
+      CONFIG.PID[axis][gain] = Number(p.value);
+      terisi++;
+    }
+
+    if (terisi) {
+      const jam = new Date().toLocaleTimeString();
+      this.els.pidSrc.textContent = `Dari FC · ${jam}`;
+      this.els.pidSrc.className = "badge badge--ok";
+    }
   },
 };

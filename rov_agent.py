@@ -16,6 +16,7 @@ from rov_params import (
     param_type_name,
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
+from rov_pid import clamp_depth_target, resolve_pid_writes, valid_pool_depth
 from attitude_filter import AttitudeFilter
 from rov_gripper import (
     GRIPPER_PWM_NEUTRAL,
@@ -110,6 +111,13 @@ depth_target = 0.0
 DEPTH_STEP = 0.10
 depth_lock = threading.Lock()
 
+# Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
+# None = belum diberi tahu -> depth_target hanya dibatasi di permukaan, persis
+# perilaku sebelumnya. Begitu diisi, jadi batas bawah depth_target (lihat
+# rov_pid.clamp_depth_target): di kolam 0.9 m, menahan gain_inc tanpa batas ini
+# menyetel target belasan meter dan menekan ROV ke dasar tanpa henti.
+pool_depth = None
+
 # Mode yang TERAKHIR DIMINTA lewat set_mode. state["mode"] hanya ter-update saat
 # HEARTBEAT datang, jadi tanpa ini gain_inc/gain_dec yang ditekan tepat setelah
 # ganti mode akan diabaikan diam-diam.
@@ -189,6 +197,7 @@ GUI_ONLY_COMMANDS = frozenset({
     "set_surface",    # reset acuan permukaan (dihitung sisi GUI)
     "snapshot",       # tangkapan frame di browser
     "record",         # perekaman di browser
+    "viewer_access",  # buka/tutup akses viewer mobile — murni sisi server/GUI
 })
 
 # =========================
@@ -274,6 +283,10 @@ def send_telemetry():
     with depth_lock:
         state["depth_target"] = depth_target
 
+    # Dipantulkan supaya operator bisa memastikan wahana benar-benar TAHU
+    # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
+    state["pool_depth"] = pool_depth
+
     send_to_gui(state)
 
     now = time.time()
@@ -341,6 +354,7 @@ def command_listener():
     global requested_mode
     global current_control_mode
     global mavlink_stream_requested_at
+    global pool_depth
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -422,7 +436,11 @@ def command_listener():
                 # setpoint awal. Di MANUAL/ACRO depth_target tidak dipakai.
                 if depth_hold_allowed(pixhawk_mode):
                     with depth_lock:
-                        depth_target = state["depth"]
+                        # Dijepit juga di sini: pembacaan depth bisa melewati
+                        # dasar kolam (drift barometer / kalibrasi permukaan
+                        # belum diset), dan target awal yang di luar batas
+                        # membuat bias throttle langsung menekan ke bawah.
+                        depth_target = clamp_depth_target(state["depth"], pool_depth)
                     print(f"[DEPTH] Target initialized = {depth_target:.2f} m")
 
                 print("====================================")
@@ -454,9 +472,54 @@ def command_listener():
 
                 step = DEPTH_STEP if name == "gain_inc" else -DEPTH_STEP
                 with depth_lock:
-                    depth_target = max(0.0, depth_target + step)
+                    depth_target = clamp_depth_target(depth_target + step, pool_depth)
                     shown = depth_target
                 print(f"[DEPTH] Target = {shown:.2f} m")
+
+            elif name == "pool_depth":
+
+                # Kedalaman kolam uji. Bukan cuma catatan: jadi batas bawah
+                # depth_target (lihat rov_pid.clamp_depth_target).
+                depth_m = valid_pool_depth(value)
+                if depth_m is None:
+                    print(f"[POOL] nilai pool_depth tidak valid: {value!r}")
+                    continue
+
+                pool_depth = depth_m
+
+                # Jepit ULANG target yang sedang berjalan. Kalau operator
+                # memperkecil pool depth saat target sudah lebih dalam, target
+                # harus ikut turun sekarang — bukan menunggu penekanan
+                # gain_inc/gain_dec berikutnya.
+                with depth_lock:
+                    depth_target = clamp_depth_target(depth_target, pool_depth)
+                    shown = depth_target
+                print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
+                      f"(target dijepit ke {shown:.2f} m)")
+
+            elif name == "pid":
+
+                # Gain yaw/depth dari Setup -> param ArduSub. Pemetaan dan batas
+                # aman ada di rov_pid.py (dengan alasannya); di sini hanya
+                # eksekusi + pelaporan.
+                writes, rejects = resolve_pid_writes(value)
+
+                for param, reason in rejects:
+                    print(f"[PID] DITOLAK {param}: {reason}")
+                    send_to_gui({
+                        "type": "param_ack",
+                        "name": param,
+                        "ok": False,
+                        "reason": reason,
+                    })
+
+                if writes:
+                    # Thread terpisah dengan alasan yang sama seperti
+                    # thruster_config: loop param_set_send + sleep menahan
+                    # listener ini ~0.6 s dan membuat axis/mode ikut tertunda.
+                    threading.Thread(
+                        target=apply_pid_gains, args=(writes,), daemon=True
+                    ).start()
 
             elif name == "thruster_config":
 
@@ -610,6 +673,23 @@ def apply_thruster_config(motors):
         print("[PARAM] Thruster configuration updated.")
     except Exception as e:
         print("[PARAM] gagal set thruster config:", e)
+
+
+def apply_pid_gains(writes):
+    """Tulis gain PID yang sudah lolos validasi rov_pid.resolve_pid_writes().
+
+    Bentuknya sengaja kembar dengan apply_thruster_config(): primitif yang sama
+    (set_param), jeda yang sama antar tulis, dan verifikasi echo yang sama.
+    """
+    try:
+        for param, value, type_id in writes:
+            set_param(param, value, type_id)
+            # Jeda ada di pemanggil batch, bukan di set_param(): menulis enam
+            # param beruntun tanpa jeda membuat FC menjatuhkan sebagian.
+            time.sleep(0.1)
+        print(f"[PID] {len(writes)} gain dikirim ke FC.")
+    except Exception as e:
+        print("[PID] gagal set gain:", e)
 
 
 def handle_param_value(msg, now):

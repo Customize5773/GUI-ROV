@@ -391,6 +391,12 @@ function connect() {
     linkStale = false;
     setLink("on"); log("Terhubung ke server", "ok"); stopDemo();
     sendPing();
+    /* Beri tahu wahana kedalaman kolamnya. Di sisi ROV nilai ini membatasi
+       depth_target supaya menahan gain_inc tidak bisa menyetel setpoint jauh
+       melewati dasar. Dikirim di onopen (bukan sekali saat load) supaya ikut
+       terkirim ulang setelah reconnect — rov_agent.py kehilangan nilainya
+       kalau prosesnya sempat restart. */
+    if (Number.isFinite(CONFIG.POOL_DEPTH)) sendCmd("pool_depth", CONFIG.POOL_DEPTH, true);
   };
   ws.onclose = () => {
     linkStale = false;
@@ -434,8 +440,20 @@ function connect() {
   /* Kanal QGC-lite. Semuanya diarahkan lewat toPage(), yang hanya mengirim ke
      halaman yang SUDAH di-init — kedua halaman meminta datanya sendiri saat
      dibuka, jadi pesan yang datang sebelum itu memang tidak ada gunanya. */
-  else if (msg.type === "param_batch") { toPage("vehicle", "onParamBatch", msg); }
-  else if (msg.type === "param_ack")   { toPage("vehicle", "onParamAck", msg); }
+  else if (msg.type === "param_batch") {
+    toPage("vehicle", "onParamBatch", msg);
+    // Setup ikut mendengarkan: keenam gain PID-nya adalah param FC juga, jadi
+    // form-nya ikut ter-update walau param diubah dari halaman Vehicle.
+    toPage("setup", "onParamBatch", msg);
+  }
+  else if (msg.type === "param_ack") {
+    /* log() di sini, BUKAN di dalam halaman: hasil Apply PID harus tetap
+       terlihat di console walau halaman Vehicle belum pernah dibuka —
+       toPage() membuang pesan untuk halaman yang belum di-init. */
+    if (msg.ok) log(`Param ${msg.name} tersimpan di FC`, "ok");
+    else log(`Param ${msg.name} GAGAL: ${msg.reason || "ditolak FC"}`, "err");
+    toPage("vehicle", "onParamAck", msg);
+  }
   else if (msg.type === "mavlink_msg") { toPage("analyze", "onMavlinkMsg", msg); }
   else if (msg.type === "statustext") {
     // STATUSTEXT dari FC: inilah cara ArduSub melaporkan penolakan param &
