@@ -10,7 +10,7 @@ import { setupPage, loadSetup } from "./pages/setup.js";
 import { vehiclePage } from "./pages/vehicle.js";
 import { analyzePage } from "./pages/analyze.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
-import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,} from "./joystick-state.js";
+import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,getButtonPressed,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
 import {
   ACRO_CONFIRM,
@@ -49,6 +49,8 @@ const els = {
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   depthTarget: $("vDepthTarget"),
   modeActual: $("modeActual"), modeWarn: $("modeWarn"),
+  acroModal: $("acroModal"), acroModalBody: $("acroModalBody"),
+  acroModalConfirm: $("acroModalConfirm"), acroModalCancel: $("acroModalCancel"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -772,16 +774,57 @@ function requestPilotMode(mode, label) {
   // Berlaku untuk SEMUA jalur input (tab GUI maupun tombol gamepad) — lihat
   // case "mode_acro" di executeJoystickAction, yang memanggil fungsi ini
   // juga supaya gerbang konfirmasi konsisten di kedua sisi.
-  if (mode === "acro" && !confirm(ACRO_CONFIRM)) {
-    log("Mode ACRO dibatalkan", "warn");
+  //
+  // Konfirmasi dipecah jadi async (confirmAcroEntry) karena salah satu
+  // jalurnya (modal gamepad) TIDAK BOLEH memblokir thread — beda dari
+  // confirm() bawaan browser yang sinkron.
+  if (mode === "acro") {
+    confirmAcroEntry((ok) => {
+      if (!ok) { log("Mode ACRO dibatalkan", "warn"); return; }
+      doRequestPilotMode(mode, label);
+    });
     return;
   }
+  doRequestPilotMode(mode, label);
+}
+
+function doRequestPilotMode(mode, label) {
   requestPilotMode.pending = mode;
   requestPilotMode.pendingSince = performance.now();
   sendCmd("pilot_mode", mode);
   log(`Minta mode pilot: ${label}`, "ok");
   syncModeTabs(lastPilotMode);
 }
+
+/* Gerbang konfirmasi ACRO. Modal DOM kustom (bukan confirm() bawaan) HANYA
+   dipakai saat operator benar-benar mengendalikan lewat gamepad yang
+   tersambung — supaya tombol X/B pad bisa menutupnya tanpa mengunci thread
+   JS (confirm() memblokir pollGamepad(), lihat sana). Kalau tab "Gamepad"
+   dipilih tapi belum ada pad tersambung, modal itu tidak bisa ditutup lewat
+   apa pun selain mouse — jadi tetap jatuh ke confirm() native di kasus itu. */
+let acroModalCallback = null; // null = modal tertutup
+
+function confirmAcroEntry(callback) {
+  if (activeController !== "Gamepad" || !joystickState.connected) {
+    callback(confirm(ACRO_CONFIRM));
+    return;
+  }
+  els.acroModalBody.textContent = ACRO_CONFIRM;
+  els.acroModal.hidden = false;
+  acroModalCallback = callback;
+  acroModalPrevX = false; // reset edge detector supaya X yang masih ditahan
+  acroModalPrevB = false; // dari aksi SEBELUMNYA tidak langsung memicu modal
+}
+
+function closeAcroModal(result) {
+  els.acroModal.hidden = true;
+  const cb = acroModalCallback;
+  acroModalCallback = null;
+  if (cb) cb(result);
+}
+
+els.acroModalConfirm.onclick = () => closeAcroModal(true);
+els.acroModalCancel.onclick = () => closeAcroModal(false);
 
 // ARDUSUB_MODE_TO_TAB / RISKY_ARDUSUB_MODES / ACRO_CONFIRM sekarang di
 // shared/rov-modes.js (padanan rov_modes.py sisi Python), diimpor di atas.
@@ -1292,6 +1335,12 @@ function warnNonStandardOnce() {
 
 window.addEventListener("gamepaddisconnected", () => { warnedNonStandard = false; });
 
+/* Edge detector tombol X (index 2) / B (index 1) untuk modal ACRO — state
+   lokal terpisah dari gpBtnPrev supaya tidak ikut ter-commit oleh
+   commitButtonCache() (lihat komentar di processMappedGamepadButtons). */
+let acroModalPrevX = false;
+let acroModalPrevB = false;
+
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
 
@@ -1301,6 +1350,24 @@ function pollGamepad() {
 
   // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
   updateJoystickStateFromGamepad();
+
+  if (acroModalCallback) {
+    // Modal ACRO terbuka: HANYA X (OK) / B (Batal) yang berfungsi, dibaca
+    // LANGSUNG dari tombol mentah — bukan lewat buttonConfig — supaya tetap
+    // bekerja walau operator sudah memetakan ulang tombol 1/2 ke aksi lain.
+    // Semua aksi lain (axis, mode lain, gain, dll) sengaja tidak diproses
+    // selama modal terbuka: mencegah input tak sengaja saat operator masih
+    // membaca peringatan. Ini TIDAK berkaitan dengan kemampuan pindah mode
+    // setelah ACRO benar-benar aktif — itu alur terpisah lewat
+    // requestPilotMode() yang berjalan normal setelah modal ini ditutup.
+    const x = getButtonPressed(2);
+    const b = getButtonPressed(1);
+    if (x && !acroModalPrevX) closeAcroModal(true);
+    else if (b && !acroModalPrevB) closeAcroModal(false);
+    acroModalPrevX = x;
+    acroModalPrevB = b;
+    return;
+  }
 
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
@@ -1387,6 +1454,10 @@ window.addEventListener("gamepaddisconnected", (e) => {
   if (activeController === "Gamepad") {
     neutralizeGamepadAxes();
   }
+
+  // Failsafe: tanpa ini modal ACRO menggantung selamanya kalau pad putus
+  // (baterai habis, kabel lepas) tepat saat operator sedang memutuskan.
+  if (acroModalCallback) closeAcroModal(false);
 });
 
 /* Satu loop saja: pollGamepad menyegarkan joystickState (dipakai badge,
