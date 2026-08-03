@@ -8,6 +8,14 @@ from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
 from rov_modes import ACRO_WARNING, depth_hold_allowed, is_risky_mode, resolve_pilot_mode
+from rov_params import (
+    coerce_param_value,
+    decode_param_id,
+    normalize_param_name,
+    param_matches,
+    param_type_name,
+)
+from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from attitude_filter import AttitudeFilter
 from rov_gripper import (
     GRIPPER_PWM_NEUTRAL,
@@ -196,7 +204,64 @@ gripper_target = float(GRIPPER_PWM_NEUTRAL)
 gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
 gripper_lock = threading.Lock()
 
+# =========================
+# Parameter FC (halaman Vehicle)
+# =========================
+# PARAM_VALUE hanya ditangani di loop RX main(). Alasannya sama persis dengan
+# COMMAND_ACK: recv_match(blocking=True) di thread command akan memblokir
+# thread itu DAN mencuri pesan dari loop utama.
+#
+# Satu param_request_list ArduSub = ~980 PARAM_VALUE. Mengirimnya satu per satu
+# berarti ~980 datagram UDP + ~980 frame WebSocket; dikumpulkan dulu jadi batch
+# supaya browser tidak kebanjiran.
+PARAM_BATCH_SIZE = 50
+PARAM_BATCH_INTERVAL = 0.2      # flush walau batch belum penuh
+PARAM_ACK_TIMEOUT = 2.0         # ArduPilot DIAM saat menolak — timeout satu-satunya sinyal gagal
+
+_param_batch = []
+_param_batch_ts = 0.0
+_param_lock = threading.Lock()
+
+# nama -> (nilai_yang_dikirim, type_id, deadline)
+pending_params = {}
+
+# =========================
+# Stream MAVLink generik (halaman Analyze)
+# =========================
+# Mati secara default: menyalakannya berarti setiap message dari MAV_DATA_STREAM_ALL
+# ikut dikirim ke GUI. Halaman Analyze menyalakannya saat dibuka dan memperbarui
+# permintaan tiap 10 detik; tanpa pembaruan itu stream mati sendiri (lihat
+# stream_still_wanted) supaya tab yang ditutup mendadak tidak meninggalkan
+# firehose yang tidak ada yang mendengarkan.
+mavlink_stream_requested_at = None
+_mav_rate = RateLimiter()
+
 _last_telem_log = 0.0
+
+def send_to_gui(obj):
+    """Kirim satu pesan JSON ke laptop lewat socket telemetry.
+
+    Aturan envelope (dipakai juga oleh server.js saat merutekan):
+      - telemetry  : dict `state` TELANJANG, tanpa field "type"
+      - selain itu : selalu punya field "type" (param_batch, param_ack,
+                     mavlink_msg, statustext)
+
+    Telemetry sengaja dibiarkan tanpa "type" supaya server lama/baru tetap
+    saling kompatibel dan tap perekam Replay tidak ikut berubah.
+    """
+    try:
+        payload = json.dumps(obj, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError) as e:
+        # Satu pesan yang tidak bisa diserialisasi tidak boleh mematikan
+        # seluruh loop RX.
+        print("[UDP] gagal serialisasi pesan ke GUI:", e)
+        return
+
+    try:
+        telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
+    except OSError as e:
+        print("[UDP] gagal kirim ke GUI:", e)
+
 
 def send_telemetry():
     """Kirim state ke laptop 10 Hz, tapi LOG hanya 1 Hz.
@@ -209,8 +274,7 @@ def send_telemetry():
     with depth_lock:
         state["depth_target"] = depth_target
 
-    payload = json.dumps(state).encode("utf-8")
-    telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
+    send_to_gui(state)
 
     now = time.time()
     if now - _last_telem_log >= 1.0:
@@ -276,6 +340,7 @@ def command_listener():
     global depth_target
     global requested_mode
     global current_control_mode
+    global mavlink_stream_requested_at
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -403,6 +468,73 @@ def command_listener():
                     target=apply_thruster_config, args=(motors,), daemon=True
                 ).start()
 
+            elif name == "param_list":
+                # Minta seluruh tabel param FC. Jawabannya ~980 PARAM_VALUE
+                # yang ditangani & di-batch di loop RX main().
+                with _param_lock:
+                    _param_batch.clear()
+                print("[PARAM] minta seluruh daftar param")
+                master.mav.param_request_list_send(
+                    master.target_system,
+                    master.target_component,
+                )
+
+            elif name == "param_get":
+                param = normalize_param_name(value)
+                if param is None:
+                    print(f"[PARAM] nama param ditolak: {value!r}")
+                    continue
+                master.mav.param_request_read_send(
+                    master.target_system,
+                    master.target_component,
+                    param.encode("utf-8"),
+                    -1,   # -1 = cari berdasarkan nama, bukan indeks
+                )
+
+            elif name == "param_set":
+                # value = {"name": ..., "value": ..., "type": <MAV_PARAM_TYPE>}
+                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle), sama
+                # seperti gerbang ACRO — di sini yang dijaga hanya validitas.
+                if not isinstance(value, dict):
+                    print(f"[PARAM] payload param_set tidak valid: {value!r}")
+                    continue
+
+                try:
+                    type_id = int(value.get("type"))
+                except (TypeError, ValueError):
+                    print(f"[PARAM] tipe param tidak valid: {value.get('type')!r}")
+                    continue
+
+                if param_type_name(type_id) is None:
+                    print(f"[PARAM] tipe param tak dikenal: {type_id}")
+                    continue
+
+                written = set_param(value.get("name"), value.get("value"), type_id)
+                if written is None:
+                    # Ditolak sebelum menyentuh MAVLink — beri tahu GUI supaya
+                    # badge baris tidak menggantung di "pending" sampai timeout.
+                    send_to_gui({
+                        "type": "param_ack",
+                        "name": str(value.get("name")),
+                        "ok": False,
+                        "reason": "ditolak agent (nama/nilai/tipe tidak valid)",
+                    })
+
+            elif name == "mavlink_stream":
+                # Halaman Analyze menyalakan ini saat dibuka dan memperbaruinya
+                # tiap 10 detik. Yang disimpan TIMESTAMP, bukan boolean, supaya
+                # stream mati sendiri kalau GUI berhenti memperbarui.
+                if value:
+                    was_off = mavlink_stream_requested_at is None
+                    mavlink_stream_requested_at = time.time()
+                    if was_off:
+                        _mav_rate.reset()
+                        print("[MAVSTREAM] on")
+                else:
+                    if mavlink_stream_requested_at is not None:
+                        print("[MAVSTREAM] off")
+                    mavlink_stream_requested_at = None
+
             elif name == "gripper":
                 # "open"/"close" dari tombol & keyboard H/G, atau angka
                 # -1000..1000 dari axis analog gamepad. Yang disimpan hanya
@@ -425,23 +557,175 @@ def command_listener():
         except Exception as e:
             print("[CMD] error executing command:", e)
 
+def set_param(name, value, type_id, expect_ack=True):
+    """Tulis SATU parameter ke FC. Mengembalikan nama kanoniknya, atau None.
+
+    Primitif tunggal untuk semua penulisan param — dipakai halaman Vehicle
+    (`param_set`) maupun Setup → Thruster (`apply_thruster_config`).
+
+    TIDAK menunggu echo di sini: menunggu berarti recv_match() di thread ini,
+    yang akan mencuri pesan dari loop RX main() (alasan yang sama seperti ARM,
+    lihat command_listener). Verifikasi dilakukan asinkron — nama didaftarkan
+    ke pending_params dan diselesaikan handler PARAM_VALUE di main().
+    """
+    canonical = normalize_param_name(name)
+    if canonical is None:
+        print(f"[PARAM] nama param ditolak: {name!r}")
+        return None
+
+    try:
+        numeric = coerce_param_value(value, type_id)
+    except ValueError as e:
+        print(f"[PARAM] {canonical}: {e}")
+        return None
+
+    master.mav.param_set_send(
+        master.target_system,
+        master.target_component,
+        canonical.encode("utf-8"),
+        numeric,
+        type_id,
+    )
+
+    if expect_ack:
+        with _param_lock:
+            pending_params[canonical] = (numeric, type_id, time.time() + PARAM_ACK_TIMEOUT)
+
+    print(f"[PARAM] {canonical} -> {numeric} ({param_type_name(type_id) or type_id})")
+    return canonical
+
+
 def apply_thruster_config(motors):
     """Tulis MOT_n_DIRECTION satu per satu (perlu jeda antar param_set_send)."""
     try:
         for motor, direction in motors.items():
-            param = f"MOT_{int(motor)}_DIRECTION"
-            print(f"[PARAM] {param} -> {int(direction)}")
-            master.mav.param_set_send(
-                master.target_system,
-                master.target_component,
-                param.encode("utf-8"),
-                float(int(direction)),
+            set_param(
+                f"MOT_{int(motor)}_DIRECTION",
+                direction,
                 mavutil.mavlink.MAV_PARAM_TYPE_INT8,
             )
+            # Jeda ada di pemanggil batch, bukan di set_param(): menulis
+            # belasan param beruntun tanpa jeda membuat FC menjatuhkan sebagian.
             time.sleep(0.1)
         print("[PARAM] Thruster configuration updated.")
     except Exception as e:
         print("[PARAM] gagal set thruster config:", e)
+
+
+def handle_param_value(msg, now):
+    """Tangani satu PARAM_VALUE: masukkan ke batch + selesaikan pending set.
+
+    Dipanggil HANYA dari loop RX main().
+    """
+    name = decode_param_id(msg.param_id)
+    if not name:
+        return
+
+    entry = {
+        "name": name,
+        "value": float(msg.param_value),
+        "ptype": int(msg.param_type),
+        "index": int(msg.param_index),
+        "count": int(msg.param_count),
+    }
+
+    with _param_lock:
+        _param_batch.append(entry)
+        pending = pending_params.pop(name, None)
+
+    if pending is not None:
+        sent_value, type_id, _deadline = pending
+        ok = param_matches(sent_value, entry["value"], type_id)
+        send_to_gui({
+            "type": "param_ack",
+            "name": name,
+            "ok": ok,
+            "value": entry["value"],
+            "reason": None if ok else "FC mengembalikan nilai berbeda",
+        })
+        print(f"[PARAM] ACK {name} = {entry['value']} ({'ok' if ok else 'BEDA'})")
+
+
+def flush_param_batch(now, force=False):
+    """Kirim batch PARAM_VALUE yang terkumpul ke GUI.
+
+    param_index == param_count - 1 menandai param terakhir dari satu
+    param_request_list; itu yang dipakai GUI untuk menutup progress bar.
+    """
+    global _param_batch_ts
+
+    with _param_lock:
+        if not _param_batch:
+            _param_batch_ts = now
+            return
+
+        penuh = len(_param_batch) >= PARAM_BATCH_SIZE
+        kedaluwarsa = (now - _param_batch_ts) >= PARAM_BATCH_INTERVAL
+
+        # Param terakhir dari satu daftar penuh harus langsung dikirim, jangan
+        # menunggu batch penuh yang tidak akan pernah datang.
+        terakhir = any(
+            e["count"] > 0 and e["index"] == e["count"] - 1 for e in _param_batch
+        )
+
+        if not (force or penuh or kedaluwarsa or terakhir):
+            return
+
+        payload = list(_param_batch)
+        _param_batch.clear()
+        _param_batch_ts = now
+
+    send_to_gui({"type": "param_batch", "params": payload, "done": terakhir})
+
+
+def expire_pending_params(now):
+    """Laporkan param_set yang tidak pernah di-echo balik sebagai GAGAL.
+
+    ArduPilot tidak mengirim NACK saat menolak param (nama tak dikenal, nilai
+    di luar rentang, param read-only) — ia hanya DIAM. Timeout adalah
+    satu-satunya cara operator tahu tulisannya tidak masuk.
+    """
+    with _param_lock:
+        basi = [n for n, (_v, _t, deadline) in pending_params.items() if now > deadline]
+        for n in basi:
+            pending_params.pop(n, None)
+
+    for n in basi:
+        send_to_gui({
+            "type": "param_ack",
+            "name": n,
+            "ok": False,
+            "reason": "tidak ada balasan dari FC (ditolak atau tidak sampai)",
+        })
+        print(f"[PARAM] ACK {n} TIMEOUT — kemungkinan ditolak FC")
+
+
+def maybe_stream_mavlink(msg, mtype, now):
+    """Teruskan satu message MAVLink mentah ke halaman Analyze (ter-throttle).
+
+    Dipanggil untuk SETIAP message, jadi jalur cepatnya (stream mati) harus
+    murah — cek boolean dulu sebelum apa pun yang lain.
+    """
+    global mavlink_stream_requested_at
+
+    if mavlink_stream_requested_at is None:
+        return
+
+    if not stream_still_wanted(mavlink_stream_requested_at, now):
+        mavlink_stream_requested_at = None
+        print("[MAVSTREAM] off (GUI berhenti memperbarui permintaan)")
+        return
+
+    if not _mav_rate.allow(mtype, now):
+        return
+
+    try:
+        fields = sanitize_fields(msg.to_dict())
+    except Exception as e:
+        print(f"[MAVSTREAM] gagal serialisasi {mtype}: {e}")
+        return
+
+    send_to_gui({"type": "mavlink_msg", "msg": mtype, "t": now, "fields": fields})
 
 
 def handle_manipulator(device, action, direction):
@@ -623,6 +907,23 @@ def drop_link(reason):
     state["armed"] = False
     state["mode"] = "unknown"
 
+    # Daftar param yang setengah terkirim tidak boleh disambung ke daftar
+    # berikutnya, dan throttle Inspector harus lupa timestamp lama supaya
+    # message pertama setelah sambung ulang tidak tertahan.
+    with _param_lock:
+        _param_batch.clear()
+        basi = list(pending_params)
+        pending_params.clear()
+    _mav_rate.reset()
+
+    for n in basi:
+        send_to_gui({
+            "type": "param_ack",
+            "name": n,
+            "ok": False,
+            "reason": "link MAVLink terputus sebelum konfirmasi",
+        })
+
     if link is not None:
         try:
             link.close()
@@ -671,6 +972,13 @@ def main():
                 drop_link(f"gagal kirim heartbeat: {e}")
                 continue
 
+        # Batch param & timeout ACK diurus SEBELUM cabang "msg is None".
+        # Justru saat tidak ada pesan masuk-lah pending param harus kedaluwarsa:
+        # kalau ditaruh di ekor loop, `continue` di bawah membuatnya tidak
+        # pernah jalan persis ketika FC berhenti menjawab.
+        flush_param_batch(now)
+        expire_pending_params(now)
+
         if msg is None:
             # Tidak ada satu pun pesan selama LINK_TIMEOUT -> anggap link mati.
             if now - last_rx > LINK_TIMEOUT:
@@ -680,8 +988,24 @@ def main():
         last_rx = now
         mtype = msg.get_type()
 
+        # MAVLink Inspector (halaman Analyze). Sengaja PALING ATAS supaya
+        # Inspector melihat message apa adanya — termasuk yang tidak punya
+        # handler khusus di bawah, yang justru paling berguna saat diagnosa.
+        maybe_stream_mavlink(msg, mtype, now)
+
         if mtype == "STATUSTEXT":
-            print("[PIXHAWK]", msg.text)
+            text = msg.text.decode("utf-8", errors="replace") if isinstance(
+                msg.text, (bytes, bytearray)
+            ) else str(msg.text)
+            text = text.split("\x00", 1)[0]
+            print("[PIXHAWK]", text)
+            # Diteruskan ke console dashboard: ini cara FC melaporkan penolakan
+            # param & error pre-arm, yang tanpa ini hanya terlihat di stdout Pi.
+            send_to_gui({
+                "type": "statustext",
+                "text": text,
+                "severity": int(getattr(msg, "severity", 6)),
+            })
 
         # --------------------------------
         # ATTITUDE: roll, pitch, yaw
@@ -702,6 +1026,14 @@ def main():
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
             prev_attitude_ts = now_ts
+
+        # --------------------------------
+        # PARAM_VALUE: tabel param (halaman Vehicle) + verifikasi param_set.
+        # Di sini, bukan di command_listener, dengan alasan yang sama seperti
+        # COMMAND_ACK di bawah.
+        # --------------------------------
+        elif mtype == "PARAM_VALUE":
+            handle_param_value(msg, now)
 
         # --------------------------------
         # COMMAND_ACK: hasil ARM/DISARM dsb.
