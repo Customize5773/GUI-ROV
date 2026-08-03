@@ -11,12 +11,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 
+  <!-- three.js & Chart.js di-vendor lokal (public/vendor/) supaya dashboard tetap
+       lengkap dimuat tanpa internet di venue lomba — lihat README.md
+       "Pakai tanpa internet (venue lomba)". Versi dikunci sama persis dengan yang
+       sebelumnya disajikan CDN: three@0.169.0, chart.js@4.4.3. -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
-      "chart.js/auto": "https://cdn.jsdelivr.net/npm/chart.js@4.4.3/auto/+esm"
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/examples/jsm/",
+      "chart.js/auto": "./vendor/chart.js/auto.js",
+      "@kurkle/color": "./vendor/kurkle-color/color.esm.js"
     }
   }
   </script>
