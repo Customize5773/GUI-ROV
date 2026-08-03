@@ -10,6 +10,7 @@ from rov_modes import (
     DEPTH_HOLD_MODES,
     MODE_WARNINGS,
     PILOT_MODE_MAP,
+    RISKY_MODES,
     STABILIZE_WARNING,
     depth_hold_allowed,
     is_risky_mode,
@@ -21,13 +22,17 @@ from rov_modes import (
 class TestResolvePilotMode(unittest.TestCase):
     def test_semua_mode_yang_didukung(self):
         self.assertEqual(resolve_pilot_mode("manual"), "MANUAL")
-        self.assertEqual(resolve_pilot_mode("stabilize"), "STABILIZE")
         self.assertEqual(resolve_pilot_mode("depth_hold"), "ALT_HOLD")
         self.assertEqual(resolve_pilot_mode("acro"), "ACRO")
 
-    def test_peta_lengkap_dan_tanpa_duplikat(self):
-        # Menjaga agar penambahan mode baru tidak menimpa mode lama diam-diam.
-        self.assertEqual(len(set(PILOT_MODE_MAP.values())), len(PILOT_MODE_MAP))
+    def test_stabilize_adalah_alias_alt_hold(self):
+        # Tab STABILIZE sudah dihapus dari GUI karena ia menstabilkan attitude
+        # tapi TIDAK menahan kedalaman. Aliasnya dipertahankan supaya profil
+        # joystick tersimpan dengan aksi `mode_stabilize` tetap bekerja — dan
+        # kini ujungnya mode yang memberi keduanya.
+        self.assertEqual(resolve_pilot_mode("stabilize"), "ALT_HOLD")
+
+    def test_peta_lengkap(self):
         for gui_name, ardusub_name in PILOT_MODE_MAP.items():
             self.assertEqual(resolve_pilot_mode(gui_name), ardusub_name)
 
@@ -57,8 +62,15 @@ class TestDepthHoldGate(unittest.TestCase):
         # STABILIZE menstabilkan attitude, tapi tidak menjalankan cascade PID
         # kedalaman ArduSub (itu hanya jalan di ALT_HOLD) — throttle netral
         # cuma berarti "dorongan vertikal nol", bukan "tahan kedalaman".
+        # GUI tidak bisa lagi meminta mode ini, tapi wahana masih bisa berada
+        # di sana lewat saklar RC / GCS lain, jadi gate-nya tetap harus benar.
         self.assertFalse(depth_hold_allowed("STABILIZE"))
         self.assertNotIn("STABILIZE", DEPTH_HOLD_MODES)
+
+    def test_diizinkan_lewat_alias_stabilize(self):
+        # Tombol "stabilize" di profil joystick lama kini masuk ALT_HOLD, jadi
+        # depth hold justru AKTIF di sana.
+        self.assertTrue(depth_hold_allowed(resolve_pilot_mode("stabilize")))
 
     def test_ditolak_di_manual_dan_mode_tak_dikenal(self):
         for mode in ("MANUAL", "unknown", "", None, "acro"):
@@ -69,10 +81,12 @@ class TestRiskyMode(unittest.TestCase):
     def test_acro_dianggap_berisiko(self):
         self.assertTrue(is_risky_mode("ACRO"))
 
-    def test_stabilize_dianggap_berisiko(self):
-        # STABILIZE tidak menahan kedalaman (lihat TestDepthHoldGate), jadi
-        # operator perlu peringatan yang sama seperti ACRO.
-        self.assertTrue(is_risky_mode("STABILIZE"))
+    def test_stabilize_tidak_perlu_gerbang_konfirmasi(self):
+        # is_risky_mode menggerbangi konfirmasi SEBELUM mode diminta. STABILIZE
+        # tidak bisa lagi diminta dari GUI, jadi tidak ada yang perlu
+        # dikonfirmasi — tapi peringatannya tetap ada (lihat TestWarningForMode).
+        self.assertFalse(is_risky_mode("STABILIZE"))
+        self.assertIsNotNone(warning_for_mode("STABILIZE"))
 
     def test_mode_lain_tidak(self):
         for mode in ("MANUAL", "ALT_HOLD", None):
@@ -97,6 +111,13 @@ class TestWarningForMode(unittest.TestCase):
     def test_konsisten_dengan_mode_warnings(self):
         for mode, msg in MODE_WARNINGS.items():
             self.assertEqual(warning_for_mode(mode), msg)
+
+    def test_setiap_mode_berisiko_punya_peringatan(self):
+        # MODE_WARNINGS boleh lebih luas dari RISKY_MODES (STABILIZE), tapi
+        # tidak boleh ada mode berisiko yang gerbang konfirmasinya menyala
+        # tanpa pesan apa pun untuk ditampilkan.
+        for mode in RISKY_MODES:
+            self.assertIsNotNone(warning_for_mode(mode), msg=mode)
 
 
 if __name__ == "__main__":

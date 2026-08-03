@@ -136,6 +136,13 @@ def resolve_pid_writes(payload):
     return writes, rejects
 
 
+# Setpoint kedalaman yang dipakai setiap kali wahana MASUK mode depth hold.
+# Sengaja nilai tetap, bukan "kedalaman saat ini": operator ingin menekan satu
+# tombol dan langsung berada di kedalaman kerja yang sama tiap kali. Bisa
+# ditimpa dari halaman Setup lewat command `depth_default`.
+DEFAULT_DEPTH_TARGET = 0.3
+
+
 def clamp_depth_target(value, pool_depth=None):
     """Jepit setpoint kedalaman ke rentang yang masuk akal untuk kolam ini.
 
@@ -166,6 +173,27 @@ def clamp_depth_target(value, pool_depth=None):
         if limit == limit and limit > 0:
             v = min(v, limit)
 
+    return v
+
+
+def valid_depth_target(value):
+    """Kembalikan setpoint kedalaman default yang sah (meter, >= 0), atau None.
+
+    Beda dari valid_pool_depth: 0 m DITERIMA (artinya "tahan di permukaan").
+    Penjepitan terhadap pool_depth tidak dilakukan di sini — itu tugas
+    clamp_depth_target() saat nilainya benar-benar dipakai, supaya mengubah
+    pool_depth belakangan tidak meninggalkan default yang basi.
+    """
+    if isinstance(value, bool):
+        return None
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v in (float("inf"), float("-inf")):
+        return None
+    if v < 0:
+        return None
     return v
 
 

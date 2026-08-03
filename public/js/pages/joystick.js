@@ -15,7 +15,7 @@ import {
   STANDARD_BUTTON_COUNT,
 } from "../joystick-state.js";
 
-import { axisLabel, buttonLabel } from "/shared/joystick-profile.js";
+import { BUTTON_MODES, axisLabel, buttonLabel } from "/shared/joystick-profile.js";
 
 let root = null;
 let rafId = null;
@@ -28,7 +28,8 @@ let mappingLayer = "regular"; // regular | shift
    dan tombol Logitech (16) tidak bisa dipilih sama sekali. */
 const BUTTON_OPTIONS = Array.from({ length: STANDARD_BUTTON_COUNT }, (_, i) => i);
 const AXIS_INPUT_OPTIONS = Array.from({ length: STANDARD_AXIS_COUNT }, (_, i) => `axis ${i}`);
-const BUTTON_MODES = ["toggle", "hold"];
+// BUTTON_MODES ada di shared/joystick-profile.js karena normalizeProfile() ikut
+// memvalidasinya — diimpor di atas.
 
 /* ===================== MODE BELAJAR ===================== */
 /* Menebak nomor axis di dropdown adalah sumber kesalahan terbesar. Dengan mode
@@ -109,8 +110,10 @@ const ACTION_LABELS = {
   arm: "Arm",
   disarm: "Disarm",
   mode_manual: "Mode manual",
-  mode_stabilize: "Mode stabilize",
-  mode_depth_hold: "Mode depth hold",
+  // Keduanya berujung di ALT_HOLD — lihat PILOT_MODE_MAP di shared/rov-modes.js.
+  mode_stabilize: "Mode alt hold (stabilize+depth)",
+  mode_depth_hold: "Mode alt hold (stabilize+depth)",
+  mode_acro: "Mode acro (berisiko)",
   input_hold_set: "Input hold set",
   mount_tilt_up: "Mount tilt up",
   mount_tilt_down: "Mount tilt down",
@@ -121,8 +124,11 @@ const ACTION_LABELS = {
   grip_close: "Gripper close",
   lights_brighter: "Lights brighter",
   lights_dimmer: "Lights dimmer",
-  gain_inc: "Gain inc",
-  gain_dec: "Gain dec",
+  // Nama wire-nya tetap gain_inc/gain_dec (kompatibilitas agent), tapi yang
+  // digeser adalah setpoint kedalaman. `depth` positif ke bawah, jadi
+  // gain_dec = naik ke permukaan.
+  gain_inc: "Depth +0.05 m (turun)",
+  gain_dec: "Depth −0.05 m (naik)",
 };
 
 const COCKPIT_LAYOUT = {
@@ -130,11 +136,11 @@ const COCKPIT_LAYOUT = {
     left: [
       { action: "disarm", anchor: "l1" },
       { action: "mount_tilt_down", anchor: "l2" },
-      { action: "actuator1_inc", anchor: "dpad_up" },
-      { action: "gain_inc", anchor: "dpad_left" },
-      { action: "lights_dimmer", anchor: "dpad_right" },
-      { action: "lights_brighter", anchor: "dpad_down" },
-      { action: "gain_dec", anchor: "left_stick" },
+      { action: "gain_dec", anchor: "dpad_up" },
+      { action: "mount_tilt_up", anchor: "dpad_left" },
+      { action: "mount_tilt_down", anchor: "dpad_right" },
+      { action: "gain_inc", anchor: "dpad_down" },
+      { action: "lights_dimmer", anchor: "left_stick" },
       { action: "mount_center", anchor: "left_bottom" },
     ],
     center: { action: "no_function", anchor: "touchpad" },
@@ -154,11 +160,11 @@ const COCKPIT_LAYOUT = {
     left: [
       { action: "disarm", anchor: "l1" },
       { action: "mount_tilt_down", anchor: "l2" },
-      { action: "actuator1_inc", anchor: "dpad_up" },
-      { action: "gain_inc", anchor: "dpad_left" },
-      { action: "lights_dimmer", anchor: "dpad_right" },
-      { action: "lights_brighter", anchor: "dpad_down" },
-      { action: "gain_dec", anchor: "left_stick" },
+      { action: "gain_dec", anchor: "dpad_up" },
+      { action: "mount_tilt_up", anchor: "dpad_left" },
+      { action: "mount_tilt_down", anchor: "dpad_right" },
+      { action: "gain_inc", anchor: "dpad_down" },
+      { action: "lights_dimmer", anchor: "left_stick" },
       { action: "mount_center", anchor: "left_bottom" },
     ],
     center: { action: "no_function", anchor: "touchpad" },
@@ -288,7 +294,7 @@ function buildActionOptions(current) {
 function buildModeOptions(current) {
   return BUTTON_MODES.map((m) => {
     const selected = m === current ? "selected" : "";
-    const label = m === "hold" ? "Hold" : "Toggle";
+    const label = m.charAt(0).toUpperCase() + m.slice(1);
     return `<option value="${m}" ${selected}>${label}</option>`;
   }).join("");
 }
@@ -891,7 +897,7 @@ function bindEvents() {
       } else if (field === "button") {
         rows[idx].button = Number(e.target.value);
       } else if (field === "mode") {
-        rows[idx].mode = e.target.value === "hold" ? "hold" : "toggle";
+        rows[idx].mode = BUTTON_MODES.includes(e.target.value) ? e.target.value : "toggle";
       }
     });
   });

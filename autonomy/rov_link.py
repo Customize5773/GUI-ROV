@@ -63,9 +63,12 @@ Z_NEUTRAL = 500
 # di sys.path — tapi HARUS tetap sinkron dengan rov_modes.PILOT_MODE_MAP.
 #
 # ACRO: tanpa stabilisasi attitude; z = 500 di sini BUKAN "tahan kedalaman".
+# "stabilize" adalah ALIAS ALT_HOLD (bukan STABILIZE ArduSub): STABILIZE tidak
+# menjalankan cascade PID kedalaman, jadi z = 500 di sana juga bukan "tahan
+# kedalaman" — lihat docstring rov_modes.py.
 PILOT_MODE_MAP = {
     "manual": "MANUAL",
-    "stabilize": "STABILIZE",
+    "stabilize": "ALT_HOLD",
     "depth_hold": "ALT_HOLD",
     "acro": "ACRO",
 }

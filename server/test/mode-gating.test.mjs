@@ -12,6 +12,7 @@ import {
   PILOT_MODE_MAP,
   ARDUSUB_MODE_TO_TAB,
   RISKY_ARDUSUB_MODES,
+  ACTUAL_MODE_WARNINGS,
   ACRO_CONFIRM,
 } from "../../shared/rov-modes.js";
 
@@ -20,20 +21,39 @@ function test(name, fn) {
   tests.push({ name, fn });
 }
 
-test("PILOT_MODE_MAP memetakan keempat mode ke nama ArduSub yang benar", () => {
+test("PILOT_MODE_MAP memetakan nama GUI ke nama ArduSub yang benar", () => {
   assert.deepStrictEqual(PILOT_MODE_MAP, {
     manual: "MANUAL",
-    stabilize: "STABILIZE",
+    // alias: tab STABILIZE sudah dihapus, tapi profil joystick lama masih
+    // mengirim nama ini — lihat docstring rov_modes.py.
+    stabilize: "ALT_HOLD",
     depth_hold: "ALT_HOLD",
     acro: "ACRO",
   });
 });
 
-test("ARDUSUB_MODE_TO_TAB adalah kebalikan PILOT_MODE_MAP", () => {
-  for (const [tab, ardusub] of Object.entries(PILOT_MODE_MAP)) {
-    assert.strictEqual(ARDUSUB_MODE_TO_TAB[ardusub], tab);
+test("setiap tab punya mode ArduSub, dan tidak ada tab untuk STABILIZE", () => {
+  for (const tab of Object.values(ARDUSUB_MODE_TO_TAB)) {
+    assert.ok(tab in PILOT_MODE_MAP, `tab ${tab} tidak ada di PILOT_MODE_MAP`);
+    assert.strictEqual(ARDUSUB_MODE_TO_TAB[PILOT_MODE_MAP[tab]], tab);
   }
-  assert.strictEqual(Object.keys(ARDUSUB_MODE_TO_TAB).length, Object.keys(PILOT_MODE_MAP).length);
+  // STABILIZE tidak boleh menyorot tab mana pun: ia menstabilkan attitude tapi
+  // tidak menahan kedalaman, jadi menyamakannya dengan tab Alt Hold berbohong.
+  assert.strictEqual(ARDUSUB_MODE_TO_TAB.STABILIZE, undefined);
+});
+
+test("STABILIZE punya peringatan meski bukan mode risky", () => {
+  // Tidak bisa diminta dari GUI (jadi tidak perlu gerbang konfirmasi), tapi
+  // wahana masih bisa berada di sana lewat saklar RC / GCS lain.
+  assert.strictEqual(RISKY_ARDUSUB_MODES.has("STABILIZE"), false);
+  assert.match(ACTUAL_MODE_WARNINGS.STABILIZE, /depth hold/i);
+  assert.match(ACTUAL_MODE_WARNINGS.ACRO, /STABILISASI/i);
+});
+
+test("setiap mode risky punya pesan peringatan untuk ditampilkan", () => {
+  for (const mode of RISKY_ARDUSUB_MODES) {
+    assert.ok(ACTUAL_MODE_WARNINGS[mode], `${mode} tanpa pesan peringatan`);
+  }
 });
 
 test("hanya ACRO yang ditandai risky", () => {
