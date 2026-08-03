@@ -60,10 +60,24 @@ export const CONFIG = {
     KEY_AXIS_STEP: 400,
   },
 
-  // gain kontrol hold (PID)
+  /* gain kontrol hold (PID) — SATUAN ArduSub, bukan skala bebas.
+       yaw   -> ATC_RAT_YAW_P / _I / _D   (loop rate yaw)
+       depth -> PSC_ACCZ_P / _I / _D      (loop akselerasi/throttle depth hold)
+
+     Nilai di bawah ini hanya tampilan AWAL sebelum halaman Setup sempat
+     membaca nilai asli dari flight controller; begitu FC menjawab, keenam
+     kolom ditimpa nilai sungguhan. Angkanya diambil dari
+     parameters_ardusub.params (dump nyata Pixhawk wahana) supaya paint pertama
+     tidak menyesatkan.
+
+     JANGAN mengembalikannya ke skala lama (yaw.p 2.0, depth.p 10.0): itu ~11x
+     dan ~20x nilai FC sebenarnya, dan sekali "Apply PID Gains" bisa membuat
+     wahana berosilasi hebat. rov_pid.py menolak nilai di luar rentang aman,
+     jadi gain seperti itu sekarang gagal terang-terangan — tapi lebih baik
+     tidak pernah muncul di layar sejak awal. */
   PID: {
-    yaw:   { p: 2.0,  i: 0.0, d: 0.5 },
-    depth: { p: 10.0, i: 0.5, d: 2.0 },
+    yaw:   { p: 0.18, i: 0.018, d: 0.0 },
+    depth: { p: 0.5,  i: 0.1,   d: 0.0 },
   },
 
   DEMO_ON_START: false,

@@ -462,9 +462,14 @@ const simState = {
 
 /* Tabel param palsu (halaman Vehicle) — diisi saat start() bila mode SIM.
    Sumbernya dump nyata dari Pixhawk, lihat server/sim-params.js. */
-const { SimParams } = require("./sim-params");
+const { SimParams, resolvePidWrites } = require("./sim-params");
 let simParams = null;
 let simParamStreamCancel = null;
+
+// Kedalaman kolam yang "diketahui" wahana palsu — dipantulkan di telemetri SIM
+// supaya operator bisa memastikan nilainya benar-benar sampai (sama seperti
+// state["pool_depth"] di rov_agent.py).
+let simPoolDepth = null;
 
 /* Stream MAVLink palsu (halaman Analyze). Dimatikan saat GUI mengirim
    mavlink_stream:false — sama seperti rov_agent.py.
@@ -582,6 +587,45 @@ function applySimParamCommand(name, value) {
     return true;
   }
 
+  if (name === "pid") {
+    /* Meniru rov_agent.py: gain di luar rentang aman DITOLAK (bukan dijepit),
+       yang lolos ditulis lalu di-echo balik seperti PARAM_VALUE dari FC. */
+    const { writes, rejects } = resolvePidWrites(value);
+
+    for (const [param, reason] of rejects) {
+      console.warn(`[SIM] pid DITOLAK ${param}: ${reason}`);
+      broadcast({ type: "param_ack", name: param, ok: false, reason });
+    }
+
+    for (const [param, gain] of writes) {
+      const res = simParams.set(param, gain);
+      if (!res.ok) {
+        broadcast({ type: "param_ack", name: param, ok: false, reason: res.reason });
+        continue;
+      }
+      broadcast({
+        type: "param_batch",
+        params: [{ ...res.entry, index: -1, count: simParams.size }],
+        done: false,
+      });
+      broadcast({ type: "param_ack", name: res.entry.name, ok: true, value: res.entry.value });
+    }
+
+    if (writes.length) console.log(`[SIM] pid: ${writes.length} gain ditulis`);
+    return true;
+  }
+
+  if (name === "pool_depth") {
+    const depth = Number(value);
+    if (!Number.isFinite(depth) || depth <= 0) {
+      console.warn(`[SIM] pool_depth tidak valid: ${value}`);
+      return true;
+    }
+    simPoolDepth = depth;
+    console.log(`[SIM] kedalaman kolam = ${depth.toFixed(2)} m`);
+    return true;
+  }
+
   return false;
 }
 
@@ -638,6 +682,7 @@ if (SIM) {
         // HEARTBEAT, bukan control_mode.
         mode: simState.pilotMode,
         control_mode: simState.controlMode,
+        pool_depth: simPoolDepth,
       },
       recv: Date.now(),
     });

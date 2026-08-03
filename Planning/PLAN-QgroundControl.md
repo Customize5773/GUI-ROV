@@ -220,12 +220,16 @@ masih memuat `INS_ACC3*` (3 IMU) padahal wahana ini 2 IMU.
 
 ## 7. Yang ditemukan tapi TIDAK diperbaiki di sini
 
-- **`pid`, `pool_depth`, `viewer_access`, dan `manipulator` tidak punya cabang di
-  `command_listener()`.** GUI mengirimkannya (`public/js/pages/setup.js`,
-  `server/server.js`), tapi di `rov_agent.py` keempatnya jatuh ke
-  `unknown command`. `handle_manipulator()` juga tidak pernah dipanggil dari mana pun.
-  Artinya tombol **Apply PID** dan **Apply Pool** di halaman Setup saat ini tidak
-  berefek apa pun pada wahana. Perlu PR tersendiri.
+- ~~**`pid`, `pool_depth`, dan `viewer_access` tidak punya cabang di
+  `command_listener()`**~~ — **SUDAH DIPERBAIKI** menyusul, lihat
+  [README-WORK.md](../README-WORK.md) §10. `pid` kini menulis
+  `ATC_RAT_YAW_*` + `PSC_ACCZ_*` lewat `set_param()` dengan rentang aman
+  (`rov_pid.py`), `pool_depth` membatasi `depth_target`, dan `viewer_access` masuk
+  `GUI_ONLY_COMMANDS`.
+- **`manipulator` masih belum tertangani.** GUI mengirimkannya dan `server/server.js:350`
+  meneruskannya utuh, tapi `command_listener()` tidak punya cabangnya sehingga jatuh ke
+  `unknown command` — dan `handle_manipulator()` (`rov_agent.py`) tidak pernah dipanggil
+  dari mana pun. Menyangkut protokol manipulator & servo channel, perlu PR tersendiri.
 - **Dashboard butuh internet untuk dimuat.** `public/index.html` mengambil three.js &
   Chart.js dari CDN (unpkg/jsdelivr) lewat importmap. Di venue tanpa internet — kondisi
   yang justru diwajibkan aturan "tanpa wireless" — **seluruh dashboard gagal dimuat**,

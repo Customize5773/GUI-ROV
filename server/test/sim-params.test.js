@@ -10,7 +10,9 @@ const {
   SimParams,
   parseDump,
   normalizeName,
+  resolvePidWrites,
   BATCH_SIZE,
+  PID_PARAM_MAP,
 } = require("../sim-params");
 
 /* ---------------- runner mini ---------------- */
@@ -153,6 +155,88 @@ test("streamAll kedua membatalkan yang pertama lewat nilai kembaliannya", (done)
       done();
     } catch (e) { done(e); }
   }, 150);
+});
+
+/* ---------------- pemetaan PID ---------------- */
+
+// Nilai gain yang benar-benar ada di Pixhawk wahana.
+const FC_NYATA = {
+  yaw: { p: 0.18, i: 0.018, d: 0.0 },
+  depth: { p: 0.5, i: 0.1, d: 0.0 },
+};
+// Default LAMA di public/js/config.js — bukan satuan ArduSub.
+const GUI_DEFAULT_LAMA = {
+  yaw: { p: 2.0, i: 0.0, d: 0.5 },
+  depth: { p: 10.0, i: 0.5, d: 2.0 },
+};
+
+test("keenam gain terpetakan ke param ArduSub yang benar", () => {
+  assert.strictEqual(PID_PARAM_MAP.length, 6);
+  assert.deepStrictEqual(PID_PARAM_MAP.map((e) => e[2]), [
+    "ATC_RAT_YAW_P", "ATC_RAT_YAW_I", "ATC_RAT_YAW_D",
+    "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_ACCZ_D",
+  ]);
+});
+
+test("param PID benar-benar ada di dump FC", () => {
+  // Kalau namanya salah ketik, SIM akan menolaknya sebagai "tidak dikenal"
+  // dan bug-nya baru ketahuan di kolam.
+  const p = SimParams.load();
+  for (const [, , name] of PID_PARAM_MAP) {
+    assert.ok(p.get(name), `${name} ada di FC`);
+  }
+});
+
+test("nilai FC nyata lolos validasi", () => {
+  // Kalau rentang yang ditulis tangan sampai menolak nilai yang SEDANG
+  // BERJALAN di wahana, rentangnya yang salah.
+  const { writes, rejects } = resolvePidWrites(FC_NYATA);
+  assert.deepStrictEqual(rejects, []);
+  assert.strictEqual(writes.length, 6);
+});
+
+test("default GUI lama ditolak, tidak ikut ditulis", () => {
+  const { writes, rejects } = resolvePidWrites(GUI_DEFAULT_LAMA);
+  const ditolak = new Set(rejects.map(([n]) => n));
+  for (const n of ["ATC_RAT_YAW_P", "ATC_RAT_YAW_D", "PSC_ACCZ_P", "PSC_ACCZ_D"]) {
+    assert.ok(ditolak.has(n), `${n} harus ditolak`);
+  }
+  for (const [name] of writes) assert.ok(!ditolak.has(name), `${name} tidak boleh ditulis`);
+});
+
+test("pid mock sepakat dengan rov_pid.py soal batas", () => {
+  // Dua sisi harus menolak hal yang sama — kalau tidak, SIM menyembunyikan
+  // bug yang seharusnya ketahuan sebelum turun ke kolam.
+  for (const [axis, gain, name, lo, hi] of PID_PARAM_MAP) {
+    for (const edge of [lo, hi]) {
+      const { rejects } = resolvePidWrites({ [axis]: { [gain]: edge } });
+      assert.deepStrictEqual(rejects, [], `${name}=${edge} harus lolos`);
+    }
+    const { writes } = resolvePidWrites({ [axis]: { [gain]: hi + 1 } });
+    assert.strictEqual(writes.length, 0, `${name}=${hi + 1} harus ditolak`);
+  }
+});
+
+test("payload cacat & nilai tidak valid ditolak", () => {
+  for (const bad of [null, undefined, "pid", 42]) {
+    const { writes, rejects } = resolvePidWrites(bad);
+    assert.strictEqual(writes.length, 0);
+    assert.ok(rejects.length);
+  }
+  for (const bad of ["abc", NaN, Infinity, true, null]) {
+    const { writes, rejects } = resolvePidWrites({ yaw: { p: bad } });
+    assert.strictEqual(writes.length, 0, String(bad));
+    assert.strictEqual(rejects.length, 1, String(bad));
+  }
+});
+
+test("payload sebagian boleh, sumbu cacat dilaporkan sekali", () => {
+  const ok = resolvePidWrites({ yaw: { p: 0.2 } });
+  assert.deepStrictEqual(ok.rejects, []);
+  assert.deepStrictEqual(ok.writes, [["ATC_RAT_YAW_P", 0.2]]);
+
+  const bad = resolvePidWrites({ yaw: 0.2 });
+  assert.deepStrictEqual(bad.rejects, [["yaw", "bagian bukan objek"]]);
 });
 
 /* ---------------- jalankan ---------------- */

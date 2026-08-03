@@ -211,12 +211,8 @@ export const vehiclePage = {
       if (msg.ok && Number.isFinite(msg.value)) entry.value = Number(msg.value);
     }
 
-    if (msg.ok) {
-      log(`Param ${msg.name} tersimpan di FC`, "ok");
-    } else {
-      log(`Param ${msg.name} GAGAL: ${msg.reason || "ditolak FC"}`, "err");
-    }
-
+    // Hasilnya sudah di-log terpusat di app.js (supaya tetap terlihat walau
+    // halaman ini belum pernah dibuka); di sini cukup perbarui badge baris.
     this._dirty = true;
     this._scheduleRender();
   },
