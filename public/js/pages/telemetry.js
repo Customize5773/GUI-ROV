@@ -1,15 +1,11 @@
 // telemetry.js — Halaman Telemetry & Health.
 // Grafik live Yaw/Depth/Pitch/Roll (nilai nyata) + pemantauan arus/status thruster.
 // KKI 2026: maksimal 6 thruster.
-import Chart from "chart.js/auto";
 import { log, num } from "../core.js";
+import { DEFAULT_WINDOW, makeLineChart, pushRing, renderSeries } from "../chart-line.js";
 
-const WINDOW = 120;
+const WINDOW = DEFAULT_WINDOW;
 const OVERCURRENT = 10;   // A — ambang status thruster "High"
-
-const C_REAL = "#14d8ff";
-const C_GRID = "rgba(160,186,209,.12)";
-const C_TICK = "rgba(160,186,209,.7)";
 
 const CHANNELS = [
   { key: "yaw", title: "Yaw", unit: "°" },
@@ -89,7 +85,7 @@ export const telemetryPage = {
         <div class="chart-card__head"><span class="chart-card__title">${c.title} (${c.unit})</span></div>
         <div class="chart-card__body"><canvas id="cv-${c.key}"></canvas></div>`;
       cWrap.appendChild(card);
-      this.charts[c.key] = this._mkChart(card.querySelector(`#cv-${c.key}`), c.unit);
+      this.charts[c.key] = makeLineChart(card.querySelector(`#cv-${c.key}`), { unit: c.unit, window: WINDOW });
     });
 
     this.els.status = root.querySelector("#teleStatus");
@@ -100,28 +96,6 @@ export const telemetryPage = {
     root.querySelector("#teleClear").onclick = () => this._clear();
   },
 
-  _mkChart(canvas, unit) {
-    const empty = () => Array(WINDOW).fill(null);
-    return new Chart(canvas, {
-      type: "line",
-      data: {
-        labels: Array.from({ length: WINDOW }, (_, i) => i),
-        datasets: [
-          { label: "Real", data: empty(), borderColor: C_REAL, borderWidth: 1.8, pointRadius: 0, tension: 0.25 },
-        ],
-      },
-      options: {
-        responsive: true, maintainAspectRatio: false, animation: false,
-        plugins: { legend: { display: false } },
-        scales: {
-          x: { display: false, grid: { color: C_GRID } },
-          y: { grid: { color: C_GRID }, ticks: { color: C_TICK, font: { size: 9 } },
-               title: { display: true, text: unit, color: C_TICK, font: { size: 9 } } },
-        },
-      },
-    });
-  },
-
   onShow() { this.visible = true; if (!this.raf) this._loop(); },
   onHide() { this.visible = false; if (this.raf) { cancelAnimationFrame(this.raf); this.raf = null; } },
 
@@ -130,11 +104,7 @@ export const telemetryPage = {
       yaw: Number.isFinite(d.heading) ? ((d.heading % 360) + 360) % 360 : 0,
       depth: d.depth || 0, pitch: d.pitch || 0, roll: d.roll || 0,
     };
-    for (const c of CHANNELS) {
-      const b = this.buf[c.key];
-      b.push(real[c.key]);
-      if (b.length > WINDOW) b.shift();
-    }
+    for (const c of CHANNELS) pushRing(this.buf[c.key], real[c.key], WINDOW);
     // arus thruster nyata bila ROV mengirim (array A: [T1..T6]); jika tidak, biarkan null
     if (Array.isArray(d.thrusters)) this.thrusters = d.thrusters;
     if (this.capturing) {
@@ -156,15 +126,8 @@ export const telemetryPage = {
   },
 
   _renderCharts() {
-    for (const c of CHANNELS) {
-      const ch = this.charts[c.key];
-      const b = this.buf[c.key];
-      // titik terbaru di kiri, makin lama makin ke kanan (alir kiri→kanan)
-      const rev = b.slice().reverse();
-      const out = rev.concat(Array(WINDOW - rev.length).fill(null));
-      ch.data.datasets[0].data = out.slice(0, WINDOW);
-      ch.update("none");
-    }
+    // Titik terbaru di kiri, makin lama makin ke kanan — lihat chart-line.js.
+    for (const c of CHANNELS) renderSeries(this.charts[c.key], this.buf[c.key], WINDOW);
   },
 
   _renderThrusters() {

@@ -415,6 +415,17 @@ udp.on("message", (buf, rinfo) => {
     return;
   }
 
+  /* Diskriminator envelope. rov_agent.py mengirim telemetry sebagai dict
+     `state` TELANJANG (tanpa field "type"), sementara kanal baru
+     (param_batch / param_ack / mavlink_msg / statustext) SELALU membawa "type".
+     Tanpa cek ini semuanya akan terbungkus sebagai telemetry — dan karena
+     broadcast() men-tap yang bertipe telemetry ke perekam Replay, tabel param
+     ikut tertulis ke trajectory.jsonl. */
+  if (data && typeof data.type === "string") {
+    broadcast(data);
+    return;
+  }
+
   console.log(
     `[TELEM] from ${rinfo.address}:${rinfo.port} | ` +
     `heading=${data.heading} roll=${data.roll} pitch=${data.pitch} ` +
@@ -449,7 +460,134 @@ const simState = {
   pilotMode: "MANUAL",   // mode ArduSub yang "dilaporkan" wahana palsu
 };
 
+/* Tabel param palsu (halaman Vehicle) — diisi saat start() bila mode SIM.
+   Sumbernya dump nyata dari Pixhawk, lihat server/sim-params.js. */
+const { SimParams } = require("./sim-params");
+let simParams = null;
+let simParamStreamCancel = null;
+
+/* Stream MAVLink palsu (halaman Analyze). Dimatikan saat GUI mengirim
+   mavlink_stream:false — sama seperti rov_agent.py.
+   Padanan rov_mavlink.STREAM_KEEPALIVE_TIMEOUT: stream juga mati sendiri kalau
+   GUI berhenti memperbarui permintaan. Tanpa ini SIM akan terus menyiarkan
+   selamanya setelah tab ditutup mendadak — perilaku yang BERBEDA dari wahana,
+   padahal justru itu yang ingin diuji di SIM. */
+const SIM_STREAM_KEEPALIVE_MS = 30_000;
+let simMavStream = null;
+let simMavStreamLastReq = 0;
+
+function stopSimMavStream() {
+  if (simMavStream) { clearInterval(simMavStream); simMavStream = null; }
+}
+
+function startSimMavStream() {
+  simMavStreamLastReq = Date.now();
+  if (simMavStream) return;   // sudah jalan: ini cuma keepalive
+  let t = 0;
+  // 10 Hz per type, sama dengan throttle rov_mavlink.RateLimiter di wahana.
+  simMavStream = setInterval(() => {
+    if (Date.now() - simMavStreamLastReq > SIM_STREAM_KEEPALIVE_MS) {
+      console.log("[SIM] mavlink_stream mati (GUI berhenti memperbarui permintaan)");
+      stopSimMavStream();
+      return;
+    }
+    t += 0.1;
+    const now = Date.now() / 1000;
+    const emit = (msg, fields) => broadcast({ type: "mavlink_msg", msg, t: now, fields });
+
+    emit("ATTITUDE", {
+      time_boot_ms: Math.round(t * 1000),
+      roll: (10 * Math.sin(t * 0.6) * Math.PI) / 180,
+      pitch: (7 * Math.sin(t * 0.4 + 1) * Math.PI) / 180,
+      yaw: (((90 + 45 * Math.sin(t * 0.2)) % 360) * Math.PI) / 180,
+      rollspeed: 0.01 * Math.cos(t * 0.6),
+      pitchspeed: 0.01 * Math.cos(t * 0.4),
+      yawspeed: 0.01 * Math.cos(t * 0.2),
+    });
+
+    emit("VFR_HUD", {
+      airspeed: 0, groundspeed: 0.2 + 0.1 * Math.sin(t),
+      heading: Math.round((90 + 45 * Math.sin(t * 0.2) + 360) % 360),
+      throttle: 50, alt: -(0.45 + 0.35 * Math.sin(t * 0.13)), climb: 0.05 * Math.cos(t * 0.13),
+    });
+
+    emit("SYS_STATUS", {
+      voltage_battery: Math.round((15.7 + 0.2 * Math.sin(t)) * 1000),
+      current_battery: Math.round(300 + 100 * Math.sin(t * 0.3)),
+      battery_remaining: 78,
+    });
+
+    emit("HEARTBEAT", {
+      type: 12, autopilot: 3,
+      base_mode: simState.armed ? 209 : 81,
+      custom_mode: 19, system_status: 4,
+    });
+  }, 100);
+}
+
+/* Perintah param di mode SIM. Mengembalikan true kalau sudah ditangani, supaya
+   pemanggil tahu tidak ada yang perlu diteruskan lagi. */
+function applySimParamCommand(name, value) {
+  if (!simParams) return false;
+
+  if (name === "param_list") {
+    if (simParamStreamCancel) simParamStreamCancel();
+    console.log(`[SIM] kirim ${simParams.size} param ke dashboard`);
+    simParamStreamCancel = simParams.streamAll(broadcast);
+    return true;
+  }
+
+  if (name === "param_get") {
+    const entry = simParams.get(value);
+    if (!entry) {
+      broadcast({ type: "param_ack", name: String(value), ok: false, reason: "param tidak dikenal di FC" });
+      return true;
+    }
+    broadcast({
+      type: "param_batch",
+      params: [{ ...entry, index: -1, count: simParams.size }],
+      done: false,
+    });
+    return true;
+  }
+
+  if (name === "param_set") {
+    if (!value || typeof value !== "object") {
+      broadcast({ type: "param_ack", name: "?", ok: false, reason: "payload param_set tidak valid" });
+      return true;
+    }
+
+    const res = simParams.set(value.name, value.value);
+    if (!res.ok) {
+      broadcast({ type: "param_ack", name: String(value.name), ok: false, reason: res.reason });
+      console.warn(`[SIM] param_set ditolak: ${value.name} — ${res.reason}`);
+      return true;
+    }
+
+    /* Urutannya sengaja sama seperti wahana nyata: FC meng-echo PARAM_VALUE,
+       dan echo itulah yang jadi bukti berhasil. */
+    broadcast({
+      type: "param_batch",
+      params: [{ ...res.entry, index: -1, count: simParams.size }],
+      done: false,
+    });
+    broadcast({ type: "param_ack", name: res.entry.name, ok: true, value: res.entry.value });
+    console.log(`[SIM] param_set ${res.entry.name} = ${res.entry.value}`);
+    return true;
+  }
+
+  if (name === "mavlink_stream") {
+    if (value) startSimMavStream();
+    else stopSimMavStream();
+    return true;
+  }
+
+  return false;
+}
+
 function applySimCommand(name, value) {
+  if (applySimParamCommand(name, value)) return;
+
   switch (name) {
     case "arm":
       simState.armed = !!value;
@@ -517,6 +655,18 @@ async function start() {
   } catch (err) {
     console.error("[JOYCFG] FATAL: gagal memuat profil joystick:", err.message);
     process.exit(1);
+  }
+
+  if (SIM) {
+    /* Bukan fatal: kalau dump param hilang, sisa mode SIM tetap berguna —
+       hanya halaman Vehicle yang kosong. */
+    try {
+      simParams = SimParams.load();
+      console.log(`[SIM] tabel param dimuat: ${simParams.size} param dari parameters_ardusub.params`);
+    } catch (err) {
+      console.warn("[SIM] gagal memuat parameters_ardusub.params:", err.message);
+      console.warn("[SIM] halaman Vehicle akan kosong di mode simulasi.");
+    }
   }
 
   httpServer.listen(WS_PORT, () => {

@@ -1,6 +1,8 @@
 # PLAN: Fitur QGroundControl-lite untuk GUI ROV
 
-Status: **Perencanaan** (belum diimplementasikan)
+Status: **Terimplementasi** (Fungsi A + Fungsi B). Dokumentasi pemakaian ada di
+[README-WORK.md](../README-WORK.md) §9; dokumen ini disimpan sebagai catatan rancangan
+dan keputusan scope.
 
 Mengambil 2 fungsi dari QGroundControl dan mengadaptasinya ke arsitektur GUI ROV
 yang sudah ada (Browser ↔ WebSocket ↔ server.js ↔ UDP ↔ rov_agent.py ↔ MAVLink/ArduSub):
@@ -173,3 +175,59 @@ Browser (Analyze page): terima stream, update tree MAVLink Inspector + buffer ri
   ini wajib pakai SITL ArduSub (`autonomy/SITL_SETUP.md`) / hardware asli?
 - Prioritas: Fungsi A (Vehicle Config) dan Fungsi B (Analyze) independen satu sama lain —
   bisa dikerjakan sebagai 2 PR terpisah. Mana duluan?
+
+---
+
+## 6. Catatan hasil implementasi (koreksi terhadap rencana di atas)
+
+Empat asumsi di dokumen ini ternyata tidak sesuai kode yang ada. Dicatat di sini supaya
+rencana lama tidak menyesatkan pembaca berikutnya:
+
+1. **§1.2 "`switch (name)` command handler ~baris 441" salah alamat.** Dispatch command
+   di `server/server.js` adalah **if-chain** (`if (msg.type === "cmd")`), bukan `switch`;
+   `switch (name)` di baris ~452 itu `applySimCommand`, khusus mode SIM. Lebih penting:
+   **jalur GUI→ROV tidak perlu diubah sama sekali** — tidak ada allowlist nama command,
+   dan objek yang diteruskan sudah membawa `name` + `value`, jadi `param_set` cukup
+   menaruh payload-nya di dalam `value` sebagai objek.
+2. **Yang wajib diubah justru jalur balik ROV→GUI.** `udp.on("message")` membungkus
+   **setiap** datagram sebagai `{type:"telemetry"}` tanpa pengecekan, dan `broadcast()`
+   men-tap yang bertipe telemetry ke perekam Replay. Tanpa diskriminator envelope,
+   `param_batch`/`mavlink_msg` akan tertulis ke `trajectory.jsonl`.
+3. **§1.2 keliru menyebut `apply_thruster_config` sudah punya pola tunggu-echo.**
+   Fungsi itu hanya `param_set_send` + `time.sleep(0.1)`; **tidak ada handler
+   `PARAM_VALUE` sama sekali** di `rov_agent.py` sebelum perubahan ini. Verifikasi echo
+   adalah perilaku baru — dan refactor `set_param()` sekalian memperbaiki penulisan
+   thruster yang selama ini tidak pernah diverifikasi.
+4. **§5 pertanyaan metadata param: terjawab — tidak tersedia offline.** pymavlink tidak
+   membundel metadata param, dan repo hanya punya dump **nilai**
+   (`parameters_ardusub.params`, tanpa deskripsi/rentang/satuan). v1 karena itu
+   menampilkan nama + nilai + tipe saja. Kolom tipe pada dump memakai enum
+   `MAV_PARAM_TYPE` yang sama, sehingga dump tetap berguna sebagai fixture mode SIM.
+
+### Jawaban pertanyaan §5 lainnya
+- **Mode dev:** `server.js --sim` diberi mock param (`server/sim-params.js`) dari dump
+  nyata Pixhawk, jadi kedua halaman bisa dikembangkan & didemokan tanpa FC. SITL tetap
+  dipakai untuk verifikasi akhir.
+- **Urutan:** Fungsi A dan B dikerjakan berurutan di atas fondasi envelope yang sama.
+- **Kalibrasi sensor (§1.1):** **ditunda**, tidak masuk v1 — butuh wahana kering/diam dan
+  alur progres tersendiri; salah picu menjelang lomba merusak kalibrasi yang sudah benar.
+
+### Dump param yang dipakai
+`parameters_ardusub.params` di root repo **diganti** dengan dump QGroundControl yang
+diambil langsung dari Pixhawk wahana (ArduSub 4.5.7, git `b09fafe2`, 975 param). Dump
+lama (968 param, git `30257f01`) berasal dari wahana lain: `BATT_*` tidak lengkap dan
+masih memuat `INS_ACC3*` (3 IMU) padahal wahana ini 2 IMU.
+
+## 7. Yang ditemukan tapi TIDAK diperbaiki di sini
+
+- **`pid`, `pool_depth`, `viewer_access`, dan `manipulator` tidak punya cabang di
+  `command_listener()`.** GUI mengirimkannya (`public/js/pages/setup.js`,
+  `server/server.js`), tapi di `rov_agent.py` keempatnya jatuh ke
+  `unknown command`. `handle_manipulator()` juga tidak pernah dipanggil dari mana pun.
+  Artinya tombol **Apply PID** dan **Apply Pool** di halaman Setup saat ini tidak
+  berefek apa pun pada wahana. Perlu PR tersendiri.
+- **Dashboard butuh internet untuk dimuat.** `public/index.html` mengambil three.js &
+  Chart.js dari CDN (unpkg/jsdelivr) lewat importmap. Di venue tanpa internet — kondisi
+  yang justru diwajibkan aturan "tanpa wireless" — **seluruh dashboard gagal dimuat**,
+  bukan cuma grafiknya. Perbaikannya: vendor keduanya ke `public/vendor/` seperti yang
+  sudah dilakukan untuk `jsqr.min.js`, lalu arahkan importmap ke file lokal.
