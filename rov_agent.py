@@ -7,7 +7,7 @@ import math
 from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
-from rov_modes import ACRO_WARNING, depth_hold_allowed, is_risky_mode, resolve_pilot_mode
+from rov_modes import depth_hold_allowed, is_risky_mode, resolve_pilot_mode, warning_for_mode
 from rov_params import (
     coerce_param_value,
     decode_param_id,
@@ -446,7 +446,9 @@ def command_listener():
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if is_risky_mode(pixhawk_mode):
-                    print(f" !! {ACRO_WARNING}")
+                    msg = warning_for_mode(pixhawk_mode)
+                    if msg:
+                        print(f" !! {msg}")
                 print("====================================")
 
             elif name == "stop":
