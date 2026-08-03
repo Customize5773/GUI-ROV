@@ -8,6 +8,7 @@ from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
 from rov_modes import depth_hold_allowed, is_risky_mode, resolve_pilot_mode, warning_for_mode
+from rov_motor_test import validate_motor_test
 from rov_params import (
     coerce_param_value,
     decode_param_id,
@@ -591,6 +592,14 @@ def command_listener():
                     target=apply_thruster_config, args=(motors,), daemon=True
                 ).start()
 
+            elif name == "motor_test":
+                # value = {"motor": 1..6, "throttle": 1-100, "duration": s, "direction": "forward"|"reverse"}
+                # Thread terpisah: command_long_send tidak blocking lama, tapi
+                # tetap dipisah dari command_listener demi konsistensi pola.
+                threading.Thread(
+                    target=run_motor_test, args=(value,), daemon=True
+                ).start()
+
             elif name == "param_list":
                 # Minta seluruh tabel param FC. Jawabannya ~980 PARAM_VALUE
                 # yang ditangani & di-batch di loop RX main().
@@ -733,6 +742,46 @@ def apply_thruster_config(motors):
         print("[PARAM] Thruster configuration updated.")
     except Exception as e:
         print("[PARAM] gagal set thruster config:", e)
+
+
+def run_motor_test(payload):
+    """Putar SATU thruster sebentar lewat MAV_CMD_DO_MOTOR_TEST (ArduSub).
+
+    Dipakai panel "Thruster Test" di halaman Setup untuk memverifikasi arah
+    putar satu thruster tanpa menyalakan mixing penuh (MANUAL_CONTROL tidak
+    bisa mengisolasi satu motor). Klem/validasi ada di rov_motor_test.py
+    (defense in depth) selain klem di sisi GUI.
+    """
+    motor = payload.get("motor") if isinstance(payload, dict) else None
+    try:
+        motor, throttle, duration, direction, signed_throttle = validate_motor_test(payload)
+
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+            0,
+            motor,
+            mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
+            signed_throttle,
+            duration,
+            0, 0, 0,
+        )
+        print(f"[MOTORTEST] motor {motor} {direction} {throttle}% selama {duration}s")
+        send_to_gui({
+            "type": "motor_test_ack",
+            "motor": motor,
+            "direction": direction,
+            "ok": True,
+        })
+    except Exception as e:
+        print("[MOTORTEST] gagal:", e)
+        send_to_gui({
+            "type": "motor_test_ack",
+            "motor": motor,
+            "ok": False,
+            "reason": str(e),
+        })
 
 
 def apply_pid_gains(writes):
@@ -1237,6 +1286,10 @@ def main():
             if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
                 ok = msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
                 print(f"[MAV] ARM/DISARM {'diterima' if ok else 'DITOLAK'} "
+                      f"(result={msg.result})")
+            elif msg.command == mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST:
+                ok = msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+                print(f"[MAV] DO_MOTOR_TEST {'diterima' if ok else 'DITOLAK'} "
                       f"(result={msg.result})")
             else:
                 print(f"[MAV] ACK cmd={msg.command} result={msg.result}")

@@ -19,6 +19,40 @@ const PID_FIELD_BY_PARAM = {
 };
 const PID_PARAM_NAMES = Object.keys(PID_FIELD_BY_PARAM);
 
+/* Posisi & fungsi axis motor 1-6 sesuai tabel faktor BlueROV1 resmi
+   (frame `bluerov`, FRAME_TYPE 0) — ardupilot.org/sub/docs/sub-frames.html.
+   Motor 1&2 = surge+yaw (horizontal, kiri-kanan tengah); 3&4 = heave depan
+   (vertikal); 5 = heave belakang-tengah (vertikal); 6 = lateral/sway
+   (horizontal, tengah). `pair` mengelompokkan yang counter-rotate untuk
+   pewarnaan diagram (A: 2&4, B: 1&3, C: 6&5) — lihat juga tabel di
+   CONTROL-MAPPING.md §5.1. */
+const MOTOR_LAYOUT = [
+  { id: 4, x: 55,  y: 42,  label: "T4", type: "vertical",   pair: "A", axis: "Heave (depan-kiri)" },
+  { id: 3, x: 145, y: 42,  label: "T3", type: "vertical",   pair: "B", axis: "Heave (depan-kanan)" },
+  { id: 2, x: 30,  y: 100, label: "T2", type: "horizontal", pair: "A", axis: "Surge + Yaw (kiri)" },
+  { id: 6, x: 100, y: 100, label: "T6", type: "horizontal", pair: "C", axis: "Lateral / Sway (tengah)" },
+  { id: 1, x: 170, y: 100, label: "T1", type: "horizontal", pair: "B", axis: "Surge + Yaw (kanan)" },
+  { id: 5, x: 100, y: 146, label: "T5", type: "vertical",   pair: "C", axis: "Heave (belakang-tengah)" },
+];
+
+/* Ikon SVG per orientasi thruster (dipusatkan di 0,0, discale/translate saat
+   dirender). Vertikal: kipas 4 mata angin (dilihat dari atas). Horizontal:
+   bowtie dua segitiga berhadapan (dorong depan-belakang/samping). */
+function motorIcon(type) {
+  if (type === "vertical") {
+    return `<g class="motor-fin">
+      <line x1="0" y1="-10" x2="0" y2="10"/>
+      <line x1="-10" y1="0" x2="10" y2="0"/>
+      <line x1="-7" y1="-7" x2="7" y2="7"/>
+      <line x1="-7" y1="7" x2="7" y2="-7"/>
+    </g>`;
+  }
+  return `<g class="motor-fin">
+    <polygon points="-9,-5 -1,0 -9,5"/>
+    <polygon points="9,-5 1,0 9,5"/>
+  </g>`;
+}
+
 function saveSetup() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
@@ -112,6 +146,36 @@ export const setupPage = {
             <label class="card__label">Reverse arah thruster</label>
             <div class="toggles" id="suReverse"></div>
             <button class="btn-wide" id="suApplyThruster">Apply Thruster Config</button>
+          </div>
+
+          <!-- THRUSTER TEST -->
+          <div class="card">
+            <span class="panel__eyebrow">THRUSTER TEST</span>
+            <h3 class="card__title">Uji Spin Per-Thruster</h3>
+            <p class="card__desc">
+              Putar SATU thruster sebentar dengan throttle rendah untuk memastikan
+              arahnya benar sebelum trial — bandingkan putaran baling-baling yang
+              terlihat dengan kolom "Harusnya" di bawah. Kalau terbalik, ubah toggle
+              di kartu THRUSTER SETUP di atas lalu klik Apply lagi (panel ini hanya
+              alat diagnostik, bukan sumber konfigurasi baru).
+            </p>
+            <span class="badge" id="suMotorTestWarn">Wahana harus ARMED &amp; aman diuji di darat/tertambat</span>
+            <svg id="suMotorSvg" viewBox="0 0 200 190" class="motor-diagram">
+              <rect x="10" y="14" width="180" height="164" rx="16" fill="none" stroke="currentColor" opacity="0.3"/>
+              <polygon class="hull-front-marker" points="100,4 93,16 107,16"/>
+              ${MOTOR_LAYOUT.map((m) => `
+                <g transform="translate(${m.x},${m.y})">
+                  <circle id="motorDot${m.id}" cx="0" cy="0" r="14" class="motor-dot motor-dot--pair${m.pair}"></circle>
+                  ${motorIcon(m.type)}
+                </g>
+                <text x="${m.x}" y="${m.y + 24}" text-anchor="middle" font-size="11">${m.label}</text>
+              `).join("")}
+            </svg>
+            <div class="card__row card__row--wrap">
+              ${numField("suMtThrottle", "Throttle", 15, "1", "%")}
+              ${numField("suMtDuration", "Durasi", 1, "0.1", "s")}
+            </div>
+            <div id="suMotorButtons"></div>
           </div>
 
           <!-- PID SETUP -->
@@ -239,6 +303,47 @@ export const setupPage = {
       log("Thruster configuration dikirim", "ok");
       log(`Thruster config dikirim — ${CONFIG.THRUSTER.frame}, gain ${CONFIG.THRUSTER.gain}%`, "ok");
     };
+
+    /* THRUSTER TEST — spin satu thruster untuk verifikasi arah putar.
+       Diagnostik saja: hasilnya diterapkan lewat toggle "Reverse arah
+       thruster" + Apply di kartu THRUSTER SETUP di atas, bukan jalur
+       konfigurasi baru. */
+    this.motorTestButtons = {};
+    const motorButtonsWrap = root.querySelector("#suMotorButtons");
+    MOTOR_LAYOUT.forEach((m) => {
+      const row = document.createElement("div");
+      row.className = "card__row";
+      row.innerHTML = `
+        <span class="card__label" style="min-width:9em">${m.label} <small>${m.axis}</small></span>
+        <button class="chip" data-motor="${m.id}" data-dir="forward">▲ Fwd</button>
+        <button class="chip" data-motor="${m.id}" data-dir="reverse">▼ Rev</button>
+        <span class="card__info" id="suMotorStatus${m.id}"></span>`;
+      motorButtonsWrap.appendChild(row);
+
+      row.querySelectorAll("button").forEach((btn) => {
+        btn.onclick = () => {
+          const armed = document.getElementById("btnArm")?.getAttribute("aria-pressed") === "true";
+          if (!armed) { log("Uji thruster ditolak — wahana belum ARMED", "warn"); return; }
+
+          const throttle = Math.max(1, Math.min(20, parseInt(root.querySelector("#suMtThrottle").value, 10) || 15));
+          const duration = Math.max(0.2, Math.min(2, parseFloat(root.querySelector("#suMtDuration").value) || 1));
+          const direction = btn.dataset.dir;
+          const motor = Number(btn.dataset.motor);
+
+          wsSend({ type: "cmd", name: "motor_test", motor, throttle, duration, direction });
+
+          const dot = document.getElementById("motorDot" + motor);
+          dot.classList.add("motor-dot--active", direction === "forward" ? "motor-dot--fwd" : "motor-dot--rev");
+          const statusEl = document.getElementById("suMotorStatus" + motor);
+          statusEl.textContent = "menguji...";
+          setTimeout(() => {
+            dot.classList.remove("motor-dot--active", "motor-dot--fwd", "motor-dot--rev");
+          }, duration * 1000);
+
+          log(`Uji T${motor} ${direction === "forward" ? "maju" : "mundur"} ${throttle}% selama ${duration}s`, "");
+        };
+      });
+    });
 
     /* PID */
     this.els.pidSrc = root.querySelector("#suPidSrc");
@@ -375,5 +480,14 @@ export const setupPage = {
       this.els.pidSrc.textContent = `Dari FC · ${jam}`;
       this.els.pidSrc.className = "badge badge--ok";
     }
+  },
+
+  /* Balasan MAV_CMD_DO_MOTOR_TEST (nyata) atau mock SIM — lihat panel
+     THRUSTER TEST. Cuma memperbarui badge kecil per-thruster. */
+  onMotorTestAck(msg) {
+    if (!msg || !msg.motor) return;
+    const el = document.getElementById("suMotorStatus" + msg.motor);
+    if (!el) return;
+    el.textContent = msg.ok ? "OK" : `gagal${msg.reason ? ": " + msg.reason : ""}`;
   },
 };

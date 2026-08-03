@@ -239,6 +239,51 @@ Gripper: servo **channel 10** (`SERVO10_FUNCTION = 7`), PWM buka `1900` / tutup
 `1100` / netral `1500`, dengan rate-limit + EMA di
 [`rov_gripper.py`](rov_gripper.py) supaya tidak menyentak.
 
+### 5.1 Calibration & Thruster Layout
+
+Layout resmi frame `bluerov` (FRAME_TYPE 0), tampak dari atas. Sumber:
+[ArduSub — Sub Frame Configurations](https://ardupilot.org/sub/docs/sub-frames.html),
+[Blue Robotics — Building a Vehicle Frame](https://www.ardusub.com/quick-start/vehicle-frame.html),
+dicocokkan dengan `MOT_1..6_DIRECTION` default di
+[`parameters_ardusub.params`](parameters_ardusub.params) (`-1,-1,-1,1,-1,1`).
+3-2-1: **2 surge+yaw** (T1, T2), **3 heave** (T3, T4, T5), **1 lateral/sway**
+(T6) — sway hanya satu thruster tanpa pasangan penyeimbang, jadi secara
+mekanik ikut membangkitkan roll kecil saat dipakai (bukan bug, melainkan
+konsekuensi tata letak 3-2-1 itu sendiri — lihat faktor Roll = −0.25 di T6
+pada tabel di bawah).
+
+```
+              ▲ depan
+   T4 o------------o T3      (heave, depan)
+      |            |
+  T2 o    T6 o    o T1        (surge+yaw kiri/kanan · lateral tengah)
+      |            |
+      o-----T5-----o          (heave, belakang-tengah)
+```
+
+| Motor | Posisi (top-down)        | Roll | Pitch | Yaw   | Throttle | Forward | Lateral | Kontribusi axis     |
+|-------|--------------------------|------|-------|-------|----------|---------|---------|---------------------|
+| T1    | Tengah-kanan, horizontal | 0    | 0     | −1.0  | 0        | 1.0     | 0       | Surge + Yaw (kanan) |
+| T2    | Tengah-kiri, horizontal  | 0    | 0     | +1.0  | 0        | 1.0     | 0       | Surge + Yaw (kiri)  |
+| T3    | Depan-kanan, vertikal    | +0.5 | +0.5  | 0     | 0.45     | 0       | 0       | Heave (depan)       |
+| T4    | Depan-kiri, vertikal     | −0.5 | +0.5  | 0     | 0.45     | 0       | 0       | Heave (depan)       |
+| T5    | Belakang-tengah, vertikal| 0    | −1.0  | 0     | 1.0      | 0       | 0       | Heave (belakang)    |
+| T6    | Tengah, horizontal       | −0.25| 0     | 0     | 0        | 0       | 1.0     | Lateral / Sway      |
+
+Kolom faktor di atas adalah kontribusi axis per ArduSub, **bukan** klaim arah
+putar CW/CCW mutlak per motor — arah putar fisik tergantung juga pitch
+baling-baling & polaritas kabel. Panel Thruster Test di halaman Setup
+mewarnai thruster berpasangan (T2↔T4, T1↔T3, T6↔T5) yang seharusnya
+counter-rotate saat digerakkan bersamaan, meniru pewarnaan hijau/biru di
+diagram resmi Blue Robotics — bukan tabel absolut CW/CCW.
+
+**Cara pakai dengan panel Thruster Test** (halaman Setup): putar tiap thruster
+satu per satu dengan throttle rendah, lalu bandingkan arah putaran baling-baling
+yang terlihat dengan kolom "Kontribusi axis" di atas. Kalau terasa/terlihat
+salah arah, jangan ubah tabel ini — cukup toggle "Reverse arah thruster"
+untuk thruster tersebut di kartu THRUSTER SETUP, lalu klik Apply. Ini
+menghilangkan tebak-tebak yang biasanya berulang tiap sesi trial.
+
 ---
 
 ## 6. Safety & failsafe
@@ -298,6 +343,7 @@ Telemetry balik: Pixhawk → `rov_agent.py` → UDP :14551 → server → WS →
 | `gripper` | `"open"`/`"close"`/`-1000..1000` | Posisi gripper |
 | `light` | `true`/`false` | Lampu (belum terhubung hardware) |
 | `thruster_config` | `{motors:{1..6: ±1}}` | `MOT_n_DIRECTION` |
+| `motor_test` | `{motor:1-6, throttle:%, duration:s, direction}` | Uji spin satu thruster (`MAV_CMD_DO_MOTOR_TEST`, lihat §5.1) |
 
 Diterima tanpa aksi (murni state dashboard): `controller`, `set_surface`,
 `snapshot`, `record`. Selain daftar di atas akan tercatat sebagai

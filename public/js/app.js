@@ -461,6 +461,12 @@ function connect() {
     else log(`Param ${msg.name} GAGAL: ${msg.reason || "ditolak FC"}`, "err");
     toPage("vehicle", "onParamAck", msg);
   }
+  else if (msg.type === "motor_test_ack") {
+    // Balasan panel Thruster Test (Setup) — MAV_CMD_DO_MOTOR_TEST nyata atau mock SIM.
+    if (msg.ok) log(`Uji thruster T${msg.motor} OK`, "ok");
+    else log(`Uji thruster T${msg.motor} GAGAL: ${msg.reason || "tidak ada respon"}`, "err");
+    toPage("setup", "onMotorTestAck", msg);
+  }
   else if (msg.type === "mavlink_msg") { toPage("analyze", "onMavlinkMsg", msg); }
   else if (msg.type === "statustext") {
     // STATUSTEXT dari FC: inilah cara ArduSub melaporkan penolakan param &
