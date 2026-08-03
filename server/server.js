@@ -446,12 +446,16 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 // Padanan rov_modes.PILOT_MODE_MAP di sisi Python — dipakai agar telemetri SIM
 // melaporkan nama mode ArduSub yang sama dengan yang dikirim Pixhawk sungguhan,
 // sehingga tab mode & badge peringatan ACRO bisa diuji tanpa hardware.
+// "stabilize" sengaja menunjuk ALT_HOLD juga — lihat docstring rov_modes.py.
 const PILOT_MODE_MAP = {
   manual: "MANUAL",
-  stabilize: "STABILIZE",
+  stabilize: "ALT_HOLD",
   depth_hold: "ALT_HOLD",
   acro: "ACRO",
 };
+
+const DEPTH_HOLD_MODES = new Set(["ALT_HOLD"]);   // rov_modes.DEPTH_HOLD_MODES
+const SIM_DEPTH_STEP = 0.05;                      // rov_agent.DEPTH_STEP
 
 const simState = {
   armed: false,
@@ -470,6 +474,22 @@ let simParamStreamCancel = null;
 // supaya operator bisa memastikan nilainya benar-benar sampai (sama seperti
 // state["pool_depth"] di rov_agent.py).
 let simPoolDepth = null;
+
+/* Setpoint kedalaman palsu + default-nya (padanan depth_target /
+   default_depth_target di rov_agent.py). Ada di SIM supaya alur "tekan Alt Hold
+   -> target langsung 0.30 m -> D-pad menggesernya 0.05 m" bisa diuji penuh dari
+   browser tanpa Pixhawk. */
+let simDepthDefault = 0.3;     // rov_pid.DEFAULT_DEPTH_TARGET
+let simDepthTarget = 0;
+
+// Padanan rov_pid.clamp_depth_target().
+function clampSimDepthTarget(value) {
+  let v = Number(value);
+  if (!Number.isFinite(v)) return 0;
+  v = Math.max(0, v);
+  if (simPoolDepth != null) v = Math.min(v, simPoolDepth);
+  return v;
+}
 
 /* Stream MAVLink palsu (halaman Analyze). Dimatikan saat GUI mengirim
    mavlink_stream:false — sama seperti rov_agent.py.
@@ -622,7 +642,22 @@ function applySimParamCommand(name, value) {
       return true;
     }
     simPoolDepth = depth;
+    // Jepit ULANG target berjalan, sama seperti rov_agent.py.
+    simDepthTarget = clampSimDepthTarget(simDepthTarget);
     console.log(`[SIM] kedalaman kolam = ${depth.toFixed(2)} m`);
+    return true;
+  }
+
+  if (name === "depth_default") {
+    const depth = Number(value);
+    if (!Number.isFinite(depth) || depth < 0) {
+      console.warn(`[SIM] depth_default tidak valid: ${value}`);
+      return true;
+    }
+    // Tidak menggeser target berjalan — berlaku saat masuk depth hold
+    // berikutnya, persis seperti rov_agent.py.
+    simDepthDefault = depth;
+    console.log(`[SIM] target kedalaman default = ${depth.toFixed(2)} m`);
     return true;
   }
 
@@ -654,6 +689,22 @@ function applySimCommand(name, value) {
         break;
       }
       simState.pilotMode = mapped;
+      // Masuk depth hold = pasang setpoint default, bukan kedalaman saat ini.
+      if (DEPTH_HOLD_MODES.has(mapped)) {
+        simDepthTarget = clampSimDepthTarget(simDepthDefault);
+        console.log(`[SIM] depth target = ${simDepthTarget.toFixed(2)} m`);
+      }
+      break;
+    }
+    case "gain_inc":
+    case "gain_dec": {
+      if (!DEPTH_HOLD_MODES.has(simState.pilotMode)) {
+        console.log(`[SIM] ${name} diabaikan — mode bukan depth hold`);
+        break;
+      }
+      const step = name === "gain_inc" ? SIM_DEPTH_STEP : -SIM_DEPTH_STEP;
+      simDepthTarget = clampSimDepthTarget(simDepthTarget + step);
+      console.log(`[SIM] depth target = ${simDepthTarget.toFixed(2)} m`);
       break;
     }
   }
@@ -683,6 +734,8 @@ if (SIM) {
         mode: simState.pilotMode,
         control_mode: simState.controlMode,
         pool_depth: simPoolDepth,
+        depth_target: simDepthTarget,
+        depth_default: simDepthDefault,
       },
       recv: Date.now(),
     });

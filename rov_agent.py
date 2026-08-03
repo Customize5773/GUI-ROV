@@ -7,7 +7,7 @@ import math
 from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
-from rov_modes import ACRO_WARNING, depth_hold_allowed, is_risky_mode, resolve_pilot_mode
+from rov_modes import depth_hold_allowed, is_risky_mode, resolve_pilot_mode, warning_for_mode
 from rov_params import (
     coerce_param_value,
     decode_param_id,
@@ -16,7 +16,13 @@ from rov_params import (
     param_type_name,
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
-from rov_pid import clamp_depth_target, resolve_pid_writes, valid_pool_depth
+from rov_pid import (
+    DEFAULT_DEPTH_TARGET,
+    clamp_depth_target,
+    resolve_pid_writes,
+    valid_depth_target,
+    valid_pool_depth,
+)
 from attitude_filter import AttitudeFilter
 from rov_gripper import (
     GRIPPER_PWM_NEUTRAL,
@@ -108,7 +114,16 @@ joystick = {
 }
 
 depth_target = 0.0
-DEPTH_STEP = 0.10
+
+# Setpoint yang dipasang otomatis setiap kali masuk mode depth hold. Nilai awal
+# dari rov_pid.DEFAULT_DEPTH_TARGET, bisa diubah operator lewat command
+# `depth_default` (halaman Setup) tanpa mengubah kode.
+default_depth_target = DEFAULT_DEPTH_TARGET
+
+# Langkah geser setpoint per penekanan D-pad ↑/↓ (atau Arrow ↑/↓ di keyboard).
+# 0.05 m dipilih terhadap kolam uji ~0.9 m: cukup halus untuk membidik, dan
+# penekanan beruntun (auto-repeat sisi GUI) menutup jarak besar dengan cepat.
+DEPTH_STEP = 0.05
 depth_lock = threading.Lock()
 
 # Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
@@ -287,6 +302,10 @@ def send_telemetry():
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
 
+    # Ikut dipantulkan supaya halaman Setup menampilkan nilai yang benar-benar
+    # aktif di wahana, bukan sekadar isi localStorage browser.
+    state["depth_default"] = default_depth_target
+
     send_to_gui(state)
 
     now = time.time()
@@ -355,6 +374,7 @@ def command_listener():
     global current_control_mode
     global mavlink_stream_requested_at
     global pool_depth
+    global default_depth_target
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -434,19 +454,28 @@ def command_listener():
 
                 # Hanya mode yang benar-benar menahan kedalaman yang perlu
                 # setpoint awal. Di MANUAL/ACRO depth_target tidak dipakai.
+                #
+                # Setpoint-nya nilai TETAP (default_depth_target), bukan
+                # kedalaman saat ini: menekan tombol mode = "turun ke kedalaman
+                # kerja", perilaku yang sama tiap kali. Konsekuensinya kalau
+                # ditekan saat mengapung di permukaan wahana langsung menyelam —
+                # itu memang yang diinginkan, tapi berarti tombol ini tidak
+                # boleh ditekan di darat.
                 if depth_hold_allowed(pixhawk_mode):
                     with depth_lock:
-                        # Dijepit juga di sini: pembacaan depth bisa melewati
-                        # dasar kolam (drift barometer / kalibrasi permukaan
-                        # belum diset), dan target awal yang di luar batas
-                        # membuat bias throttle langsung menekan ke bawah.
-                        depth_target = clamp_depth_target(state["depth"], pool_depth)
+                        # Dijepit: default bisa lebih dalam dari dasar kolam
+                        # kalau pool_depth diperkecil belakangan, dan target di
+                        # luar batas membuat bias throttle menekan ke bawah
+                        # tanpa henti.
+                        depth_target = clamp_depth_target(default_depth_target, pool_depth)
                     print(f"[DEPTH] Target initialized = {depth_target:.2f} m")
 
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if is_risky_mode(pixhawk_mode):
-                    print(f" !! {ACRO_WARNING}")
+                    msg = warning_for_mode(pixhawk_mode)
+                    if msg:
+                        print(f" !! {msg}")
                 print("====================================")
 
             elif name == "stop":
@@ -496,6 +525,22 @@ def command_listener():
                     shown = depth_target
                 print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
                       f"(target dijepit ke {shown:.2f} m)")
+
+            elif name == "depth_default":
+
+                # Setpoint yang dipasang otomatis saat MASUK depth hold.
+                # Sengaja TIDAK menggeser depth_target yang sedang berjalan:
+                # mengubah angka di halaman Setup tidak boleh memindahkan
+                # wahana yang sedang menyelam. Berlaku pada perpindahan mode
+                # berikutnya.
+                depth_m = valid_depth_target(value)
+                if depth_m is None:
+                    print(f"[DEPTH] nilai depth_default tidak valid: {value!r}")
+                    continue
+
+                default_depth_target = depth_m
+                print(f"[DEPTH] Target default = {default_depth_target:.2f} m "
+                      f"(berlaku saat masuk depth hold berikutnya)")
 
             elif name == "pid":
 

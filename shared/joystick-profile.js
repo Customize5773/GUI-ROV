@@ -21,7 +21,10 @@
  * maupun antar OS tanpa kalibrasi ulang.
  */
 
-export const SCHEMA_VERSION = 2;
+/* v3: D-pad ↑/↓ pindah dari mount tilt ke geser setpoint kedalaman (mode
+   "repeat"), mount tilt turun ke D-pad ←/→. Versi dinaikkan supaya profil
+   tersimpan operator ikut dimigrasikan, bukan diam-diam menahan binding lama. */
+export const SCHEMA_VERSION = 3;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -47,6 +50,17 @@ export const BUTTON_ACTIONS = [
   "gain_inc",
   "gain_dec",
 ];
+
+/* Cara sebuah tombol memicu aksinya:
+     toggle — sekali saat ditekan.
+     hold   — sekali saat ditekan + sekali saat dilepas (aksi punya "lawan",
+              mis. gripper yang harus berhenti).
+     repeat — sekali saat ditekan, lalu berulang selama ditahan. Dipakai untuk
+              geser setpoint kedalaman: tap = satu langkah 0.05 m, tahan =
+              menempuh jarak besar tanpa menekan belasan kali.
+   Ditaruh di sini (bukan di halaman Joystick) karena normalizeProfile() ikut
+   memvalidasinya. */
+export const BUTTON_MODES = ["toggle", "hold", "repeat"];
 
 /* Label axis yang bisa dipilih operator. "Axis S"/"Axis T" sengaja TIDAK ada:
    keduanya dulu muncul di dropdown tapi tidak pernah dibaca runtime, jadi
@@ -129,10 +143,12 @@ function defaultButtonLayer() {
     { action: "grip_open", button: 7, mode: "hold" },          // RT (analog)
     { action: "input_hold_set", button: 8, mode: "toggle" },   // Back
     { action: "mount_center", button: 9, mode: "toggle" },     // Start
-    { action: "mount_tilt_up", button: 12, mode: "hold" },     // D-pad ↑
-    { action: "mount_tilt_down", button: 13, mode: "hold" },   // D-pad ↓
-    { action: "gain_dec", button: 14, mode: "toggle" },        // D-pad ←
-    { action: "gain_inc", button: 15, mode: "toggle" },        // D-pad →
+    // depth: naik = target BERKURANG (gain_dec), turun = target BERTAMBAH.
+    // `depth` positif ke bawah, jadi arahnya memang terbalik dari nama command.
+    { action: "gain_dec", button: 12, mode: "repeat" },        // D-pad ↑ (naik)
+    { action: "gain_inc", button: 13, mode: "repeat" },        // D-pad ↓ (turun)
+    { action: "mount_tilt_up", button: 14, mode: "hold" },     // D-pad ←
+    { action: "mount_tilt_down", button: 15, mode: "hold" },   // D-pad →
     { action: "lights_dimmer", button: 10, mode: "hold" },     // L3
     { action: "lights_brighter", button: 11, mode: "hold" },   // R3
     { action: "no_function", button: 16, mode: "toggle" },     // Logitech
@@ -312,7 +328,7 @@ export function sanitizeProfile(data, warnings = []) {
     return {
       action,
       button: intInRange(row.button, 0, maxButton, def.button),
-      mode: row.mode === "hold" ? "hold" : "toggle",
+      mode: BUTTON_MODES.includes(row.mode) ? row.mode : "toggle",
     };
   });
 
@@ -388,6 +404,46 @@ export function migrateProfile(data, warnings = []) {
     }
 
     cfg.version = 2;
+  }
+
+  if (from < 3) {
+    /* Seluruh blok D-pad (tombol 12-15) ditulis ulang, bukan hanya baris yang
+       kebetulan sudah memegang aksi yang tepat.
+
+       Alasannya: mengatur kedalaman lewat D-pad ↑/↓ adalah inti dari mode Alt
+       Hold yang baru. Kalau migrasi hanya memindahkan binding lama, profil yang
+       sudah disesuaikan operator (mis. D-pad dipakai input_hold_set) akan
+       kehilangan kontrol kedalaman sepenuhnya tanpa pesan apa pun — kegagalan
+       diam yang justru paling berbahaya. Aksi yang tergusur dilaporkan di
+       `warnings` supaya operator bisa memasang ulang di halaman Joystick. */
+    const DPAD_V3 = {
+      12: { action: "gain_dec", mode: "repeat" },        // ↑ naik ke permukaan
+      13: { action: "gain_inc", mode: "repeat" },        // ↓ makin dalam
+      14: { action: "mount_tilt_up", mode: "hold" },     // ←
+      15: { action: "mount_tilt_down", mode: "hold" },   // →
+    };
+
+    const displaced = new Set();
+
+    for (const layer of ["regular", "shift"]) {
+      const rows = cfg.buttonConfig?.[layer];
+      if (!Array.isArray(rows)) continue;
+      cfg.buttonConfig[layer] = rows.map((row) => {
+        const next = row && DPAD_V3[Number(row.button)];
+        if (!next) return row;
+        if (row.action !== next.action && row.action !== "no_function") {
+          displaced.add(row.action);
+        }
+        return { ...row, ...next };
+      });
+    }
+
+    warnings.push("D-pad ditata ulang: ↑/↓ mengatur kedalaman, ←/→ mount tilt");
+    if (displaced.size) {
+      warnings.push(`Aksi berikut lepas dari D-pad, pasang ulang bila perlu: ${[...displaced].join(", ")}`);
+    }
+
+    cfg.version = 3;
   }
 
   // sanitizeProfile menjalankan migrateButtonAction dan seluruh clamping.

@@ -10,38 +10,71 @@ Dua lapis nama yang sengaja dibedakan:
     - Nama ArduSub : "MANUAL", "STABILIZE", "ALT_HOLD", "ACRO" — yang dipakai
       master.mode_mapping() dan yang dilaporkan balik lewat HEARTBEAT.
 
+Kenapa "stabilize" sekarang alias ALT_HOLD
+    Di STABILIZE attitude (roll/pitch) distabilkan, TAPI kedalaman tidak —
+    ArduSub hanya menjalankan cascade PID kedalaman (POSZ->VELZ->PSC_ACCZ) di
+    ALT_HOLD. Artinya MANUAL_CONTROL.z = 500 di ALT_HOLD berarti "tahan
+    kedalaman", sedangkan di STABILIZE cuma "tidak ada dorongan vertikal":
+    wahana yang tidak neutrally buoyant tenggelam/naik kecuali pilot menahan
+    stick throttle terus-menerus. Untuk operasi kolam dangkal ini tidak pernah
+    menjadi pilihan yang berguna, sementara ALT_HOLD sudah memberi attitude
+    stabilized DAN depth hold sekaligus. Jadi kedua nama GUI ("stabilize" dan
+    "depth_hold") sekarang mengarah ke ALT_HOLD, dan tab STABILIZE dihapus dari
+    dashboard. Aliasnya dipertahankan (bukan dihapus) supaya profil joystick
+    tersimpan dengan aksi `mode_stabilize` tetap bekerja.
+
 Tentang ACRO
-    Di ACRO tidak ada stabilisasi attitude: stik memerintahkan RATE (kecepatan
-    sudut), bukan sudut. Konsekuensi yang paling mudah terlewat adalah pada
-    THROTTLE — MANUAL_CONTROL.z = 500 di ALT_HOLD berarti "tahan kedalaman",
-    tapi di ACRO artinya cuma "tidak ada dorongan vertikal". Karena itu ACRO
-    sengaja TIDAK masuk DEPTH_HOLD_MODES: bias depth-hold tidak boleh ikut
-    campur saat tidak ada yang menstabilkan wahana.
+    Di ACRO tidak ada stabilisasi attitude sama sekali: stik memerintahkan RATE
+    (kecepatan sudut), bukan sudut, dan throttle netral juga tidak menahan
+    kedalaman. Karena itu ACRO tidak masuk DEPTH_HOLD_MODES: bias depth-hold
+    tidak boleh ikut campur saat tidak ada cascade PID kedalaman yang menahan
+    wahana.
 """
 
-# Nama GUI -> nama mode ArduSub.
+# Nama GUI -> nama mode ArduSub. "stabilize" sengaja menunjuk ALT_HOLD juga —
+# lihat catatan di docstring modul.
 PILOT_MODE_MAP = {
     "manual": "MANUAL",
-    "stabilize": "STABILIZE",
+    "stabilize": "ALT_HOLD",
     "depth_hold": "ALT_HOLD",
     "acro": "ACRO",
 }
 
-# Mode yang punya kendali kedalaman/attitude dari autopilot, sehingga menggeser
-# setpoint kedalaman lewat bias throttle masuk akal.
+# Mode yang menjalankan cascade PID kedalaman dari autopilot, sehingga
+# menggeser setpoint kedalaman lewat bias throttle masuk akal.
 #
 # MANUAL tidak masuk: tidak ada yang menahan kedalaman, bias hanya akan
 # mendorong wahana tanpa umpan balik.
+# STABILIZE tidak masuk: attitude distabilkan, tapi kedalaman tidak — lihat
+# catatan di docstring modul. Mode ini tidak bisa lagi diminta dari GUI, tapi
+# wahana masih bisa berada di sana lewat saklar RC / GCS lain.
 # ACRO tidak masuk: lihat catatan di docstring modul.
-DEPTH_HOLD_MODES = frozenset({"STABILIZE", "ALT_HOLD"})
+DEPTH_HOLD_MODES = frozenset({"ALT_HOLD"})
 
-# Mode yang memerlukan konfirmasi/peringatan eksplisit ke operator.
+# Mode yang memerlukan konfirmasi eksplisit SEBELUM diminta operator. STABILIZE
+# tidak ada di sini karena tidak bisa lagi diminta dari GUI — tapi peringatannya
+# tetap hidup di MODE_WARNINGS untuk kasus wahana masuk STABILIZE dari luar.
 RISKY_MODES = frozenset({"ACRO"})
 
 ACRO_WARNING = (
     "ACRO: tanpa stabilisasi attitude. Stik = rate, dan throttle netral "
     "TIDAK menahan kedalaman. Depth hold dinonaktifkan."
 )
+
+STABILIZE_WARNING = (
+    "STABILIZE: attitude distabilkan, tapi kedalaman TIDAK. Throttle netral "
+    "berarti dorongan vertikal nol, bukan tahan kedalaman. Depth hold "
+    "dinonaktifkan — tahan stick throttle secara manual."
+)
+
+# Peta mode -> pesan peringatan operator, dipakai oleh warning_for_mode().
+# Sengaja LEBIH LUAS dari RISKY_MODES: STABILIZE tidak bisa diminta dari GUI
+# (jadi tidak perlu gerbang konfirmasi), tapi kalau wahana ternyata berada di
+# sana peringatannya tetap perlu muncul.
+MODE_WARNINGS = {
+    "ACRO": ACRO_WARNING,
+    "STABILIZE": STABILIZE_WARNING,
+}
 
 
 def resolve_pilot_mode(name):
@@ -67,3 +100,8 @@ def depth_hold_allowed(mode):
 def is_risky_mode(mode):
     """True untuk mode yang perlu peringatan menonjol ke operator."""
     return mode in RISKY_MODES
+
+
+def warning_for_mode(mode):
+    """Pesan peringatan operator untuk `mode`, atau None kalau tidak ada."""
+    return MODE_WARNINGS.get(mode)

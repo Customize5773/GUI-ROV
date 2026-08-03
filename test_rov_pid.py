@@ -6,6 +6,7 @@
 import unittest
 
 from rov_pid import (
+    DEFAULT_DEPTH_TARGET,
     PARAM_TO_PID,
     PID_PARAM_MAP,
     PID_WRITE_ORDER,
@@ -13,6 +14,7 @@ from rov_pid import (
     clamp_depth_target,
     pid_param_names,
     resolve_pid_writes,
+    valid_depth_target,
     valid_pool_depth,
 )
 
@@ -183,6 +185,37 @@ class TestValidPoolDepth(unittest.TestCase):
     def test_nilai_ditolak(self):
         for bad in (0, -1, "abc", None, True, False, [1], float("nan"), float("inf")):
             self.assertIsNone(valid_pool_depth(bad), msg=repr(bad))
+
+
+class TestValidDepthTarget(unittest.TestCase):
+    def test_nilai_sah(self):
+        self.assertEqual(valid_depth_target(0.3), 0.3)
+        self.assertEqual(valid_depth_target("0.05"), 0.05)
+        self.assertEqual(valid_depth_target(1), 1.0)
+
+    def test_nol_diterima(self):
+        # Beda dari valid_pool_depth: 0 m = "tahan di permukaan", setpoint yang
+        # sah. Menolaknya membuat operator tidak bisa menyetel target itu.
+        self.assertEqual(valid_depth_target(0), 0.0)
+
+    def test_nilai_ditolak(self):
+        for bad in (-0.1, "abc", None, True, False, [1], float("nan"), float("inf")):
+            self.assertIsNone(valid_depth_target(bad), msg=repr(bad))
+
+    def test_tidak_dijepit_ke_pool_depth(self):
+        # Penjepitan sengaja ditunda ke clamp_depth_target() saat nilainya
+        # dipakai, supaya mengubah pool_depth belakangan tidak meninggalkan
+        # default yang basi.
+        self.assertEqual(valid_depth_target(50), 50.0)
+        self.assertEqual(clamp_depth_target(valid_depth_target(50), 0.9), 0.9)
+
+
+class TestDefaultDepthTarget(unittest.TestCase):
+    def test_masuk_akal_untuk_kolam_dangkal(self):
+        # Dipasang otomatis tiap masuk ALT_HOLD; kalau nilainya melebihi kolam
+        # uji (~0.9 m) wahana langsung ditekan ke dasar.
+        self.assertTrue(0 < DEFAULT_DEPTH_TARGET < 0.9)
+        self.assertEqual(valid_depth_target(DEFAULT_DEPTH_TARGET), DEFAULT_DEPTH_TARGET)
 
 
 if __name__ == "__main__":

@@ -1370,3 +1370,46 @@ body.pseudo-fs-lock { overflow: hidden; }
 @media (max-width: 680px) {
   .veh__btns { margin-left: 0; }
 }
+
+/* ===================== MODAL KONFIRMASI ACRO ===================== */
+/* [hidden] dipakai untuk sembunyi/tampil — lihat app.js confirmAcroEntry()/
+   closeAcroModal(). TAPI aturan display:flex di bawah adalah CSS penulis,
+   yang selalu menang atas stylesheet default browser ([hidden]{display:none}).
+   Override eksplisit ini WAJIB ada, sama seperti pola .cmdlink[hidden] dan
+   .modebar__warn[hidden] di atas — tanpanya modal tampil sejak render
+   pertama walau atribut hidden sudah terpasang di HTML. */
+.modal-overlay[hidden] { display: none; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4,10,18,.72);
+  backdrop-filter: blur(2px);
+  padding: 16px;
+}
+.modal {
+  width: 100%; max-width: 420px;
+  background: var(--surface);
+  border: 1px solid rgba(245,165,36,.4);
+  border-radius: var(--r);
+  box-shadow: 0 0 32px rgba(245,165,36,.15), 0 12px 40px rgba(0,0,0,.5);
+  padding: 20px;
+}
+.modal__title {
+  margin: 0 0 10px; color: var(--amber);
+  font-family: "Chakra Petch", sans-serif; font-weight: 700;
+  font-size: 15px; letter-spacing: .5px;
+}
+.modal__body {
+  margin: 0 0 18px; color: var(--ink-dim);
+  font-size: 13px; line-height: 1.6; white-space: pre-line;
+}
+.modal__actions { display: flex; gap: 10px; }
+.modal__btn { flex: 1; }
+.modal__btn--cancel {
+  background: rgba(255,255,255,.04); border-color: var(--line); color: var(--ink-dim);
+}
+.modal__btn--cancel:hover { background: rgba(255,255,255,.08); border-color: var(--ink-dim); box-shadow: none; }
+.modal__btn--confirm {
+  background: rgba(245,165,36,.1); border-color: rgba(245,165,36,.45); color: var(--amber);
+}
+.modal__btn--confirm:hover { background: rgba(245,165,36,.18); border-color: var(--amber); box-shadow: 0 0 16px rgba(245,165,36,.2); }

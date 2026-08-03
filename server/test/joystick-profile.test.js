@@ -35,7 +35,7 @@ function test(name, fn) {
 
   test("default profile memakai tata letak F310 mode X", () => {
     const def = S.defaultProfile();
-    assert.strictEqual(def.version, 2);
+    assert.strictEqual(def.version, S.SCHEMA_VERSION);
     assert.strictEqual(def.axisConfig.length, 4, "standard mapping = 4 axis");
     assert.strictEqual(def.device.buttons, 17, "standard mapping = 17 tombol");
     // LT/RT analog untuk gripper
@@ -68,13 +68,46 @@ function test(name, fn) {
     const warnings = [];
     const out = S.migrateProfile(v1, warnings);
 
-    assert.strictEqual(out.version, 2);
+    assert.strictEqual(out.version, S.SCHEMA_VERSION);
     assert.strictEqual(out.buttonConfig.regular[0].action, "grip_close",
       "actuator1_inc -> grip_close");
     assert.strictEqual(out.axisConfig[0].deadzone, S.DEFAULT_DEADZONE,
       "deadzone yang dulu hardcoded ikut terisi");
     assert.strictEqual(out.axisConfig[0].expo, S.DEFAULT_EXPO);
     assert.ok(warnings.some((w) => /v1/.test(w)));
+  });
+
+  test("profil v2 dimigrasikan ke tata letak D-pad depth (v3)", () => {
+    const v2 = S.defaultProfile();
+    v2.version = 2;
+    v2.buttonConfig.regular = [
+      // profil yang sudah disesuaikan operator: D-pad ↑/↓ dipakai aksi lain,
+      // dan tidak ada binding kedalaman sama sekali
+      { action: "input_hold_set", button: 12, mode: "toggle" },
+      { action: "input_hold_set", button: 13, mode: "toggle" },
+      { action: "no_function", button: 14, mode: "toggle" },
+      { action: "no_function", button: 15, mode: "toggle" },
+      { action: "arm", button: 0, mode: "toggle" },
+    ];
+
+    const warnings = [];
+    const out = S.migrateProfile(v2, warnings);
+    const rows = out.buttonConfig.regular;
+
+    assert.deepStrictEqual(
+      rows.slice(0, 4).map((r) => [r.action, r.button, r.mode]),
+      [
+        ["gain_dec", 12, "repeat"],        // ↑ = naik ke permukaan
+        ["gain_inc", 13, "repeat"],        // ↓ = makin dalam
+        ["mount_tilt_up", 14, "hold"],     // ←
+        ["mount_tilt_down", 15, "hold"],   // →
+      ],
+      "kontrol kedalaman harus ADA, bukan hilang diam-diam"
+    );
+    assert.deepStrictEqual([rows[4].action, rows[4].button], ["arm", 0],
+      "tombol di luar D-pad tidak disentuh");
+    assert.ok(warnings.some((w) => /input_hold_set/.test(w)),
+      "aksi yang tergusur harus dilaporkan, bukan hilang tanpa jejak");
   });
 
   /* ===================== VALIDASI ===================== */
@@ -140,7 +173,7 @@ function test(name, fn) {
   test("input sampah tidak pernah melempar", () => {
     for (const junk of [null, undefined, 42, "halo", [], { axisConfig: "bukan array" }]) {
       const out = S.sanitizeProfile(junk);
-      assert.strictEqual(out.version, 2);
+      assert.strictEqual(out.version, S.SCHEMA_VERSION);
       assert.strictEqual(out.axisConfig.length, 4);
     }
   });
@@ -186,7 +219,7 @@ function test(name, fn) {
 
   test("load membuat profil dan save menulis atomik", async () => {
     const cfg = await joyConfig.load();
-    assert.strictEqual(cfg.version, 2);
+    assert.strictEqual(cfg.version, S.SCHEMA_VERSION);
     assert.ok(fs.existsSync(joyConfig.configPath()));
 
     joyConfig.save(cfg);
@@ -202,7 +235,7 @@ function test(name, fn) {
     fs.writeFileSync(joyConfig.configPath(), "{ ini bukan json", "utf8");
 
     const cfg = await joyConfig.load();
-    assert.strictEqual(cfg.version, 2, "tetap dapat profil yang bisa dipakai");
+    assert.strictEqual(cfg.version, S.SCHEMA_VERSION, "tetap dapat profil yang bisa dipakai");
 
     const quarantined = fs.readdirSync(TMP).filter((f) => f.includes(".corrupt-"));
     assert.strictEqual(quarantined.length, 1, "file rusak dipindah, tidak hilang");
