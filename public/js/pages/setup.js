@@ -153,13 +153,17 @@ export const setupPage = {
             <span class="panel__eyebrow">THRUSTER TEST</span>
             <h3 class="card__title">Uji Spin Per-Thruster</h3>
             <p class="card__desc">
-              Putar SATU thruster sebentar dengan throttle rendah untuk memastikan
-              arahnya benar sebelum trial — bandingkan putaran baling-baling yang
-              terlihat dengan kolom "Harusnya" di bawah. Kalau terbalik, ubah toggle
-              di kartu THRUSTER SETUP di atas lalu klik Apply lagi (panel ini hanya
-              alat diagnostik, bukan sumber konfigurasi baru).
+              Meniru Motor Test QGroundControl/ArduSub: geser slider tiap thruster
+              untuk memutarnya sebentar (atas = maju, bawah = mundur) — pastikan
+              baling-baling &amp; area sekitar bebas hambatan dulu. Angka % di
+              bawah slider menunjukkan throttle yang sedang dikirim. Slider
+              kembali ke tengah otomatis; thruster berhenti sendiri setelah
+              durasi singkat. Centang "Rev" untuk membalik polaritas satu
+              thruster (terhubung ke toggle "Reverse arah thruster" di kartu
+              THRUSTER SETUP — satu sumber kebenaran, panel ini alat uji, bukan
+              konfigurasi baru).
             </p>
-            <span class="badge" id="suMotorTestWarn">Wahana harus ARMED &amp; aman diuji di darat/tertambat</span>
+            <span class="badge" id="suMotorTestWarn">Slider aktif hanya saat wahana ARMED — uji di darat/tertambat</span>
             <svg id="suMotorSvg" viewBox="0 0 200 190" class="motor-diagram">
               <rect x="10" y="14" width="180" height="164" rx="16" fill="none" stroke="currentColor" opacity="0.3"/>
               <polygon class="hull-front-marker" points="100,4 93,16 107,16"/>
@@ -171,10 +175,8 @@ export const setupPage = {
                 <text x="${m.x}" y="${m.y + 24}" text-anchor="middle" font-size="11">${m.label}</text>
               `).join("")}
             </svg>
-            <div class="card__row card__row--wrap">
-              ${numField("suMtThrottle", "Throttle", 15, "1", "%")}
-              ${numField("suMtDuration", "Durasi", 1, "0.1", "s")}
-            </div>
+            <label class="field field--sm"><span>Durasi tiap uji <small>s</small></span>
+              <input id="suMtDuration" type="number" step="0.1" min="0.2" max="2" value="1" /></label>
             <div id="suMotorButtons"></div>
           </div>
 
@@ -304,46 +306,101 @@ export const setupPage = {
       log(`Thruster config dikirim — ${CONFIG.THRUSTER.frame}, gain ${CONFIG.THRUSTER.gain}%`, "ok");
     };
 
-    /* THRUSTER TEST — spin satu thruster untuk verifikasi arah putar.
-       Diagnostik saja: hasilnya diterapkan lewat toggle "Reverse arah
-       thruster" + Apply di kartu THRUSTER SETUP di atas, bukan jalur
-       konfigurasi baru. */
-    this.motorTestButtons = {};
+    /* THRUSTER TEST — slider dua-arah + checkbox Reversed per thruster,
+       meniru Motor Test QGroundControl/ArduSub. Diagnostik saja: checkbox
+       Reversed di sini adalah TOMBOL YANG SAMA dengan toggle "Reverse arah
+       thruster" di kartu THRUSTER SETUP (revWrap.children[i]) — bukan state
+       kedua, supaya tidak ada dua sumber kebenaran untuk reversed[]. */
+    const MOTOR_TEST_THROTTLE_MAX = 20; // selaras MOTOR_TEST_MAX_THROTTLE di rov_motor_test.py
     const motorButtonsWrap = root.querySelector("#suMotorButtons");
+    motorButtonsWrap.className = "motor-test-row";
+    let motorTestLastSent = 0;
+    const allMotorSliders = [];
     MOTOR_LAYOUT.forEach((m) => {
-      const row = document.createElement("div");
-      row.className = "card__row";
-      row.innerHTML = `
-        <span class="card__label" style="min-width:9em">${m.label} <small>${m.axis}</small></span>
-        <button class="chip" data-motor="${m.id}" data-dir="forward">▲ Fwd</button>
-        <button class="chip" data-motor="${m.id}" data-dir="reverse">▼ Rev</button>
-        <span class="card__info" id="suMotorStatus${m.id}"></span>`;
-      motorButtonsWrap.appendChild(row);
+      const revBtn = revWrap.children[m.id - 1];
+      const col = document.createElement("div");
+      col.className = "motor-test-col";
+      col.innerHTML = `
+        <span class="card__label">${m.label}</span>
+        <div class="motor-slider-wrap">
+          <input type="range" class="motor-slider motor-slider--v" orient="vertical"
+                 min="-${MOTOR_TEST_THROTTLE_MAX}" max="${MOTOR_TEST_THROTTLE_MAX}" value="0" step="1" data-motor="${m.id}" />
+          <span class="motor-pct" id="suMotorPct${m.id}">0%</span>
+        </div>
+        <label class="field field--sm field--inline"><input type="checkbox" data-reversed-for="${m.id}" ${revBtn.getAttribute("aria-pressed") === "true" ? "checked" : ""} /> Rev</label>
+        <span class="card__info card__info--sm" id="suMotorStatus${m.id}"></span>
+        <small>${m.axis}</small>`;
+      motorButtonsWrap.appendChild(col);
 
-      row.querySelectorAll("button").forEach((btn) => {
-        btn.onclick = () => {
-          const armed = document.getElementById("btnArm")?.getAttribute("aria-pressed") === "true";
-          if (!armed) { log("Uji thruster ditolak — wahana belum ARMED", "warn"); return; }
+      const slider = col.querySelector(".motor-slider");
+      const pctEl = col.querySelector(".motor-pct");
+      const revCheckbox = col.querySelector("[data-reversed-for]");
+      const statusEl = col.querySelector("#suMotorStatus" + m.id);
+      const dot = document.getElementById("motorDot" + m.id);
+      allMotorSliders.push(slider);
 
-          const throttle = Math.max(1, Math.min(20, parseInt(root.querySelector("#suMtThrottle").value, 10) || 15));
-          const duration = Math.max(0.2, Math.min(2, parseFloat(root.querySelector("#suMtDuration").value) || 1));
-          const direction = btn.dataset.dir;
-          const motor = Number(btn.dataset.motor);
+      // Checkbox ini cuma "wajah kedua" dari tombol T-n yang sudah ada di
+      // kartu THRUSTER SETUP — klik di sini menekan tombol aslinya juga.
+      revCheckbox.onchange = () => {
+        revBtn.setAttribute("aria-pressed", String(revCheckbox.checked));
+        revBtn.classList.toggle("toggle--on", revCheckbox.checked);
+      };
 
-          wsSend({ type: "cmd", name: "motor_test", motor, throttle, duration, direction });
+      const stopVisual = () => dot.classList.remove("motor-dot--active", "motor-dot--fwd", "motor-dot--rev");
 
-          const dot = document.getElementById("motorDot" + motor);
-          dot.classList.add("motor-dot--active", direction === "forward" ? "motor-dot--fwd" : "motor-dot--rev");
-          const statusEl = document.getElementById("suMotorStatus" + motor);
-          statusEl.textContent = "menguji...";
-          setTimeout(() => {
-            dot.classList.remove("motor-dot--active", "motor-dot--fwd", "motor-dot--rev");
-          }, duration * 1000);
+      // Gerbang ARMED dicek lewat `disabled` (lihat syncArmedState di bawah),
+      // bukan di sini — kalau dicek tiap tick oninput, tiap tick memaksa
+      // slider.value = 0 selama drag berlangsung dan terasa seperti macet.
+      slider.oninput = () => {
+        // Throttle ~250ms supaya slider yang digeser cepat tidak membanjiri motor_test.
+        const now = Date.now();
+        if (now - motorTestLastSent < 250) return;
+        motorTestLastSent = now;
 
-          log(`Uji T${motor} ${direction === "forward" ? "maju" : "mundur"} ${throttle}% selama ${duration}s`, "");
-        };
-      });
+        const raw = Number(slider.value);
+        if (raw === 0) { pctEl.textContent = "0%"; return; }
+
+        const reversed = revCheckbox.checked;
+        // Slider "maju" selalu berarti maju secara visual bagi operator;
+        // koreksi polaritas kalau thruster ditandai Reversed, sama seperti QGC.
+        const effective = reversed ? -raw : raw;
+        const throttle = Math.min(MOTOR_TEST_THROTTLE_MAX, Math.abs(effective));
+        const direction = effective >= 0 ? "forward" : "reverse";
+        const duration = Math.max(0.2, Math.min(2, parseFloat(root.querySelector("#suMtDuration").value) || 1));
+
+        wsSend({ type: "cmd", name: "motor_test", motor: m.id, throttle, duration, direction });
+
+        pctEl.textContent = `${direction === "forward" ? "▲" : "▼"} ${throttle}%`;
+        dot.classList.add("motor-dot--active", direction === "forward" ? "motor-dot--fwd" : "motor-dot--rev");
+        statusEl.textContent = "menguji...";
+        setTimeout(stopVisual, duration * 1000);
+
+        log(`Uji T${m.id} ${direction === "forward" ? "maju" : "mundur"} ${throttle}% selama ${duration}s`, "");
+      };
+
+      // Kembali ke tengah saat dilepas — meniru slider QGC yang snap ke 0.
+      // `mouseleave` sengaja TIDAK dipakai: trek slider tipis, gerakan mouse
+      // sedikit melenceng saat drag vertikal gampang memicunya dan me-reset
+      // slider secara prematur di tengah-tengah drag.
+      const resetSlider = () => { slider.value = 0; pctEl.textContent = "0%"; };
+      slider.addEventListener("pointerup", resetSlider);
+      slider.addEventListener("touchend", resetSlider);
+      slider.addEventListener("change", resetSlider);
     });
+
+    // Slider hanya bisa digeser saat ARMED — direfleksikan via `disabled`
+    // (bukan dicek berulang di dalam oninput, lihat catatan di atas) dan
+    // disinkronkan reaktif tanpa perlu reload halaman.
+    const armBtnEl = document.getElementById("btnArm");
+    const syncMotorTestArmedState = () => {
+      const armed = armBtnEl?.getAttribute("aria-pressed") === "true";
+      allMotorSliders.forEach((s) => { s.disabled = !armed; });
+    };
+    if (armBtnEl) {
+      new MutationObserver(syncMotorTestArmedState)
+        .observe(armBtnEl, { attributes: true, attributeFilter: ["aria-pressed"] });
+    }
+    syncMotorTestArmedState();
 
     /* PID */
     this.els.pidSrc = root.querySelector("#suPidSrc");
