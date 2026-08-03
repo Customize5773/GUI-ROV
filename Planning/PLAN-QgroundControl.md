@@ -230,8 +230,15 @@ masih memuat `INS_ACC3*` (3 IMU) padahal wahana ini 2 IMU.
   meneruskannya utuh, tapi `command_listener()` tidak punya cabangnya sehingga jatuh ke
   `unknown command` — dan `handle_manipulator()` (`rov_agent.py`) tidak pernah dipanggil
   dari mana pun. Menyangkut protokol manipulator & servo channel, perlu PR tersendiri.
-- **Dashboard butuh internet untuk dimuat.** `public/index.html` mengambil three.js &
-  Chart.js dari CDN (unpkg/jsdelivr) lewat importmap. Di venue tanpa internet — kondisi
-  yang justru diwajibkan aturan "tanpa wireless" — **seluruh dashboard gagal dimuat**,
-  bukan cuma grafiknya. Perbaikannya: vendor keduanya ke `public/vendor/` seperti yang
-  sudah dilakukan untuk `jsqr.min.js`, lalu arahkan importmap ke file lokal.
+- ~~**Dashboard butuh internet untuk dimuat**~~ — **SUDAH DIPERBAIKI** menyusul, lihat
+  [README.md](../README.md) §"Pakai tanpa internet (venue lomba)". three.js (`0.169.0`)
+  dan Chart.js (`4.4.3` + `@kurkle/color`) di-vendor ke `public/vendor/three/` dan
+  `public/vendor/chart.js/` — diambil apa adanya dari paket npm resmi (byte-identik,
+  tidak diedit), bukan diunduh dari `unpkg.com`/`cdn.jsdelivr.net` yang diblokir di venue
+  — dan importmap di `public/index.html` diarahkan ke path lokal ini. Diverifikasi tanpa
+  intersepsi CDN sama sekali (sandbox pengujian sendiri sudah memblokir kedua CDN, jadi
+  ini pengujian "venue tanpa internet" yang sesungguhnya): nol request ke CDN, nol
+  pageerror, digital twin 3D (FBXLoader) dan grafik Telemetry/Analyze (Chart.js) tetap
+  tampil. Font Google (`fonts.googleapis.com`) **belum** ikut di-self-host — beda tingkat
+  keparahan (CSS sudah punya fallback `system-ui`/`monospace`, jadi kosmetik saja), dan
+  tidak diminta.
