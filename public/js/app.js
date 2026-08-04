@@ -936,17 +936,6 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    /* ================= CAMERA / MOUNT ================= */
-    case "mount_tilt_up": {
-      sendRotate("left");
-      return;
-    }
-
-    case "mount_tilt_down": {
-      sendRotate("right");
-      return;
-    }
-
     case "mount_center": {
       sendCmd("mount_center", true);
       log("Mount center", "ok");
@@ -978,6 +967,22 @@ function executeJoystickAction(action, mode = "toggle") {
         sendPacket(pkt);
         return;
     }
+
+      case "mount_tilt_up": {
+      const pkt = Manipulator.rotateLeft();
+      console.log("ROTATE LEFT =", pkt);
+      console.log(pkt);
+      sendPacket(pkt);
+      return;
+  }
+
+  case "mount_tilt_down": {
+      const pkt = Manipulator.rotateRight();
+      console.log("ROTATE RIGHT =", pkt);
+      console.log(pkt);
+      sendPacket(pkt);
+      return;
+  }
 
     /* ================= LIGHT ================= */
     case "lights_brighter": {
@@ -1019,8 +1024,6 @@ function executeJoystickRelease(action) {
            sempat dimigrasikan. */
         case "grip_open":
         case "grip_close":
-        case "actuator1_inc":
-        case "actuator1_dec":
             sendPacket(Manipulator.stopGrip(), true);
             return;
     }
