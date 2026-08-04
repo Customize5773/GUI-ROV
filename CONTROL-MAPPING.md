@@ -80,8 +80,13 @@ negatif saat didorong ke atas, jadi `heave` dan `surge` memang dibalik.
 ### 1.5 Daftar aksi yang sah
 
 `no_function`, `arm`, `disarm`, `e_stop`, `mode_manual`, `mode_stabilize`,
-`mode_depth_hold`, `grip_open`, `grip_close`, `grip_neutral`, `light_toggle`,
-`gain_inc`, `gain_dec`.
+`mode_depth_hold`, `mode_acro`, `grip_open`, `grip_close`, `grip_neutral`,
+`light_toggle`, `gain_inc`, `gain_dec`.
+
+`mode_acro` sengaja **tidak** punya binding default: ke-16 tombol pad sudah
+terpakai, dan menggeser binding yang sudah dihafal operator demi mode paling
+berisiko adalah pertukaran yang buruk. Bind manual lewat halaman **Joystick**
+kalau memang dibutuhkan saat trial.
 
 Aksi lama (`mount_tilt_*`, `mount_center`, `actuator1_*`, `lights_brighter/dimmer`,
 `input_hold_set`) **sudah dihapus** — wahana tidak punya hardware-nya dan
@@ -134,11 +139,19 @@ memandang tab controller.
 
 ### 4.1 Mode ArduSub (`pilot_mode`)
 
+Peta nama mode punya **satu sumber kebenaran** per bahasa —
+[`rov_modes.PILOT_MODE_MAP`](rov_modes.py) di sisi Python dan
+[`shared/rov-modes.js`](shared/rov-modes.js) (`PILOT_MODE_MAP`,
+`ARDUSUB_MODE_TO_TAB`, `RISKY_ARDUSUB_MODES`, `ACRO_CONFIRM`) di sisi JS —
+diimpor langsung oleh `public/js/app.js`, bukan didefinisikan ulang di sana.
+Tambah mode baru di kedua file.
+
 | Tab GUI | D-Pad | Perintah | Mode Pixhawk |
 |---|---|---|---|
 | Manual | ↓ | `pilot_mode="manual"` | `MANUAL` |
 | Stabilize | ← | `pilot_mode="stabilize"` | `STABILIZE` |
 | Depth Hold | ↑ | `pilot_mode="depth_hold"` | `ALT_HOLD` |
+| Acro | — (bind manual) | `pilot_mode="acro"` | `ACRO` |
 
 Sorotan tab **tidak** diset lokal saat diklik — sumbernya hanya string mode dari
 HEARTBEAT di telemetry. Karena itu tab GUI dan D-Pad selalu sinkron, dan tab
@@ -146,10 +159,16 @@ tidak pernah membohongi operator kalau Pixhawk menolak perpindahan mode (mis.
 `ALT_HOLD` ditolak saat sumber kedalaman belum sehat). Tab yang menunggu
 konfirmasi tampil putus-putus; setelah 2 detik tanpa konfirmasi muncul peringatan.
 
-Mode di luar ketiga tab (`SURFACE`, `POSHOLD`, …) tetap terbaca pada badge di
+Mode di luar keempat tab (`SURFACE`, `POSHOLD`, …) tetap terbaca pada badge di
 sebelah kanan tab bar.
 
-### 4.2 Konvensi throttle di ketiga mode
+`ACRO` tidak ada di semua build/frame ArduSub. `rov_agent.py` memeriksanya lewat
+`master.mode_mapping()` — yang berasal dari firmware yang benar-benar terpasang
+— dan **menolak** perintah bila mode tidak ada, alih-alih mengirim `set_mode`
+yang akan diabaikan diam-diam. Gejalanya di GUI: tab Acro tetap putus-putus dan
+muncul peringatan 2 detik kemudian.
+
+### 4.2 Konvensi throttle per mode
 
 `MANUAL_CONTROL.z` ArduSub adalah **0..1000 dengan 500 = diam** — berbeda dari
 tiga axis lain yang −1000..1000. Konversinya dilakukan
@@ -160,9 +179,45 @@ tiga axis lain yang −1000..1000. Konversinya dilakukan
 | MANUAL | Nol thrust vertikal |
 | STABILIZE | Nol thrust vertikal, attitude diratakan |
 | ALT_HOLD | **Tahan kedalaman** |
+| ACRO | Nol thrust vertikal — **TIDAK** menahan kedalaman |
 
-Karena netral bermakna benar di ketiganya, tidak ada penanganan khusus per-mode
-di jalur axis.
+Netral tetap bermakna benar di keempatnya (diam / tidak mendorong), jadi jalur
+axis tidak butuh penanganan khusus per-mode. Yang **berbeda** di ACRO adalah
+konsekuensinya: tidak ada yang menahan wahana, jadi netral berarti melayang
+mengikuti daya apung, bukan diam di kedalaman.
+
+### 4.2.1 ACRO — apa yang berubah dan pengamannya
+
+Di ACRO tidak ada stabilisasi attitude: stik memerintahkan **rate** (kecepatan
+sudut), bukan sudut. Wahana tidak akan meratakan dirinya sendiri. Di kolam
+dangkal KKI (≈0.9 m) ini mode yang paling mudah membuat ROV terguling.
+
+Tiga pengaman yang dipasang:
+
+1. **Depth hold dinonaktifkan.** `ACRO` tidak masuk
+   [`rov_modes.DEPTH_HOLD_MODES`](rov_modes.py), sehingga `depth_hold_active()`
+   bernilai false: `gain_inc`/`gain_dec` ditolak dengan log, dan
+   `apply_depth_hold_bias()` mengembalikan paket apa adanya. Tanpa ini, bias
+   throttle akan mendorong wahana tanpa satu pun umpan balik yang menstabilkan.
+2. **Konfirmasi di GUI, seragam di semua jalur input.** Klik tab **Acro**
+   maupun tombol gamepad `mode_acro` sama-sama lewat `requestPilotMode()`
+   (`public/js/app.js`), yang menampilkan dialog `ACRO_CONFIRM` sebelum
+   mengirim apa pun. Membatalkan = tidak ada command yang dikirim sama
+   sekali, dari jalur mana pun.
+   > Riwayat: versi awal sengaja melewati dialog untuk jalur gamepad
+   > (alasannya: tombol fisik hanya bisa ditekan operator yang sedang
+   > memegang pad). Audit berikutnya menandai ini sebagai gerbang keamanan
+   > yang tidak seragam antar jalur input, jadi diseragamkan — sekarang
+   > gamepad juga wajib konfirmasi seperti tab GUI.
+3. **Peringatan visual.** Selama HEARTBEAT melaporkan `ACRO`, badge
+   `⚠ ACRO — TANPA STABILISASI` tampil di tab bar dan tab Acro diberi warna
+   amber. Peringatan mengikuti mode **aktual**, bukan yang diminta.
+
+**Cakupan test:** ketiga pengaman di atas punya unit test otomatis —
+`test_rov_modes.py` (Python, gating depth-hold) dan
+`server/test/mode-gating.test.mjs` (JS, pemetaan mode/risky/teks konfirmasi),
+keduanya ikut jalan di `python3 -m unittest test_rov_modes` dan `npm test`
+di `server/`.
 
 ### 4.3 Manual vs Autonomous (`control_mode`)
 
@@ -238,7 +293,7 @@ Telemetry balik: Pixhawk → `rov_agent.py` → UDP :14551 → server → WS →
 | `arm` | `true`/`false` | ARM / DISARM |
 | `stop` | `true` | Failsafe: disarm |
 | `surge` `sway` `yaw` `heave` | −1000..1000 | Axis gerak (netral 0) |
-| `pilot_mode` | `"manual"`/`"stabilize"`/`"depth_hold"` | Mode ArduSub |
+| `pilot_mode` | `"manual"`/`"stabilize"`/`"depth_hold"`/`"acro"` | Mode ArduSub |
 | `control_mode` | `"manual"`/`"autonomous"` | Gerbang otoritas GUI |
 | `gripper` | `"open"`/`"close"`/`-1000..1000` | Posisi gripper |
 | `light` | `true`/`false` | Lampu (belum terhubung hardware) |

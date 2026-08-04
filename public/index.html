@@ -11,12 +11,17 @@
   <link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="css/style.css" />
 
+  <!-- three.js & Chart.js di-vendor lokal (public/vendor/) supaya dashboard tetap
+       lengkap dimuat tanpa internet di venue lomba — lihat README.md
+       "Pakai tanpa internet (venue lomba)". Versi dikunci sama persis dengan yang
+       sebelumnya disajikan CDN: three@0.169.0, chart.js@4.4.3. -->
   <script type="importmap">
   {
     "imports": {
-      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/",
-      "chart.js/auto": "https://cdn.jsdelivr.net/npm/chart.js@4.4.3/auto/+esm"
+      "three": "./vendor/three/three.module.js",
+      "three/addons/": "./vendor/three/examples/jsm/",
+      "chart.js/auto": "./vendor/chart.js/auto.js",
+      "@kurkle/color": "./vendor/kurkle-color/color.esm.js"
     }
   }
   </script>
@@ -43,6 +48,12 @@
         </a>
         <a class="sidebar__link" href="#" data-page="setup" title="Setup & Config">
           <span class="sidebar__label">Setup</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="vehicle" title="Vehicle Configuration (parameter ArduSub)">
+          <span class="sidebar__label">Vehicle</span>
+        </a>
+        <a class="sidebar__link" href="#" data-page="analyze" title="Analyze (MAVLink Inspector)">
+          <span class="sidebar__label">Analyze</span>
         </a>
         <a class="sidebar__link" href="#" data-page="joystick" title="Joystick Control">
           <span class="sidebar__label">Joystick</span>
@@ -135,9 +146,18 @@
                    sehingga tab GUI dan tombol D-pad gamepad selalu sinkron. -->
               <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode">
                 <button class="mode" data-mode="manual" role="tab">Manual</button>
-                <button class="mode" data-mode="stabilize" role="tab">Stabilize</button>
-                <button class="mode" data-mode="depth_hold" role="tab">Depth Hold</button>
+                <!-- STABILIZE tidak punya tab sendiri: ia menstabilkan attitude
+                     tapi TIDAK menahan kedalaman, sedangkan ALT_HOLD memberi
+                     keduanya sekaligus. Lihat docstring rov_modes.py. -->
+                <button class="mode" data-mode="depth_hold" role="tab"
+                        title="Attitude (roll/pitch) distabilkan + PID depth hold. Masuk mode ini langsung menyetel target kedalaman default.">Alt Hold</button>
+                <!-- ACRO: tanpa stabilisasi attitude, dan throttle netral TIDAK
+                     menahan kedalaman. Diberi kelas mode--risky supaya jelas
+                     berbeda, dan klik-nya meminta konfirmasi di app.js. -->
+                <button class="mode mode--risky" data-mode="acro" role="tab"
+                        title="Tanpa stabilisasi attitude — stik = rate, depth hold nonaktif">Acro</button>
                 <span class="modebar__actual" id="modeActual" title="Mode aktif menurut Pixhawk">—</span>
+                <span class="modebar__warn" id="modeWarn" role="status" hidden></span>
               </div>
 
               <div class="stage" id="stage">
@@ -282,12 +302,34 @@
         <!-- PAGE 5: SETUP (diisi oleh js/pages/setup.js) -->
         <div class="page page--setup" id="page-setup" data-page="setup" style="display:none;"></div>
 
-        <!-- PAGE 6: JOYSTICK (diisi oleh js/pages/joystick.js) -->
+        <!-- PAGE 6: VEHICLE (diisi oleh js/pages/vehicle.js) — parameter ArduSub -->
+        <div class="page page--vehicle" id="page-vehicle" data-page="vehicle" style="display:none;"></div>
+
+        <!-- PAGE 7: ANALYZE (diisi oleh js/pages/analyze.js) — MAVLink Inspector -->
+        <div class="page page--analyze" id="page-analyze" data-page="analyze" style="display:none;"></div>
+
+        <!-- PAGE 8: JOYSTICK (diisi oleh js/pages/joystick.js) -->
         <div class="page page--joystick" id="page-joystick" data-page="joystick" style="display:none;"></div>
 
-        <!-- PAGE 7: REPLAY (diisi oleh js/pages/replay.js) — rekam & putar ulang -->
+        <!-- PAGE 9: REPLAY (diisi oleh js/pages/replay.js) — rekam & putar ulang -->
         <div class="page page--replay" id="page-replay" data-page="replay" style="display:none;"></div>
 
+      </div>
+    </div>
+  </div>
+
+  <!-- Modal konfirmasi ACRO — pengganti confirm() bawaan browser KHUSUS saat
+       controller = Gamepad, supaya bisa ditutup lewat tombol pad (X = OK,
+       B = Batal) tanpa mengunci thread JS (confirm() sinkron memblokir
+       pollGamepad(), lihat app.js). Jalur Keyboard tetap pakai confirm()
+       native seperti sebelumnya. -->
+  <div class="modal-overlay" id="acroModal" hidden role="alertdialog" aria-modal="true" aria-labelledby="acroModalTitle">
+    <div class="modal">
+      <h3 class="modal__title" id="acroModalTitle">Masuk mode ACRO?</h3>
+      <p class="modal__body" id="acroModalBody"></p>
+      <div class="modal__actions">
+        <button class="btn-wide modal__btn modal__btn--cancel" id="acroModalCancel">Batal (B)</button>
+        <button class="btn-wide modal__btn modal__btn--confirm" id="acroModalConfirm">Konfirmasi (X)</button>
       </div>
     </div>
   </div>

@@ -809,6 +809,26 @@ body[data-theme="light"] .theme__icon::after {
 }
 /* menunggu konfirmasi HEARTBEAT dari Pixhawk */
 .mode--pending { opacity: .55; border-style: dashed; }
+/* mode berisiko (ACRO): tanpa stabilisasi attitude, throttle netral TIDAK
+   menahan kedalaman. Sengaja beda warna supaya tidak tertekan tanpa sadar. */
+.mode--risky { color: var(--amber); border-color: rgba(245,165,36,.28); }
+.mode--risky:hover { color: var(--amber); border-color: rgba(245,165,36,.5); background: rgba(245,165,36,.08); }
+.mode--risky.mode--active {
+  color: var(--amber); border-color: rgba(245,165,36,.6);
+  background: rgba(245,165,36,.14);
+  box-shadow: 0 0 14px rgba(245,165,36,.22);
+}
+/* peringatan yang tampil selama Pixhawk benar-benar melaporkan mode berisiko */
+.modebar__warn {
+  align-self: center; padding: 2px 8px; border-radius: 4px;
+  background: rgba(245,165,36,.16); border: 1px solid rgba(245,165,36,.45);
+  font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 1px;
+  color: var(--amber); white-space: nowrap;
+  animation: modewarn-pulse 1.4s ease-in-out infinite;
+}
+.modebar__warn[hidden] { display: none; }
+@keyframes modewarn-pulse { 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .modebar__warn { animation: none; } }
 /* mode Pixhawk sebenarnya — termasuk mode di luar ketiga tab (SURFACE, POSHOLD, ...) */
 .modebar__actual {
   align-self: center; padding: 0 4px;
@@ -1242,3 +1262,154 @@ body.pseudo-fs-lock { overflow: hidden; }
   .infogrid { grid-template-columns: 1fr; }
   .tele__btns { margin-left: 0; }
 }
+
+/* ============================================================
+   PAGES: VEHICLE (parameter ArduSub) & ANALYZE (MAVLink Inspector)
+   Keduanya memakai token & komponen yang sudah ada (.card, .field,
+   .chip, .badge, .chart-card) — di bawah ini hanya tata letak khasnya.
+   ============================================================ */
+
+/* ---------------- VEHICLE ---------------- */
+.veh { height: 100%; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 14px; }
+.veh__head { display: flex; align-items: center; justify-content: space-between; }
+.veh__title { margin: 2px 0 0; font-family: "Chakra Petch", sans-serif; font-size: 20px; font-weight: 700; letter-spacing: .5px; color: var(--ink); }
+.veh__note { max-width: 74ch; }
+
+.veh__controls {
+  display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
+  padding: 12px; background: var(--surface); border: 1px solid rgba(255,255,255,.06); border-radius: var(--r);
+}
+.veh__btns { display: flex; gap: 8px; margin-left: auto; }
+
+.veh__progress { display: flex; align-items: center; gap: 10px; }
+.veh__progress-bar { flex: 1; height: 6px; border-radius: 3px; background: rgba(255,255,255,.06); overflow: hidden; }
+.veh__progress-bar span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--sonar-dim), var(--sonar)); transition: width .2s ease; }
+.veh__progress-text { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+/* Tabel bisa panjang (975 param) -> gulir sendiri, header tetap terlihat. */
+.veh__tablewrap {
+  flex: 1; min-height: 240px; overflow: auto;
+  background: var(--surface); border: 1px solid rgba(255,255,255,.06); border-radius: var(--r);
+}
+.veh__table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.veh__table thead th {
+  position: sticky; top: 0; z-index: 1;
+  padding: 10px 12px; text-align: left; background: var(--surface-2);
+  font-family: "JetBrains Mono", monospace; font-size: 9px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--ink-dim); border-bottom: 1px solid rgba(255,255,255,.08);
+}
+.veh__table td { padding: 6px 12px; border-bottom: 1px solid rgba(255,255,255,.04); vertical-align: middle; }
+.veh__table tr:hover td { background: rgba(20,216,255,.04); }
+.veh__name { font-family: "JetBrains Mono", monospace; color: var(--ink); white-space: nowrap; }
+.veh__type { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-dim); }
+.veh__num { text-align: right; font-variant-numeric: tabular-nums; }
+.veh__empty { padding: 24px 12px; text-align: center; color: var(--ink-dim); }
+
+.veh__val {
+  font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 700;
+  color: var(--ink); background: transparent; border: 1px solid transparent; border-radius: 6px;
+  padding: 3px 8px; cursor: pointer; transition: all .15s ease; min-width: 74px; text-align: right;
+}
+.veh__val:hover { border-color: rgba(20,216,255,.35); background: rgba(20,216,255,.06); }
+.veh__input {
+  width: 110px; padding: 3px 8px; text-align: right;
+  font-family: "JetBrains Mono", monospace; font-size: 12px; font-weight: 700;
+  color: var(--ink); background: var(--surface-2);
+  border: 1px solid var(--sonar); border-radius: 6px; outline: none;
+}
+.veh__risky { color: var(--amber); font-weight: 700; cursor: help; }
+.veh__hint { margin: 0; font-size: 11px; color: var(--ink-dim); }
+
+/* ---------------- ANALYZE ---------------- */
+.anz { height: 100%; overflow: hidden; padding: 16px; display: flex; flex-direction: column; gap: 12px; }
+.anz__head { display: flex; align-items: center; justify-content: space-between; }
+.anz__title { margin: 2px 0 0; font-family: "Chakra Petch", sans-serif; font-size: 20px; font-weight: 700; letter-spacing: .5px; color: var(--ink); }
+.anz__headbtns { display: flex; align-items: center; gap: 8px; }
+.anz__note { max-width: 78ch; }
+
+.anz__body { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(280px, 380px) 1fr; gap: 12px; }
+.anz__tree, .anz__plots {
+  overflow-y: auto; padding: 10px;
+  background: var(--surface); border: 1px solid rgba(255,255,255,.06); border-radius: var(--r);
+}
+.anz__plots { display: flex; flex-direction: column; gap: 12px; }
+.anz__empty { margin: 0; padding: 20px 8px; text-align: center; font-size: 12px; color: var(--ink-dim); }
+
+.anz__msg { border-bottom: 1px solid rgba(255,255,255,.05); }
+.anz__msghead {
+  width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 7px 6px; background: transparent; border: 0; cursor: pointer; text-align: left;
+}
+.anz__msghead:hover { background: rgba(20,216,255,.05); }
+.anz__mname { font-family: "JetBrains Mono", monospace; font-size: 11px; font-weight: 700; color: var(--ink); }
+.anz__mhz { font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+.anz__msg.is-open .anz__mname { color: var(--sonar); }
+.anz__fields { display: none; padding: 2px 0 8px 10px; }
+.anz__msg.is-open .anz__fields { display: block; }
+
+.anz__field { display: flex; align-items: center; gap: 8px; padding: 3px 6px; }
+.anz__field:hover { background: rgba(255,255,255,.03); }
+.anz__fname { flex: 1; font-family: "JetBrains Mono", monospace; font-size: 10px; color: var(--ink-dim); }
+.anz__fval { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.anz__plotbtn {
+  flex: 0 0 auto; padding: 2px 7px; font-family: "JetBrains Mono", monospace; font-size: 9px;
+  color: var(--ink-dim); background: rgba(255,255,255,.04);
+  border: 1px solid rgba(255,255,255,.10); border-radius: 5px; cursor: pointer; transition: all .15s ease;
+}
+.anz__plotbtn:hover { color: var(--sonar); border-color: rgba(20,216,255,.4); }
+.anz__plotbtn.is-on { color: var(--abyss); background: var(--sonar); border-color: var(--sonar); }
+.anz__plotbtn--na { opacity: .3; cursor: default; }
+.anz__plotbtn--na:hover { color: var(--ink-dim); border-color: rgba(255,255,255,.10); }
+
+.chip--x { padding: 2px 8px; line-height: 1; }
+
+@media (max-width: 980px) {
+  .anz__body { grid-template-columns: 1fr; }
+  .anz { overflow-y: auto; }
+}
+@media (max-width: 680px) {
+  .veh__btns { margin-left: 0; }
+}
+
+/* ===================== MODAL KONFIRMASI ACRO ===================== */
+/* [hidden] dipakai untuk sembunyi/tampil — lihat app.js confirmAcroEntry()/
+   closeAcroModal(). TAPI aturan display:flex di bawah adalah CSS penulis,
+   yang selalu menang atas stylesheet default browser ([hidden]{display:none}).
+   Override eksplisit ini WAJIB ada, sama seperti pola .cmdlink[hidden] dan
+   .modebar__warn[hidden] di atas — tanpanya modal tampil sejak render
+   pertama walau atribut hidden sudah terpasang di HTML. */
+.modal-overlay[hidden] { display: none; }
+.modal-overlay {
+  position: fixed; inset: 0; z-index: 9999;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(4,10,18,.72);
+  backdrop-filter: blur(2px);
+  padding: 16px;
+}
+.modal {
+  width: 100%; max-width: 420px;
+  background: var(--surface);
+  border: 1px solid rgba(245,165,36,.4);
+  border-radius: var(--r);
+  box-shadow: 0 0 32px rgba(245,165,36,.15), 0 12px 40px rgba(0,0,0,.5);
+  padding: 20px;
+}
+.modal__title {
+  margin: 0 0 10px; color: var(--amber);
+  font-family: "Chakra Petch", sans-serif; font-weight: 700;
+  font-size: 15px; letter-spacing: .5px;
+}
+.modal__body {
+  margin: 0 0 18px; color: var(--ink-dim);
+  font-size: 13px; line-height: 1.6; white-space: pre-line;
+}
+.modal__actions { display: flex; gap: 10px; }
+.modal__btn { flex: 1; }
+.modal__btn--cancel {
+  background: rgba(255,255,255,.04); border-color: var(--line); color: var(--ink-dim);
+}
+.modal__btn--cancel:hover { background: rgba(255,255,255,.08); border-color: var(--ink-dim); box-shadow: none; }
+.modal__btn--confirm {
+  background: rgba(245,165,36,.1); border-color: rgba(245,165,36,.45); color: var(--amber);
+}
+.modal__btn--confirm:hover { background: rgba(245,165,36,.18); border-color: var(--amber); box-shadow: 0 0 16px rgba(245,165,36,.2); }

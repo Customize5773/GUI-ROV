@@ -19,7 +19,7 @@ GUI-ROV/
 │  ├─ css/style.css
 │  ├─ images/                  # Logo1.png, Logo2.png
 │  ├─ models/                  # rov.fbx (model 3D ROV)
-│  ├─ vendor/                  # jsqr.min.js
+│  ├─ vendor/                  # jsqr.min.js, three.js, chart.js (di-vendor, offline)
 │  └─ js/
 │     ├─ config.js             # << atur IP kamera / model 3D di sini
 │     ├─ core.js                # state bersama, WebSocket, util inti
@@ -168,12 +168,23 @@ Browser tidak bisa memutar RTSP langsung. Paling mudah: ubah ke **MJPEG**.
 
 ## Pakai tanpa internet (venue lomba)
 
-three.js dimuat dari CDN (unpkg) lewat import map. Agar jalan offline:
-1. Unduh `three@0.169.0` (`build/three.module.js` + folder `examples/jsm/`).
-2. Taruh di `public/vendor/three/`.
-3. Ubah import map di `index.html` agar menunjuk ke `vendor/three/...` (path lokal).
-Font Google juga sebaiknya di-self-host; jika gagal dimuat, fallback monospace/sans
-tetap terbaca.
+**Sudah dikerjakan.** three.js (`0.169.0`) dan Chart.js (`4.4.3`, + dependency
+`@kurkle/color`) di-vendor ke `public/vendor/three/` dan `public/vendor/chart.js/`,
+diambil apa adanya dari paket npm resmi (byte-identik, tidak diedit) lewat
+`registry.npmjs.org` — bukan dari `unpkg.com`/`cdn.jsdelivr.net` yang sebelumnya dipakai
+import map. `public/index.html` sekarang menunjuk ke path vendor lokal ini, jadi
+dashboard tetap **lengkap dimuat** tanpa internet: sebelumnya CDN tak terjangkau berarti
+seluruh dashboard gagal render (bukan cuma grafik/model 3D yang hilang), karena hampir
+semua halaman `import` menunggangi salah satu dari keduanya.
+
+Untuk menaikkan versi nanti: `npm install three@<versi> chart.js@<versi>` di folder
+sementara, timpa file di `public/vendor/three/` & `public/vendor/chart.js/` mengikuti
+struktur yang sama (lihat komentar di `index.html` importmap), lalu uji ulang.
+
+Font Google (`fonts.googleapis.com`) **belum** di-self-host — di luar scope perbaikan
+ini. Beda tingkat keparahan dari three.js/Chart.js: CSS sudah punya fallback
+(`system-ui, sans-serif` / `monospace`), jadi kegagalannya kosmetik saja, bukan
+dashboard-tidak-bisa-dimuat.
 
 ## Pintasan
 

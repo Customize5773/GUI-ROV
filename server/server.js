@@ -415,6 +415,17 @@ udp.on("message", (buf, rinfo) => {
     return;
   }
 
+  /* Diskriminator envelope. rov_agent.py mengirim telemetry sebagai dict
+     `state` TELANJANG (tanpa field "type"), sementara kanal baru
+     (param_batch / param_ack / mavlink_msg / statustext) SELALU membawa "type".
+     Tanpa cek ini semuanya akan terbungkus sebagai telemetry — dan karena
+     broadcast() men-tap yang bertipe telemetry ke perekam Replay, tabel param
+     ikut tertulis ke trajectory.jsonl. */
+  if (data && typeof data.type === "string") {
+    broadcast(data);
+    return;
+  }
+
   console.log(
     `[TELEM] from ${rinfo.address}:${rinfo.port} | ` +
     `heading=${data.heading} roll=${data.roll} pitch=${data.pitch} ` +
@@ -432,9 +443,230 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 
 /* ----------------------- simulator (opsional) ----------------------- */
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
-const simState = { armed: false, light: false, mode: "manual" };
+// Padanan rov_modes.PILOT_MODE_MAP di sisi Python — dipakai agar telemetri SIM
+// melaporkan nama mode ArduSub yang sama dengan yang dikirim Pixhawk sungguhan,
+// sehingga tab mode & badge peringatan ACRO bisa diuji tanpa hardware.
+// "stabilize" sengaja menunjuk ALT_HOLD juga — lihat docstring rov_modes.py.
+const PILOT_MODE_MAP = {
+  manual: "MANUAL",
+  stabilize: "ALT_HOLD",
+  depth_hold: "ALT_HOLD",
+  acro: "ACRO",
+};
+
+const DEPTH_HOLD_MODES = new Set(["ALT_HOLD"]);   // rov_modes.DEPTH_HOLD_MODES
+const SIM_DEPTH_STEP = 0.05;                      // rov_agent.DEPTH_STEP
+
+const simState = {
+  armed: false,
+  light: false,
+  controlMode: "manual", // gate otoritas GUI: manual | autonomous
+  pilotMode: "MANUAL",   // mode ArduSub yang "dilaporkan" wahana palsu
+};
+
+/* Tabel param palsu (halaman Vehicle) — diisi saat start() bila mode SIM.
+   Sumbernya dump nyata dari Pixhawk, lihat server/sim-params.js. */
+const { SimParams, resolvePidWrites } = require("./sim-params");
+let simParams = null;
+let simParamStreamCancel = null;
+
+// Kedalaman kolam yang "diketahui" wahana palsu — dipantulkan di telemetri SIM
+// supaya operator bisa memastikan nilainya benar-benar sampai (sama seperti
+// state["pool_depth"] di rov_agent.py).
+let simPoolDepth = null;
+
+/* Setpoint kedalaman palsu + default-nya (padanan depth_target /
+   default_depth_target di rov_agent.py). Ada di SIM supaya alur "tekan Alt Hold
+   -> target langsung 0.30 m -> D-pad menggesernya 0.05 m" bisa diuji penuh dari
+   browser tanpa Pixhawk. */
+let simDepthDefault = 0.3;     // rov_pid.DEFAULT_DEPTH_TARGET
+let simDepthTarget = 0;
+
+// Padanan rov_pid.clamp_depth_target().
+function clampSimDepthTarget(value) {
+  let v = Number(value);
+  if (!Number.isFinite(v)) return 0;
+  v = Math.max(0, v);
+  if (simPoolDepth != null) v = Math.min(v, simPoolDepth);
+  return v;
+}
+
+/* Stream MAVLink palsu (halaman Analyze). Dimatikan saat GUI mengirim
+   mavlink_stream:false — sama seperti rov_agent.py.
+   Padanan rov_mavlink.STREAM_KEEPALIVE_TIMEOUT: stream juga mati sendiri kalau
+   GUI berhenti memperbarui permintaan. Tanpa ini SIM akan terus menyiarkan
+   selamanya setelah tab ditutup mendadak — perilaku yang BERBEDA dari wahana,
+   padahal justru itu yang ingin diuji di SIM. */
+const SIM_STREAM_KEEPALIVE_MS = 30_000;
+let simMavStream = null;
+let simMavStreamLastReq = 0;
+
+function stopSimMavStream() {
+  if (simMavStream) { clearInterval(simMavStream); simMavStream = null; }
+}
+
+function startSimMavStream() {
+  simMavStreamLastReq = Date.now();
+  if (simMavStream) return;   // sudah jalan: ini cuma keepalive
+  let t = 0;
+  // 10 Hz per type, sama dengan throttle rov_mavlink.RateLimiter di wahana.
+  simMavStream = setInterval(() => {
+    if (Date.now() - simMavStreamLastReq > SIM_STREAM_KEEPALIVE_MS) {
+      console.log("[SIM] mavlink_stream mati (GUI berhenti memperbarui permintaan)");
+      stopSimMavStream();
+      return;
+    }
+    t += 0.1;
+    const now = Date.now() / 1000;
+    const emit = (msg, fields) => broadcast({ type: "mavlink_msg", msg, t: now, fields });
+
+    emit("ATTITUDE", {
+      time_boot_ms: Math.round(t * 1000),
+      roll: (10 * Math.sin(t * 0.6) * Math.PI) / 180,
+      pitch: (7 * Math.sin(t * 0.4 + 1) * Math.PI) / 180,
+      yaw: (((90 + 45 * Math.sin(t * 0.2)) % 360) * Math.PI) / 180,
+      rollspeed: 0.01 * Math.cos(t * 0.6),
+      pitchspeed: 0.01 * Math.cos(t * 0.4),
+      yawspeed: 0.01 * Math.cos(t * 0.2),
+    });
+
+    emit("VFR_HUD", {
+      airspeed: 0, groundspeed: 0.2 + 0.1 * Math.sin(t),
+      heading: Math.round((90 + 45 * Math.sin(t * 0.2) + 360) % 360),
+      throttle: 50, alt: -(0.45 + 0.35 * Math.sin(t * 0.13)), climb: 0.05 * Math.cos(t * 0.13),
+    });
+
+    emit("SYS_STATUS", {
+      voltage_battery: Math.round((15.7 + 0.2 * Math.sin(t)) * 1000),
+      current_battery: Math.round(300 + 100 * Math.sin(t * 0.3)),
+      battery_remaining: 78,
+    });
+
+    emit("HEARTBEAT", {
+      type: 12, autopilot: 3,
+      base_mode: simState.armed ? 209 : 81,
+      custom_mode: 19, system_status: 4,
+    });
+  }, 100);
+}
+
+/* Perintah param di mode SIM. Mengembalikan true kalau sudah ditangani, supaya
+   pemanggil tahu tidak ada yang perlu diteruskan lagi. */
+function applySimParamCommand(name, value) {
+  if (!simParams) return false;
+
+  if (name === "param_list") {
+    if (simParamStreamCancel) simParamStreamCancel();
+    console.log(`[SIM] kirim ${simParams.size} param ke dashboard`);
+    simParamStreamCancel = simParams.streamAll(broadcast);
+    return true;
+  }
+
+  if (name === "param_get") {
+    const entry = simParams.get(value);
+    if (!entry) {
+      broadcast({ type: "param_ack", name: String(value), ok: false, reason: "param tidak dikenal di FC" });
+      return true;
+    }
+    broadcast({
+      type: "param_batch",
+      params: [{ ...entry, index: -1, count: simParams.size }],
+      done: false,
+    });
+    return true;
+  }
+
+  if (name === "param_set") {
+    if (!value || typeof value !== "object") {
+      broadcast({ type: "param_ack", name: "?", ok: false, reason: "payload param_set tidak valid" });
+      return true;
+    }
+
+    const res = simParams.set(value.name, value.value);
+    if (!res.ok) {
+      broadcast({ type: "param_ack", name: String(value.name), ok: false, reason: res.reason });
+      console.warn(`[SIM] param_set ditolak: ${value.name} — ${res.reason}`);
+      return true;
+    }
+
+    /* Urutannya sengaja sama seperti wahana nyata: FC meng-echo PARAM_VALUE,
+       dan echo itulah yang jadi bukti berhasil. */
+    broadcast({
+      type: "param_batch",
+      params: [{ ...res.entry, index: -1, count: simParams.size }],
+      done: false,
+    });
+    broadcast({ type: "param_ack", name: res.entry.name, ok: true, value: res.entry.value });
+    console.log(`[SIM] param_set ${res.entry.name} = ${res.entry.value}`);
+    return true;
+  }
+
+  if (name === "mavlink_stream") {
+    if (value) startSimMavStream();
+    else stopSimMavStream();
+    return true;
+  }
+
+  if (name === "pid") {
+    /* Meniru rov_agent.py: gain di luar rentang aman DITOLAK (bukan dijepit),
+       yang lolos ditulis lalu di-echo balik seperti PARAM_VALUE dari FC. */
+    const { writes, rejects } = resolvePidWrites(value);
+
+    for (const [param, reason] of rejects) {
+      console.warn(`[SIM] pid DITOLAK ${param}: ${reason}`);
+      broadcast({ type: "param_ack", name: param, ok: false, reason });
+    }
+
+    for (const [param, gain] of writes) {
+      const res = simParams.set(param, gain);
+      if (!res.ok) {
+        broadcast({ type: "param_ack", name: param, ok: false, reason: res.reason });
+        continue;
+      }
+      broadcast({
+        type: "param_batch",
+        params: [{ ...res.entry, index: -1, count: simParams.size }],
+        done: false,
+      });
+      broadcast({ type: "param_ack", name: res.entry.name, ok: true, value: res.entry.value });
+    }
+
+    if (writes.length) console.log(`[SIM] pid: ${writes.length} gain ditulis`);
+    return true;
+  }
+
+  if (name === "pool_depth") {
+    const depth = Number(value);
+    if (!Number.isFinite(depth) || depth <= 0) {
+      console.warn(`[SIM] pool_depth tidak valid: ${value}`);
+      return true;
+    }
+    simPoolDepth = depth;
+    // Jepit ULANG target berjalan, sama seperti rov_agent.py.
+    simDepthTarget = clampSimDepthTarget(simDepthTarget);
+    console.log(`[SIM] kedalaman kolam = ${depth.toFixed(2)} m`);
+    return true;
+  }
+
+  if (name === "depth_default") {
+    const depth = Number(value);
+    if (!Number.isFinite(depth) || depth < 0) {
+      console.warn(`[SIM] depth_default tidak valid: ${value}`);
+      return true;
+    }
+    // Tidak menggeser target berjalan — berlaku saat masuk depth hold
+    // berikutnya, persis seperti rov_agent.py.
+    simDepthDefault = depth;
+    console.log(`[SIM] target kedalaman default = ${depth.toFixed(2)} m`);
+    return true;
+  }
+
+  return false;
+}
 
 function applySimCommand(name, value) {
+  if (applySimParamCommand(name, value)) return;
+
   switch (name) {
     case "arm":
       simState.armed = !!value;
@@ -446,8 +678,35 @@ function applySimCommand(name, value) {
       simState.armed = false;
       break; // failsafe: netralkan
     case "control_mode":
-      simState.mode = value;
+      simState.controlMode = value;
       break;
+    case "pilot_mode": {
+      // Tolak nama tak dikenal, persis seperti rov_agent.py — supaya bug
+      // penamaan ketahuan di SIM, bukan baru di kolam.
+      const mapped = PILOT_MODE_MAP[String(value).toLowerCase()];
+      if (!mapped) {
+        console.warn(`[SIM] pilot_mode tidak dikenal: ${value}`);
+        break;
+      }
+      simState.pilotMode = mapped;
+      // Masuk depth hold = pasang setpoint default, bukan kedalaman saat ini.
+      if (DEPTH_HOLD_MODES.has(mapped)) {
+        simDepthTarget = clampSimDepthTarget(simDepthDefault);
+        console.log(`[SIM] depth target = ${simDepthTarget.toFixed(2)} m`);
+      }
+      break;
+    }
+    case "gain_inc":
+    case "gain_dec": {
+      if (!DEPTH_HOLD_MODES.has(simState.pilotMode)) {
+        console.log(`[SIM] ${name} diabaikan — mode bukan depth hold`);
+        break;
+      }
+      const step = name === "gain_inc" ? SIM_DEPTH_STEP : -SIM_DEPTH_STEP;
+      simDepthTarget = clampSimDepthTarget(simDepthTarget + step);
+      console.log(`[SIM] depth target = ${simDepthTarget.toFixed(2)} m`);
+      break;
+    }
   }
 }
 
@@ -470,7 +729,13 @@ if (SIM) {
         voltage: 15.7 + 0.2 * Math.sin(t),
         armed: simState.armed,
         light: simState.light,
-        mode: simState.mode,
+        // Sama seperti ROV sungguhan: field `mode` adalah mode ArduSub dari
+        // HEARTBEAT, bukan control_mode.
+        mode: simState.pilotMode,
+        control_mode: simState.controlMode,
+        pool_depth: simPoolDepth,
+        depth_target: simDepthTarget,
+        depth_default: simDepthDefault,
       },
       recv: Date.now(),
     });
@@ -488,6 +753,18 @@ async function start() {
   } catch (err) {
     console.error("[JOYCFG] FATAL: gagal memuat profil joystick:", err.message);
     process.exit(1);
+  }
+
+  if (SIM) {
+    /* Bukan fatal: kalau dump param hilang, sisa mode SIM tetap berguna —
+       hanya halaman Vehicle yang kosong. */
+    try {
+      simParams = SimParams.load();
+      console.log(`[SIM] tabel param dimuat: ${simParams.size} param dari parameters_ardusub.params`);
+    } catch (err) {
+      console.warn("[SIM] gagal memuat parameters_ardusub.params:", err.message);
+      console.warn("[SIM] halaman Vehicle akan kosong di mode simulasi.");
+    }
   }
 
   httpServer.listen(WS_PORT, () => {

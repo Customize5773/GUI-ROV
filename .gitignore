@@ -1,3 +1,10 @@
+# Konfigurasi environment lokal — salin dari .env.example, jangan commit.
+.env
+
+# Tool lokal (Claude, Kilo) — konfig di folder ini pribadi, jangan commit.
+.claude
+.kilo
+
 # Python
 **/__pycache__/
 *.pyc
@@ -23,6 +30,3 @@ dataset.zip
 
 # Model 3D besar
 public/models/rov.obj
-.kilo/plans/1785358205267-attitude-stabilization-plan.md
-.kilo/plans/1785361285158-gamepad-gripper-control.md
-.kilo/plans/1785359409698-control-mapping-plan.md

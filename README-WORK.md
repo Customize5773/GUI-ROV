@@ -38,7 +38,7 @@ dengan halaman, kontrol, data yang dipantau, dan indikator keberhasilan.
 ROLL · PITCH · TEMP · VOLT · LATENCY. Readout DEPTH **berkedip merah + alarm** saat
 `depth ≥ DANGER_DEPTH`.
 
-**5 halaman (sidebar):**
+**9 halaman (sidebar):**
 | Halaman | Peran utama dalam misi |
 |---|---|
 | **Control** | Mengemudikan ROV (digital twin 3D, sumbu Surge/Sway/Yaw/Vertical, keyboard), kamera utama, depth tape, console |
@@ -46,6 +46,10 @@ ROLL · PITCH · TEMP · VOLT · LATENCY. Readout DEPTH **berkedip merah + alarm
 | **Mission** | Peta **trajectory** posisi ROV titik awal → akhir |
 | **Telemetry** | Grafik Yaw/Depth/Pitch/Roll + status 6 thruster + rekam CSV |
 | **Setup** | Identitas tim, URL kamera, thruster, PID, kedalaman kolam, akses mobile |
+| **Vehicle** | **Seluruh parameter ArduSub** di FC — cari, lihat, ubah (lihat §9) |
+| **Analyze** | **MAVLink Inspector** — semua message MAVLink live + plot field pilihan (lihat §9) |
+| **Joystick** | Pemetaan axis/tombol gamepad, deadzone/expo/slew, simpan & ekspor profil |
+| **Replay** | Rekam satu run lalu putar ulang video 2 kamera + lintasan 3D (lihat §8) |
 
 ## 3. Command yang dikirim GUI ke ROV
 
@@ -60,10 +64,13 @@ ROLL · PITCH · TEMP · VOLT · LATENCY. Readout DEPTH **berkedip merah + alarm
 | `mode` | standby/drycal/manual/hold | tab mode pilot |
 | `controller` | Keyboard/Gamepad/Meta Quest | tab controller |
 | `thruster_config` | objek mixer/PWM/gain/reverse | Setup → Thruster |
-| `pid` | gain yaw/depth | Setup → PID |
-| `pool_depth` | meter | Setup → Test Pool |
-| `viewer_access` | true/false | Setup → Mobile Companion |
-
+| `pid` | gain yaw/depth | Setup → PID → tulis `ATC_RAT_YAW_*` + `PSC_ACCZ_*` (lihat §10) |
+| `pool_depth` | meter | Setup → Test Pool → batas bawah `depth_target` (lihat §10) |
+| `viewer_access` | true/false | Setup → Mobile Companion (murni sisi GUI/server) |
+| `param_list` | true | Vehicle → Muat Ulang Semua (minta seluruh tabel param FC) |
+| `param_get` | nama param | Vehicle (baca ulang satu param) |
+| `param_set` | `{name, value, type}` | Vehicle → edit nilai, **setelah gerbang konfirmasi** |
+| `mavlink_stream` | true/false | Analyze (nyala saat halaman dibuka, mati saat ditinggalkan) |
 | `gripper` | "open" / "close" | tombol **Gripper OPEN/CLOSE** (Control) / keyboard **H** (buka) & **G** (tutup) |
 
 > **Kontrol gripper** sudah tersedia di halaman **Control**: tombol **OPEN**/**CLOSE**
@@ -365,3 +372,209 @@ event dashboard.
   5. **Verifikasi:** garis lintasan & marker ROV bergerak; DENGAN kamera nyata, frame kedua
      video maju seiring posisi ROV pada timestamp yang sama (geser scrubber untuk cek titik
      tertentu). Bandingkan momen kunci (mis. saat gripper menutup) di video vs posisi 3D.
+
+---
+
+## 9. Vehicle Configuration & Analyze (QGroundControl-lite)
+
+Dua fungsi QGroundControl yang diadaptasi ke arsitektur GUI ini supaya operator
+**tidak perlu mencabut umbilical dari dashboard untuk dicolok ke QGC** saat ingin
+menyentuh parameter FC atau mendiagnosa message MAVLink. Rencana lengkap +
+batasan scope ada di `Planning/PLAN-QgroundControl.md`.
+
+### 9.1 Halaman Vehicle — parameter ArduSub
+
+Setara tab **Parameters** di QGC. Menampilkan **seluruh** parameter di flight
+controller (~975 di ArduSub 4.5.7), bukan hanya yang punya form di Setup.
+
+**Cara pakai**
+1. Buka halaman **Vehicle**. Tabel terisi otomatis saat pertama kali dibuka
+   (progress bar menunjukkan `n / total`); tekan **Muat Ulang Semua** untuk menarik ulang.
+2. **Cari param** mencocokkan di mana saja dalam nama (ketik `GCS` → `FS_GCS_ENABLE`,
+   `SYSID_MYGCS`, …). Dropdown **Grup** mencocokkan hanya di **awal** nama
+   (pilih `MOT_` → tidak ikut membawa `COMPASS_MOT_X`). Keduanya bisa dipakai bersamaan.
+3. Klik nilai → ketik nilai baru → **Enter**. Muncul **gerbang konfirmasi** berisi
+   nama param, nilai lama → nilai baru, dan peringatan khusus bila param sensitif
+   (`MOT_`, `FRAME`, `SERVO`, `FS_`, `ARMING`, `BATT_`, `ATC_`, `PSC_`).
+   **Esc** atau klik ke luar = batal.
+4. Badge status per baris: **pending** (kuning, menunggu FC) → **synced** (hijau) atau
+   **gagal** (merah).
+
+**Kenapa arah thruster/PID/joystick tidak ada di sini:** ketiganya sudah punya halaman
+sendiri (Setup → Thruster, Setup → PID, halaman Joystick). Halaman Vehicle hanya
+menautkan ke sana, tidak menduplikasi form-nya.
+
+### 9.2 Halaman Analyze — MAVLink Inspector
+
+Setara **Analyze → MAVLink Inspector** di QGC. Menampilkan **semua** message MAVLink
+yang masuk — termasuk yang tidak dipetakan ke telemetri dashboard — beserta nilai field
+terakhir dan lajunya (Hz).
+
+**Cara pakai**
+1. Buka halaman **Analyze**. Stream menyala otomatis; badge berubah **Streaming**.
+2. Klik satu jenis message (mis. `ATTITUDE`) untuk membuka daftar field-nya.
+3. Klik **+ plot** pada field numerik untuk menambahkannya ke grafik (maks 4).
+   Tekan **×** pada kartu grafik untuk melepasnya.
+4. **Pause** membekukan tampilan (stream tetap jalan, jadi begitu di-*resume* yang
+   tampil adalah nilai terkini, bukan yang basi). **Clear** mengosongkan daftar.
+5. Meninggalkan halaman mematikan stream otomatis.
+
+**Untuk merekam ke CSV pakai halaman Telemetry** — tidak diduplikasi di sini.
+
+### 9.3 Command / message baru (tidak mengubah command existing §3)
+
+| Message | Arah | Fungsi |
+|---|---|---|
+| `param_list` | GUI→ROV | minta seluruh tabel param (`param_request_list_send`) |
+| `param_get` | GUI→ROV | baca ulang satu param (`param_request_read_send`) |
+| `param_set` | GUI→ROV | tulis satu param `{name, value, type}` (`param_set_send`) |
+| `mavlink_stream` | GUI→ROV | nyalakan/matikan stream Inspector |
+| `param_batch` | ROV→GUI | kumpulan `PARAM_VALUE` + `index`/`count` + `done` |
+| `param_ack` | ROV→GUI | hasil `param_set`: `{name, ok, value, reason}` |
+| `mavlink_msg` | ROV→GUI | satu message MAVLink `{msg, t, fields}` (ter-throttle) |
+| `statustext` | ROV→GUI | `STATUSTEXT` dari FC → console dashboard |
+
+### 9.4 Keputusan teknis
+
+- **Envelope UDP balik dari ROV.** Telemetry tetap dikirim sebagai dict `state`
+  **telanjang tanpa field `type`**; semua kanal baru **selalu** punya `type`.
+  `server.js` merutekan berdasarkan itu (`udp.on("message")`). Tanpa diskriminator ini
+  setiap paket akan terbungkus sebagai telemetry — dan karena `broadcast()` men-tap
+  yang bertipe telemetry ke perekam Replay, tabel param akan ikut tertulis ke
+  `trajectory.jsonl`.
+- **Verifikasi tulis, bukan asumsi.** ArduPilot **diam** saat menolak param (nama tak
+  dikenal, nilai di luar rentang, param read-only) — tidak ada NACK. Jadi `param_set`
+  mendaftarkan param ke `pending_params` dan menunggu `PARAM_VALUE` balik; kalau tidak
+  datang dalam 2 detik, dilaporkan **gagal**. Nilai di GUI tidak pernah di-update
+  optimis sebelum FC mengonfirmasi — pola yang sama dengan tombol ARM & tab mode.
+- **`set_param()` dipakai bersama.** `apply_thruster_config()` (Setup → Thruster)
+  sekarang lewat primitif yang sama, sehingga penulisan `MOT_n_DIRECTION` yang dulu
+  **tanpa verifikasi apa pun** kini ikut terkonfirmasi.
+- **PARAM_VALUE ditangani di loop RX `main()`, bukan di `command_listener()`** — alasan
+  identik dengan `COMMAND_ACK`: menunggu di thread command akan memblokirnya dan mencuri
+  pesan dari loop utama.
+- **Batching.** Satu `param_request_list` = ~975 `PARAM_VALUE`. Dikirim per 50 param
+  (atau tiap 200 ms) sebagai satu `param_batch`, bukan ~975 datagram + frame WS.
+- **Throttle per message-type, bukan global** (`rov_mavlink.RateLimiter`, 10 Hz/jenis):
+  supaya `STATUSTEXT` yang jarang tidak pernah kalah oleh `ATTITUDE` yang datang terus.
+- **Stream mati sendiri.** `mavlink_stream` menyimpan **timestamp**, bukan boolean.
+  Halaman Analyze memperbaruinya tiap 10 detik; tanpa pembaruan selama 30 detik wahana
+  mematikannya sendiri, sehingga tab yang ditutup mendadak atau WS yang putus tidak
+  meninggalkan firehose UDP.
+- **Nol dependency baru.** Grafik memakai Chart.js yang sudah ada, lewat util bersama
+  `public/js/chart-line.js` yang **diekstrak dari** `pages/telemetry.js` — halaman
+  Analyze me-reuse grafik yang sama, bukan menyalinnya.
+- **Gerbang konfirmasi memakai `confirm()` bawaan**, sama seperti gerbang mode ACRO
+  (`public/js/app.js`). Repo ini tidak punya utilitas modal; menambah satu di sini
+  berarti dua mekanisme konfirmasi berbeda untuk dua hal yang sama-sama berisiko.
+
+### 9.5 Mode simulasi (tanpa hardware)
+
+`node server.js --sim` memuat `parameters_ardusub.params` (dump QGroundControl yang
+diambil **langsung dari Pixhawk wahana**, ArduSub 4.5.7) sebagai tabel param palsu dan
+melayani `param_list`/`param_get`/`param_set` + `mavlink_stream` dari sana. Jadi kedua
+halaman bisa dikembangkan dan didemokan tanpa FC, dengan nama/nilai/tipe yang sama
+dengan yang nanti terlihat di kolam. Mock ini menirukan perilaku ArduPilot yang penting:
+nama tak dikenal **ditolak**, dan tipe integer **dibulatkan** sehingga nilai yang
+di-echo balik belum tentu sama dengan yang diketik operator.
+
+### 9.6 Testing
+
+- **Unit test Python** (murni, tanpa pymavlink/hardware):
+  `python3 -m unittest test_rov_params test_rov_mavlink -v`
+  — normalisasi nama & koersi nilai param, pencocokan echo float32, parsing dump,
+  throttle per-type, sanitasi field MAVLink (bytearray/NaN → JSON valid).
+- **Unit test server:** `cd server && npm test` (termasuk `test/sim-params.test.js`).
+- **Manual end-to-end tanpa hardware:**
+  1. `cd server && node server.js --sim`, buka `http://localhost:8080`.
+  2. **Vehicle:** tabel terisi 975 param; ketik `MOT` → tersaring; ubah
+     `MOT_1_DIRECTION` dari `-1` ke `1` → konfirmasi muncul → badge **pending** →
+     **synced**. Tekan **Cancel** dan pastikan nilai **tidak** berubah.
+  3. **Analyze:** daftar message terisi dengan Hz ≈ 10; buka `ATTITUDE`, tambahkan
+     `pitch` ke plot; **Pause** lalu **Resume** — Hz harus kembali ~10, bukan mendekati 0.
+  4. **Regresi:** halaman **Telemetry** tetap menampilkan 4 grafik seperti sebelumnya,
+     dan `trajectory.jsonl` hasil rekaman Replay tidak berisi data param.
+- **Dengan SITL ArduSub** (`autonomy/SITL_SETUP.md`): jalankan SITL lalu
+  `PIXHAWK_PORT=tcp:127.0.0.1:5760 python3 rov_agent.py`
+  (`mavutil.mavlink_connection` menerima string koneksi TCP/UDP, bukan hanya serial).
+  Periksa: `param_list` memuat param nyata sampai `done`; `param_set` ke nama tak dikenal
+  berakhir **gagal** lewat timeout (bukan menggantung selamanya).
+
+> **Catatan offline:** `public/index.html` memuat three.js & Chart.js dari CDN
+> (unpkg/jsdelivr) lewat importmap. Di venue tanpa internet, **seluruh dashboard gagal
+> dimuat** — bukan hanya grafiknya. Ini kondisi yang sudah ada sebelum fitur ini dan
+> belum diperbaiki di sini; lihat catatan di akhir §9 pada `Planning/PLAN-QgroundControl.md`.
+
+---
+
+## 10. PID & kedalaman kolam benar-benar sampai ke wahana
+
+Tombol **Apply PID Gains** dan **Apply Pool** di halaman Setup sudah ada sejak awal,
+tetapi `rov_agent.py` **tidak punya handler untuk keduanya** — command-nya jatuh ke
+`unknown command` dan **tidak berefek apa pun pada wahana**. Bagian ini menjelaskan
+kondisi setelah keduanya disambungkan.
+
+### 10.1 PID → parameter ArduSub
+
+| Kolom di Setup | Parameter ArduSub | Rentang aman yang diterima |
+|---|---|---|
+| Yaw P / I / D | `ATC_RAT_YAW_P` / `_I` / `_D` | 0–1 · 0–1 · 0–0.05 |
+| Depth P / I / D | `PSC_ACCZ_P` / `_I` / `_D` | 0.2–1.5 · 0–3 · 0–0.4 |
+
+**Kenapa depth → `PSC_ACCZ_*`.** Depth hold ArduSub adalah kaskade tiga loop
+(`PSC_POSZ` → `PSC_VELZ` → `PSC_ACCZ`); tidak ada satu "PID depth". `ACCZ` dipilih
+karena itu knob tuning depth-hold standar di panduan ArduPilot **dan** satu-satunya dari
+ketiganya yang punya P, I, dan D lengkap, sehingga form 3 kolom cocok apa adanya tanpa
+kolom yang menganggur.
+
+**Nilai di form dibaca dari FC, bukan dari GUI.** Halaman Setup mengirim `param_get`
+untuk keenam param setiap kali dibuka; badge **Dari FC · <jam>** menandai kapan terakhir
+dibaca, dan tombol **Baca dari FC** memuat ulang manual. Gain **tidak lagi disimpan ke
+localStorage** — sumber kebenarannya flight controller.
+
+> **Kenapa ini penting.** Default PID lama di `public/js/config.js` bukan satuan ArduSub:
+> `yaw.p = 2.0` padahal `ATC_RAT_YAW_P` di wahana **0.18** (~11×), `depth.p = 10.0`
+> padahal `PSC_ACCZ_P` **0.5** (~20×). Kalau `pid` disambungkan begitu saja, sekali klik
+> Apply PID bisa membuat wahana berosilasi hebat. Karena itu ada dua lapis pengaman:
+> form selalu mulai dari nilai FC, dan `rov_pid.py` **menolak** (bukan menjepit) nilai di
+> luar rentang. Menjepit diam-diam akan membuat operator mengira menulis 2.0 padahal yang
+> masuk 1.0 — salah paham yang lebih berbahaya daripada perintah yang gagal terang-terangan.
+
+Rentang di tabel atas **ditulis tangan**, bukan dibaca dari metadata param (metadata
+ArduSub memang tidak tersedia offline — lihat `Planning/PLAN-QgroundControl.md` §6).
+Tujuannya menyaring kesalahan besaran, **bukan** menjamin kestabilan: menyetel gain tetap
+butuh uji kolam. Gain yang ditolak dilaporkan per-param di console dashboard lengkap
+dengan alasannya; yang lolos ditulis lewat `set_param()` yang sama dengan halaman Vehicle,
+jadi ikut terverifikasi lewat echo `PARAM_VALUE`.
+
+Untuk param di luar keenam gain ini, pakai halaman **Vehicle** (§9.1) — form Setup hanya
+pintasan ke enam param yang sama.
+
+### 10.2 `pool_depth` membatasi setpoint kedalaman
+
+Sebelumnya `depth_target` hanya dibatasi di 0 m (permukaan) dan **tidak punya batas
+bawah**: di kolam KKI 0.9 m, menahan `gain_inc` bisa menyetel target belasan meter.
+Bias throttle memang dibatasi `DEPTH_BIAS_LIMIT` sehingga bukan runaway, tapi ROV tetap
+ditekan ke dasar tanpa henti dan target butuh puluhan penekanan `gain_dec` untuk kembali
+masuk akal.
+
+Sekarang `pool_depth` jadi batas bawahnya (`rov_pid.clamp_depth_target`), berlaku di dua
+tempat `depth_target` disetel: tombol `gain_inc`/`gain_dec` dan inisialisasi saat masuk
+mode depth-hold. Memperkecil pool depth saat target sudah lebih dalam **langsung**
+menurunkan target, tidak menunggu penekanan tombol berikutnya.
+
+Dashboard mengirim `pool_depth` otomatis setiap kali WebSocket tersambung (bukan hanya
+saat Apply ditekan), supaya jepitan ini aktif juga setelah `rov_agent.py` restart.
+Nilai yang benar-benar diketahui wahana dipantulkan balik di telemetry sebagai
+`pool_depth` — `null` berarti jepitan belum aktif.
+
+### 10.3 Testing
+
+- `python3 -m unittest test_rov_pid -v` — pemetaan gain, penolakan nilai di luar rentang,
+  jepitan `depth_target`, dan **regresi eksplisit bahwa default GUI lama ditolak**.
+- `cd server && npm test` — mock SIM memakai nama param & rentang yang sama dengan sisi
+  Python; ada test yang menjaga keduanya tetap sepakat.
+- Manual di `node server.js --sim`: buka **Setup**, kolom PID harus terisi `0.18/0.018/0`
+  dan `0.5/0.1/0` (nilai FC), bukan `2.0/10.0`. Isi `ATC_RAT_YAW_P` dengan `2.0` → ditolak
+  dengan alasan jelas dan nilai di halaman **Vehicle** tidak berubah. Ketik angka lalu
+  pindah ke halaman Vehicle dan kembali → angka yang belum di-Apply tidak tertimpa.
