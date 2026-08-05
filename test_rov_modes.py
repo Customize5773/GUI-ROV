@@ -13,6 +13,7 @@ from rov_modes import (
     RISKY_MODES,
     STABILIZE_WARNING,
     depth_hold_allowed,
+    is_poshold_request,
     is_risky_mode,
     resolve_pilot_mode,
     warning_for_mode,
@@ -21,9 +22,15 @@ from rov_modes import (
 
 class TestResolvePilotMode(unittest.TestCase):
     def test_semua_mode_yang_didukung(self):
-        self.assertEqual(resolve_pilot_mode("manual"), "MANUAL")
         self.assertEqual(resolve_pilot_mode("depth_hold"), "ALT_HOLD")
         self.assertEqual(resolve_pilot_mode("acro"), "ACRO")
+
+    def test_manual_tidak_lagi_didukung(self):
+        # Tab pilot mode MANUAL dihapus dari GUI — fungsinya digantikan tombol
+        # Emergency Stop (command "stop" di rov_agent.py). Permintaan lama
+        # (mis. dari profil joystick/cache browser) harus DITOLAK, bukan
+        # diam-diam diterima.
+        self.assertIsNone(resolve_pilot_mode("manual"))
 
     def test_stabilize_adalah_alias_alt_hold(self):
         # Tab STABILIZE sudah dihapus dari GUI karena ia menstabilkan attitude
@@ -44,8 +51,33 @@ class TestResolvePilotMode(unittest.TestCase):
     def test_mode_tidak_dikenal_mengembalikan_none(self):
         # Penting: None, bukan fallback ke MANUAL. Perintah harus DITOLAK,
         # bukan diam-diam mengubah mode ke sesuatu yang tidak diminta.
-        for bad in ("poshold", "", "ALT_HOLD", "surface", None, 3, True, ["acro"]):
+        for bad in ("", "ALT_HOLD", "surface", None, 3, True, ["acro"]):
             self.assertIsNone(resolve_pilot_mode(bad), msg=repr(bad))
+
+
+class TestPoshold(unittest.TestCase):
+    def test_poshold_berujung_di_alt_hold(self):
+        # BUKAN mode POSHOLD firmware: itu butuh estimasi posisi horizontal dari
+        # EKF yang tidak tersedia di bawah air. Yang dipakai overlay sisi Pi di
+        # atas ALT_HOLD — lihat docstring rov_modes.py.
+        self.assertEqual(resolve_pilot_mode("poshold"), "ALT_HOLD")
+
+    def test_depth_hold_tetap_aktif_di_poshold(self):
+        # POSHOLD menahan kedalaman DAN heading; kalau gate depth-hold mati,
+        # tombol gain +/- dan bias throttle ikut mati tanpa alasan.
+        self.assertTrue(depth_hold_allowed(resolve_pilot_mode("poshold")))
+
+    def test_poshold_bukan_mode_risky(self):
+        # Tidak lebih berbahaya dari ALT_HOLD — tidak perlu gerbang konfirmasi.
+        self.assertFalse(is_risky_mode(resolve_pilot_mode("poshold")))
+
+    def test_is_poshold_request_membedakan_yang_resolve_tidak_bisa(self):
+        # Keduanya berujung di ALT_HOLD, jadi hasil resolve_pilot_mode TIDAK
+        # cukup untuk tahu apakah overlay harus hidup.
+        self.assertTrue(is_poshold_request("poshold"))
+        self.assertTrue(is_poshold_request("  POSHOLD "))
+        for other in ("depth_hold", "stabilize", "manual", "acro", "", None, 3, ["poshold"]):
+            self.assertFalse(is_poshold_request(other), msg=repr(other))
 
 
 class TestDepthHoldGate(unittest.TestCase):

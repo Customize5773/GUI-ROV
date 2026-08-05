@@ -7,7 +7,14 @@ import math
 from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
-from rov_modes import depth_hold_allowed, is_risky_mode, resolve_pilot_mode, warning_for_mode
+from rov_modes import (
+    depth_hold_allowed,
+    is_poshold_request,
+    is_risky_mode,
+    resolve_pilot_mode,
+    warning_for_mode,
+)
+from rov_heading import heading_bias, operator_holding_yaw
 from rov_motor_test import validate_motor_test
 from rov_params import (
     coerce_param_value,
@@ -135,6 +142,14 @@ default_depth_target = DEFAULT_DEPTH_TARGET
 DEPTH_STEP = 0.05
 depth_lock = threading.Lock()
 
+# Defense-in-depth: GUI sudah membatasi auto-repeat gain_inc/gain_dec ke
+# REPEAT_INTERVAL_MS=150 (app.js), tapi backend tidak boleh percaya penuh
+# pada klien. Batas di sini sama, ~6.7 Hz, supaya klien rusak/nakal yang
+# mengirim command lebih cepat tidak bisa menggeser depth_target lebih
+# cepat dari yang GUI sendiri izinkan.
+_GAIN_RATE_HZ = 1.0 / 0.15
+_gain_rate = RateLimiter(_GAIN_RATE_HZ)
+
 # Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
 # None = belum diberi tahu -> depth_target hanya dibatasi di permukaan, persis
 # perilaku sebelumnya. Begitu diisi, jadi batas bawah depth_target (lihat
@@ -190,6 +205,74 @@ def apply_depth_hold_bias(mc, axes):
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
+    return out
+
+
+# =========================
+# POSHOLD (station-keep)
+# =========================
+# BUKAN mode POSHOLD firmware ArduSub — itu butuh estimasi posisi horizontal
+# dari EKF yang tidak tersedia di bawah air (tidak ada GPS/DVL/optical flow di
+# wahana ini). Lihat docstring rov_modes.py.
+#
+# Yang dilakukan mode ini: ALT_HOLD (kedalaman ditahan cascade PID ArduSub) DITAMBAH
+# koreksi heading proporsional dari sisi Pi (rov_heading.py). Yang TIDAK
+# dilakukan: menahan posisi x/y. Arus lateral tetap menggeser wahana dan tidak
+# ada sensor yang bisa melihatnya.
+poshold_active = False
+
+# Heading yang sedang ditahan (derajat). None = belum di-seed; tick berikutnya
+# akan mengisinya dari heading saat itu. Sengaja bukan 0.0: 0° adalah heading
+# yang sah, jadi tidak bisa dipakai sebagai penanda "belum diisi".
+heading_target = None
+heading_lock = threading.Lock()
+
+
+def poshold_engaged():
+    """True kalau overlay heading-hold benar-benar boleh menulis ke r.
+
+    Syaratnya dua: operator memang meminta POSHOLD, DAN wahana ada di mode yang
+    menahan kedalaman. Kalau wahana ditarik keluar ALT_HOLD lewat saklar RC atau
+    GCS lain, overlay ikut mati sendiri — bukan diam-diam terus mengoreksi yaw
+    di MANUAL.
+    """
+    return poshold_active and depth_hold_allowed(requested_mode or state["mode"])
+
+
+def apply_heading_hold(mc, axes):
+    """Tambahkan koreksi ke MANUAL_CONTROL.r agar heading tetap di heading_target.
+
+    Aturan mainnya sama persis dengan apply_depth_hold_bias(): operator menang
+    mutlak. Begitu stik yaw disentuh, target DIBUANG (bukan sekadar diabaikan)
+    supaya saat stik dilepas wahana menahan heading BARU tempat operator
+    meninggalkannya, bukan memutar balik ke heading lama.
+    """
+    global heading_target
+
+    if not poshold_engaged():
+        return mc
+
+    if operator_holding_yaw(axes):
+        with heading_lock:
+            heading_target = None
+        return mc
+
+    with heading_lock:
+        if heading_target is None:
+            # Seed lalu keluar tanpa koreksi: pada tick ini heading masih
+            # bergerak sisa dari input operator, jadi mengoreksinya langsung
+            # hanya menghasilkan sentakan.
+            heading_target = state["heading"]
+            print(f"[POSHOLD] Heading target = {heading_target:.1f}°")
+            return mc
+        target = heading_target
+
+    bias = heading_bias(target, state["heading"])
+    if bias == 0:
+        return mc
+
+    out = dict(mc)
+    out["r"] = max(-1000, min(1000, int(mc["r"]) + bias))
     return out
 
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
@@ -322,6 +405,14 @@ def send_telemetry():
     with depth_lock:
         state["depth_target"] = depth_target
 
+    # POSHOLD tidak terlihat di HEARTBEAT (ia berjalan di ALT_HOLD), jadi
+    # INILAH satu-satunya cara GUI tahu overlay sedang hidup dan tab mana yang
+    # harus menyala. heading_target None = belum di-seed (stik yaw masih
+    # dipegang, atau baru saja masuk mode).
+    state["poshold"] = poshold_engaged()
+    with heading_lock:
+        state["heading_target"] = heading_target
+
     # Dipantulkan supaya operator bisa memastikan wahana benar-benar TAHU
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
@@ -399,6 +490,8 @@ def command_listener():
     global mavlink_stream_requested_at
     global pool_depth
     global default_depth_target
+    global poshold_active
+    global heading_target
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -476,6 +569,19 @@ def command_listener():
                 master.set_mode(mode_mapping[pixhawk_mode])
                 requested_mode = pixhawk_mode
 
+                # "poshold" dan "depth_hold" sama-sama berujung di ALT_HOLD,
+                # jadi pixhawk_mode TIDAK cukup untuk membedakannya — yang
+                # menentukan overlay hidup/mati adalah nama yang diminta GUI.
+                # Setiap permintaan mode apa pun mematikan overlay lebih dulu,
+                # supaya tidak ada jalur yang meninggalkannya menyala.
+                poshold_active = is_poshold_request(value)
+
+                # Selalu dibuang, baik masuk maupun keluar POSHOLD: masuk mode
+                # ini berarti "tahan heading tempat saya sekarang", bukan
+                # heading dari sesi POSHOLD sebelumnya.
+                with heading_lock:
+                    heading_target = None
+
                 # Hanya mode yang benar-benar menahan kedalaman yang perlu
                 # setpoint awal. Di MANUAL/ACRO depth_target tidak dipakai.
                 #
@@ -496,6 +602,8 @@ def command_listener():
 
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
+                if poshold_active:
+                    print(" POSHOLD    : heading hold AKTIF (posisi x/y TIDAK ditahan)")
                 if is_risky_mode(pixhawk_mode):
                     msg = warning_for_mode(pixhawk_mode)
                     if msg:
@@ -507,6 +615,12 @@ def command_listener():
                 print("[MAV] STOP -> DISARM")
                 with joystick_lock:
                     joystick.update(AXIS_NEUTRAL)
+                # E-Stop tidak boleh meninggalkan overlay yang masih menulis ke
+                # r: axis dinetralkan di sini, dan koreksi heading akan
+                # mengisinya kembali pada tick berikutnya.
+                poshold_active = False
+                with heading_lock:
+                    heading_target = None
                 send_arm_disarm(False)
 
             elif name == "light":
@@ -521,6 +635,9 @@ def command_listener():
                 # penekanan tepat setelah ganti mode hilang tanpa jejak.
                 if not depth_hold_active():
                     print(f"[DEPTH] {name} diabaikan — mode bukan depth hold")
+                    continue
+
+                if not _gain_rate.allow("depth_target", time.time()):
                     continue
 
                 step = DEPTH_STEP if name == "gain_inc" else -DEPTH_STEP
@@ -601,11 +718,20 @@ def command_listener():
                 ).start()
 
             elif name == "motor_test":
-                # value = {"motor": 1..6, "throttle": 1-100, "duration": s, "direction": "forward"|"reverse"}
+                # server.js kirim motor/throttle/duration/direction sebagai
+                # field top-level (bukan di dalam "value" — motor_test tidak
+                # punya axis tunggal seperti command lain), jadi payload harus
+                # dirakit dari msg langsung, bukan msg.get("value") yang selalu None.
+                payload = {
+                    "motor": msg.get("motor"),
+                    "throttle": msg.get("throttle"),
+                    "duration": msg.get("duration"),
+                    "direction": msg.get("direction"),
+                }
                 # Thread terpisah: command_long_send tidak blocking lama, tapi
                 # tetap dipisah dari command_listener demi konsistensi pola.
                 threading.Thread(
-                    target=run_motor_test, args=(value,), daemon=True
+                    target=run_motor_test, args=(payload,), daemon=True
                 ).start()
 
             elif name == "param_list":
@@ -985,7 +1111,14 @@ def joystick_sender():
 
         # Saat stale, axes yang dipakai juga harus netral supaya bias
         # depth-hold tidak dihitung dari input basi.
-        mc = apply_depth_hold_bias(mc, AXIS_NEUTRAL if stale else axes)
+        eff_axes = AXIS_NEUTRAL if stale else axes
+        mc = apply_depth_hold_bias(mc, eff_axes)
+
+        # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
+        # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
+        # mudah dibaca. Saat stale, axes netral yang dipakai sehingga overlay
+        # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
+        mc = apply_heading_hold(mc, eff_axes)
 
         try:
             master.mav.manual_control_send(
