@@ -312,10 +312,15 @@ export const setupPage = {
        thruster" di kartu THRUSTER SETUP (revWrap.children[i]) — bukan state
        kedua, supaya tidak ada dua sumber kebenaran untuk reversed[]. */
     const MOTOR_TEST_THROTTLE_MAX = 20; // selaras MOTOR_TEST_MAX_THROTTLE di rov_motor_test.py
+    // ArduSub menolak motor test baru sebelum 10 detik berlalu sejak yang
+    // sebelumnya ("10 second cooldown required after motor test") — berlaku
+    // GLOBAL lintas motor, bukan per-thruster. +500ms jaga-jaga jitter jaringan.
+    const MOTOR_TEST_COOLDOWN_MS = 10500;
     const motorButtonsWrap = root.querySelector("#suMotorButtons");
     motorButtonsWrap.className = "motor-test-row";
-    let motorTestLastSent = 0;
+    let motorTestCooldownUntil = 0;
     const allMotorSliders = [];
+    const allMotorStatusEls = [];
     MOTOR_LAYOUT.forEach((m) => {
       const revBtn = revWrap.children[m.id - 1];
       const col = document.createElement("div");
@@ -338,6 +343,7 @@ export const setupPage = {
       const statusEl = col.querySelector("#suMotorStatus" + m.id);
       const dot = document.getElementById("motorDot" + m.id);
       allMotorSliders.push(slider);
+      allMotorStatusEls.push(statusEl);
 
       // Checkbox ini cuma "wajah kedua" dari tombol T-n yang sudah ada di
       // kartu THRUSTER SETUP — klik di sini menekan tombol aslinya juga.
@@ -352,10 +358,15 @@ export const setupPage = {
       // bukan di sini — kalau dicek tiap tick oninput, tiap tick memaksa
       // slider.value = 0 selama drag berlangsung dan terasa seperti macet.
       slider.oninput = () => {
-        // Throttle ~250ms supaya slider yang digeser cepat tidak membanjiri motor_test.
         const now = Date.now();
-        if (now - motorTestLastSent < 250) return;
-        motorTestLastSent = now;
+        // Cooldown 10s ArduSub berlaku lintas motor: kalau masih dalam masa
+        // tunggu (dari motor MANAPUN), tolak di sisi GUI juga — mengirim
+        // sekarang cuma akan dibalas FC dengan "motor test initialization
+        // failed! 10 second cooldown required" dan slider kembali ke 0
+        // sia-sia. `allMotorSliders` sudah di-disable saat cooldown aktif
+        // (lihat startMotorTestCooldown), ini jaga-jaga kalau event sempat
+        // lolos sebelum disabled ke-apply oleh browser.
+        if (now < motorTestCooldownUntil) { slider.value = 0; return; }
 
         const raw = Number(slider.value);
         if (raw === 0) { pctEl.textContent = "0%"; return; }
@@ -369,6 +380,7 @@ export const setupPage = {
         const duration = Math.max(0.2, Math.min(2, parseFloat(root.querySelector("#suMtDuration").value) || 1));
 
         wsSend({ type: "cmd", name: "motor_test", motor: m.id, throttle, duration, direction });
+        startMotorTestCooldown();
 
         pctEl.textContent = `${direction === "forward" ? "▲" : "▼"} ${throttle}%`;
         dot.classList.add("motor-dot--active", direction === "forward" ? "motor-dot--fwd" : "motor-dot--rev");
@@ -394,13 +406,37 @@ export const setupPage = {
     const armBtnEl = document.getElementById("btnArm");
     const syncMotorTestArmedState = () => {
       const armed = armBtnEl?.getAttribute("aria-pressed") === "true";
-      allMotorSliders.forEach((s) => { s.disabled = !armed; });
+      const cooling = Date.now() < motorTestCooldownUntil;
+      allMotorSliders.forEach((s) => { s.disabled = !armed || cooling; });
     };
     if (armBtnEl) {
       new MutationObserver(syncMotorTestArmedState)
         .observe(armBtnEl, { attributes: true, attributeFilter: ["aria-pressed"] });
     }
     syncMotorTestArmedState();
+
+    // Kunci SEMUA slider (bukan cuma yang baru digeser) selama cooldown 10s
+    // ArduSub — firmware menolak motor test dari motor manapun sampai
+    // cooldown motor SEBELUMNYA habis, jadi batasannya memang global.
+    // Badge status tiap thruster dipakai untuk hitung mundur supaya operator
+    // tahu kapan boleh coba lagi, bukan cuma "gagal" tanpa penjelasan.
+    let motorTestCooldownTimer = null;
+    function startMotorTestCooldown() {
+      motorTestCooldownUntil = Date.now() + MOTOR_TEST_COOLDOWN_MS;
+      syncMotorTestArmedState();
+      clearInterval(motorTestCooldownTimer);
+      motorTestCooldownTimer = setInterval(() => {
+        const remaining = motorTestCooldownUntil - Date.now();
+        if (remaining <= 0) {
+          clearInterval(motorTestCooldownTimer);
+          syncMotorTestArmedState();
+          allMotorStatusEls.forEach((el) => { if (el.textContent.startsWith("cooldown")) el.textContent = ""; });
+          return;
+        }
+        const secs = Math.ceil(remaining / 1000);
+        allMotorStatusEls.forEach((el) => { el.textContent = `cooldown ${secs}s`; });
+      }, 250);
+    }
 
     /* PID */
     this.els.pidSrc = root.querySelector("#suPidSrc");
