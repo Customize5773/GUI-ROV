@@ -224,6 +224,8 @@ function updateTape(depth) {
 
 /*  render telemetri  */
 let lastTelemetry = 0;
+let surfaceOffset = 0;   // tare depth — diset via tombol "Set Surface Level & Depth = 0"
+let lastRawDepth = 0;    // depth mentah (sebelum offset) dari telemetry terakhir
 function applyTelemetry(d) {
   const isDemo = !!d.__demo;
   // jika ini telemetry nyata (bukan simulasi) dan simulator sedang berjalan,
@@ -239,6 +241,8 @@ function applyTelemetry(d) {
     if (!isDemo && !demo) { setLink("on"); log("Telemetri pulih", "ok"); }
   }
   lastTelemetry = performance.now();
+  if (Number.isFinite(d.depth)) lastRawDepth = d.depth;
+  if (Number.isFinite(d.depth)) d.depth = Math.max(0, d.depth - surfaceOffset);
   els.heading.textContent = num(d.heading, 0);
   els.depth.textContent = num(d.depth, 2);
   // altitude = ketinggian ROV (titik tengah) di atas dasar kolam
@@ -256,14 +260,13 @@ function applyTelemetry(d) {
   els.hudRoll.textContent = "R " + num(d.roll, 0) + "°";
   els.hudPitch.textContent = "P " + num(d.pitch, 0) + "°";
 
-  // Compass needle direction was inverted; add 180° offset so needle
-  // points to the model's forward direction correctly.
+  // Kompas: heading 0°=N (atas), rotate CW mengikuti arah kompas standar —
+  // transform-origin needle di CSS sudah bottom-center menunjuk ke atas by default.
   if (heading !== null && els.miniCompassNeedle) {
-    const displayH = (heading + 180) % 360; // flip
-    els.miniCompassNeedle.style.transform = `rotate(${displayH}deg)`;
+    els.miniCompassNeedle.style.transform = `rotate(${heading}deg)`;
     const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    els.miniCompassDir.textContent = dirs[Math.floor((displayH + 22.5) / 45) % 8];
-    els.miniCompassValue.textContent = `${Math.round(displayH)}°`;
+    els.miniCompassDir.textContent = dirs[Math.floor((heading + 22.5) / 45) % 8];
+    els.miniCompassValue.textContent = `${Math.round(heading)}°`;
   }
 
   if (scene) scene.setAttitude(d.roll, d.pitch, d.heading);
@@ -1476,8 +1479,9 @@ requestAnimationFrame(pollGamepad);
 
 /* set surface level */
 $("btnSetSurface").onclick = () => {
-  sendCmd("set_surface", true);
-  log("Surface level diset — Depth = 0", "ok");
+  surfaceOffset = lastRawDepth;
+  sendCmd("set_surface", true);   // tetap kirim, backend abaikan (GUI-only by design)
+  log(`Surface level diset — Depth = 0 (offset ${lastRawDepth.toFixed(2)} m)`, "ok");
 };
 
 /* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
