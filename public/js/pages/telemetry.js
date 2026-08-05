@@ -106,13 +106,23 @@ export const telemetryPage = {
     const real = {
       yaw: Number.isFinite(d.heading) ? ((d.heading % 360) + 360) % 360 : 0,
       depth: d.depth || 0, pitch: d.pitch || 0, roll: d.roll || 0,
+      depthSetpoint: d.depth_target || 0,
+      mode: d.mode || "unknown",
+      thrusterVerticalPwm: d.thruster_vertical_pwm || 0,
+      pidP: d.pid_p_out || 0, pidI: d.pid_i_out || 0, pidD: d.pid_d_out || 0,
     };
     for (const c of CHANNELS) pushRing(this.buf[c.key], real[c.key], WINDOW);
     // arus thruster nyata bila ROV mengirim (array A: [T1..T6]); jika tidak, biarkan null
     if (Array.isArray(d.thrusters)) this.thrusters = d.thrusters;
     if (this.capturing) {
       this.samples++;
-      this.csvRows.push([Date.now(), real.yaw.toFixed(2), real.depth.toFixed(3), real.pitch.toFixed(2), real.roll.toFixed(2)].join(","));
+      const depthError = real.depthSetpoint - real.depth;
+      this.csvRows.push([
+        Date.now(), real.yaw.toFixed(2), real.depth.toFixed(3), real.pitch.toFixed(2), real.roll.toFixed(2),
+        real.depthSetpoint.toFixed(3), real.mode, real.thrusterVerticalPwm,
+        real.pidP.toFixed(3), real.pidI.toFixed(3), real.pidD.toFixed(3),
+        depthError.toFixed(3),
+      ].join(","));
     }
   },
 
@@ -170,7 +180,7 @@ export const telemetryPage = {
   },
   _exportCsv() {
     if (!this.csvRows.length) { log("Tidak ada sampel untuk diekspor", "warn"); return; }
-    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg";
+    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,depth_error";
     const blob = new Blob([header + "\n" + this.csvRows.join("\n")], { type: "text/csv" });
     const trial = parseInt(document.getElementById("teleTrial")?.value, 10) || 1;
     const a = document.createElement("a");

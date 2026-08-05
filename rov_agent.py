@@ -93,6 +93,14 @@ state = {
     # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
     # ke GUI); yang ini menandai perintah tidak sampai ke Pi.
     "cmd_link": "ok",
+    # Untuk tuning PID depth-hold (halaman Telemetry, ekspor CSV): rata-rata
+    # PWM T3/T4/T5 dari SERVO_OUTPUT_RAW, dan P/I/D dari PID_TUNING (axis
+    # ACCZ). Tetap 0 kalau FC tidak mengirim pesan itu (mis. PID_TUNING_MASK
+    # belum diset) — bukan error, hanya kolom kosong di CSV.
+    "thruster_vertical_pwm": 0,
+    "pid_p_out": 0.0,
+    "pid_i_out": 0.0,
+    "pid_d_out": 0.0,
 }
 
 master = None
@@ -1134,6 +1142,37 @@ def connect_pixhawk():
     except Exception as e:
         print("[MAV] AHRS2 request warning:", e)
 
+    # Request SERVO_OUTPUT_RAW (PWM thruster, untuk CSV tuning depth-hold)
+    try:
+        link.mav.command_long_send(
+            link.target_system,
+            link.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW,
+            100000,      # 10 Hz (100000 µs)
+            0, 0, 0, 0, 0
+        )
+    except Exception as e:
+        print("[MAV] SERVO_OUTPUT_RAW request warning:", e)
+
+    # Request PID_TUNING (P/I/D depth-hold, untuk CSV tuning). Hanya benar-benar
+    # mengalir kalau parameter PID_TUNING_MASK di FC sudah menyalakan bit ACCZ —
+    # kalau belum, permintaan ini diterima tapi FC tetap diam, dan kolom
+    # pid_*_out di CSV akan tetap 0.0 (bukan error).
+    try:
+        link.mav.command_long_send(
+            link.target_system,
+            link.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavutil.mavlink.MAVLINK_MSG_ID_PID_TUNING,
+            100000,      # 10 Hz (100000 µs)
+            0, 0, 0, 0, 0
+        )
+    except Exception as e:
+        print("[MAV] PID_TUNING request warning:", e)
+
     return link
 
 
@@ -1314,6 +1353,27 @@ def main():
             # altitude bernilai negatif saat ROV berada di bawah permukaan
             if hasattr(msg, "altitude"):
                 state["depth"] = max(0.0, -float(msg.altitude))
+
+        # --------------------------------
+        # SERVO_OUTPUT_RAW: PWM thruster vertikal (T3/T4/T5 = heave)
+        # untuk CSV tuning depth-hold di halaman Telemetry.
+        # --------------------------------
+        elif mtype == "SERVO_OUTPUT_RAW":
+            vals = [v for v in (msg.servo3_raw, msg.servo4_raw, msg.servo5_raw) if v]
+            if vals:
+                state["thruster_vertical_pwm"] = int(sum(vals) / len(vals))
+
+        # --------------------------------
+        # PID_TUNING: P/I/D depth-hold (axis ACCZ = PSC_ACCZ, controller
+        # vertikal ArduSub) untuk CSV tuning. Diam kalau PID_TUNING_MASK
+        # belum menyalakan bit ACCZ di FC — bukan error, state tetap 0.0.
+        # --------------------------------
+        elif mtype == "PID_TUNING":
+            if getattr(msg, "axis", None) == mavutil.mavlink.PID_TUNING_ACCZ:
+                state["pid_p_out"] = float(msg.P)
+                state["pid_i_out"] = float(msg.I)
+                state["pid_d_out"] = float(msg.D)
+
         # --------------------------------
         # HEARTBEAT: mode dan armed
         # --------------------------------
