@@ -312,10 +312,21 @@ export const setupPage = {
        thruster" di kartu THRUSTER SETUP (revWrap.children[i]) — bukan state
        kedua, supaya tidak ada dua sumber kebenaran untuk reversed[]. */
     const MOTOR_TEST_THROTTLE_MAX = 20; // selaras MOTOR_TEST_MAX_THROTTLE di rov_motor_test.py
-    // ArduSub menolak motor test baru sebelum 10 detik berlalu sejak yang
-    // sebelumnya ("10 second cooldown required after motor test") — berlaku
-    // GLOBAL lintas motor, bukan per-thruster. +500ms jaga-jaga jitter jaringan.
-    const MOTOR_TEST_COOLDOWN_MS = 10500;
+    // ArduSub TIDAK menjalankan motor test "sekali kirim, muter N detik" —
+    // param duration/timeout kita diABAIKAN firmware (lihat handle_do_motor_test
+    // di ArduSub/motors.cpp: "timeout_s = command.param4; // not used").
+    // Yang sebenarnya dipakai: GUI harus kirim ULANG command ini >=2Hz selama
+    // motor diminta muter (persis Motor Test QGroundControl). Berhenti kirim
+    // >500ms -> firmware anggap "Motor test timed out!" DAN men-disarm ROV
+    // (AP::arming().disarm(...MOTORTEST)). Itu bukan bug, itu memang perilaku
+    // safety ArduSub — makanya lepas slider = ROV perlu di-ARM ulang sebelum
+    // test/kendali berikutnya.
+    const MOTOR_TEST_STREAM_MS = 200; // < 500ms batas timeout, kasih margin
+    // Cooldown 10s ArduSub HANYA dikenakan kalau init_motor_test() gagal
+    // sebelumnya (bukan wajib setelah tiap test sukses) — lihat
+    // last_do_motor_test_fail_ms di source. Jadi kita tidak lagi mengunci
+    // slider preventif; cukup kunci reaktif kalau FC benar2 menolak.
+    const MOTOR_TEST_FAIL_COOLDOWN_MS = 10500;
     const motorButtonsWrap = root.querySelector("#suMotorButtons");
     motorButtonsWrap.className = "motor-test-row";
     let motorTestCooldownUntil = 0;
@@ -354,22 +365,24 @@ export const setupPage = {
 
       const stopVisual = () => dot.classList.remove("motor-dot--active", "motor-dot--fwd", "motor-dot--rev");
 
-      // Gerbang ARMED dicek lewat `disabled` (lihat syncArmedState di bawah),
-      // bukan di sini — kalau dicek tiap tick oninput, tiap tick memaksa
-      // slider.value = 0 selama drag berlangsung dan terasa seperti macet.
-      slider.oninput = () => {
-        const now = Date.now();
-        // Cooldown 10s ArduSub berlaku lintas motor: kalau masih dalam masa
-        // tunggu (dari motor MANAPUN), tolak di sisi GUI juga — mengirim
-        // sekarang cuma akan dibalas FC dengan "motor test initialization
-        // failed! 10 second cooldown required" dan slider kembali ke 0
-        // sia-sia. `allMotorSliders` sudah di-disable saat cooldown aktif
-        // (lihat startMotorTestCooldown), ini jaga-jaga kalau event sempat
-        // lolos sebelum disabled ke-apply oleh browser.
-        if (now < motorTestCooldownUntil) { slider.value = 0; return; }
+      let streamTimer = null;
+      const stopStream = () => {
+        if (streamTimer) { clearInterval(streamTimer); streamTimer = null; }
+        stopVisual();
+        if (statusEl.textContent === "menguji...") {
+          statusEl.textContent = "";
+          log(`T${m.id}: slider dilepas — ROV akan DISARM otomatis (timeout ArduSub), ARM ulang sebelum lanjut`, "warn");
+        }
+      };
+
+      // Kirim ulang command SELAMA slider ditahan, bukan sekali saat digeser:
+      // ArduSub butuh >=2Hz do_motor_test masuk atau dianggap timeout (lihat
+      // catatan MOTOR_TEST_STREAM_MS di atas).
+      const sendMotorTestTick = () => {
+        if (Date.now() < motorTestCooldownUntil) return;
 
         const raw = Number(slider.value);
-        if (raw === 0) { pctEl.textContent = "0%"; return; }
+        if (raw === 0) { stopStream(); return; }
 
         const reversed = revCheckbox.checked;
         // Slider "maju" selalu berarti maju secara visual bagi operator;
@@ -377,24 +390,37 @@ export const setupPage = {
         const effective = reversed ? -raw : raw;
         const throttle = Math.min(MOTOR_TEST_THROTTLE_MAX, Math.abs(effective));
         const direction = effective >= 0 ? "forward" : "reverse";
-        const duration = Math.max(0.2, Math.min(2, parseFloat(root.querySelector("#suMtDuration").value) || 1));
 
-        wsSend({ type: "cmd", name: "motor_test", motor: m.id, throttle, duration, direction });
-        startMotorTestCooldown();
+        // duration dikirim tapi diabaikan firmware — dipertahankan supaya
+        // payload konsisten dengan rov_motor_test.py di sisi Pi.
+        wsSend({ type: "cmd", name: "motor_test", motor: m.id, throttle, duration: 1.0, direction });
 
         pctEl.textContent = `${direction === "forward" ? "▲" : "▼"} ${throttle}%`;
         dot.classList.add("motor-dot--active", direction === "forward" ? "motor-dot--fwd" : "motor-dot--rev");
         statusEl.textContent = "menguji...";
-        setTimeout(stopVisual, duration * 1000);
+      };
 
-        log(`Uji T${m.id} ${direction === "forward" ? "maju" : "mundur"} ${throttle}% selama ${duration}s`, "");
+      // Gerbang ARMED dicek lewat `disabled` (lihat syncArmedState di bawah),
+      // bukan di sini — kalau dicek tiap tick oninput, tiap tick memaksa
+      // slider.value = 0 selama drag berlangsung dan terasa seperti macet.
+      slider.oninput = () => {
+        const raw = Number(slider.value);
+        if (raw === 0) { pctEl.textContent = "0%"; stopStream(); return; }
+
+        sendMotorTestTick(); // kirim tick pertama langsung, jangan tunggu interval
+        if (!streamTimer) streamTimer = setInterval(sendMotorTestTick, MOTOR_TEST_STREAM_MS);
+
+        const reversed = revCheckbox.checked;
+        const effective = reversed ? -raw : raw;
+        const direction = effective >= 0 ? "forward" : "reverse";
+        log(`Uji T${m.id} ${direction === "forward" ? "maju" : "mundur"} ${Math.min(MOTOR_TEST_THROTTLE_MAX, Math.abs(effective))}% (ditahan)`, "");
       };
 
       // Kembali ke tengah saat dilepas — meniru slider QGC yang snap ke 0.
       // `mouseleave` sengaja TIDAK dipakai: trek slider tipis, gerakan mouse
       // sedikit melenceng saat drag vertikal gampang memicunya dan me-reset
       // slider secara prematur di tengah-tengah drag.
-      const resetSlider = () => { slider.value = 0; pctEl.textContent = "0%"; };
+      const resetSlider = () => { slider.value = 0; pctEl.textContent = "0%"; stopStream(); };
       slider.addEventListener("pointerup", resetSlider);
       slider.addEventListener("touchend", resetSlider);
       slider.addEventListener("change", resetSlider);
@@ -415,14 +441,13 @@ export const setupPage = {
     }
     syncMotorTestArmedState();
 
-    // Kunci SEMUA slider (bukan cuma yang baru digeser) selama cooldown 10s
-    // ArduSub — firmware menolak motor test dari motor manapun sampai
-    // cooldown motor SEBELUMNYA habis, jadi batasannya memang global.
-    // Badge status tiap thruster dipakai untuk hitung mundur supaya operator
-    // tahu kapan boleh coba lagi, bukan cuma "gagal" tanpa penjelasan.
+    // Dipanggil REAKTIF saat FC benar-benar menolak motor test (bukan lagi
+    // preventif setelah tiap test sukses — lihat catatan
+    // MOTOR_TEST_FAIL_COOLDOWN_MS di atas). Kunci semua slider karena
+    // cooldown ArduSub berlaku global, bukan per-motor.
     let motorTestCooldownTimer = null;
-    function startMotorTestCooldown() {
-      motorTestCooldownUntil = Date.now() + MOTOR_TEST_COOLDOWN_MS;
+    function startMotorTestFailCooldown() {
+      motorTestCooldownUntil = Date.now() + MOTOR_TEST_FAIL_COOLDOWN_MS;
       syncMotorTestArmedState();
       clearInterval(motorTestCooldownTimer);
       motorTestCooldownTimer = setInterval(() => {
@@ -437,6 +462,7 @@ export const setupPage = {
         allMotorStatusEls.forEach((el) => { el.textContent = `cooldown ${secs}s`; });
       }, 250);
     }
+    this._startMotorTestFailCooldown = startMotorTestFailCooldown;
 
     /* PID */
     this.els.pidSrc = root.querySelector("#suPidSrc");
@@ -582,5 +608,14 @@ export const setupPage = {
     const el = document.getElementById("suMotorStatus" + msg.motor);
     if (!el) return;
     el.textContent = msg.ok ? "OK" : `gagal${msg.reason ? ": " + msg.reason : ""}`;
+  },
+
+  // Dipicu app.js saat STATUSTEXT FC menandakan motor test ditolak
+  // (cooldown / initialization failed) — lihat catatan MOTOR_TEST_FAIL_COOLDOWN_MS
+  // di init(). Mengunci semua slider selama masa cooldown ArduSub.
+  onMotorTestFail() {
+    if (typeof this._startMotorTestFailCooldown === "function") {
+      this._startMotorTestFailCooldown();
+    }
   },
 };

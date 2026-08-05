@@ -482,6 +482,15 @@ function connect() {
     // severity MAVLink: 0..3 darurat/kritis, 4 warning, 5+ informasi.
     const sev = Number(msg.severity);
     log(`FC: ${msg.text}`, sev <= 3 ? "err" : sev === 4 ? "warn" : "");
+    // ArduSub menolak motor test (mis. "10 second cooldown required...",
+    // "motor test initialization failed!") lewat STATUSTEXT terpisah dari
+    // motor_test_ack — ack cuma menandakan command TERKIRIM, bukan diterima
+    // FC. Deteksi di sini supaya panel Thruster Test bisa mengunci slider
+    // reaktif alih-alih menebak cooldown di muka.
+    const t = String(msg.text || "").toLowerCase();
+    if (t.includes("cooldown") || t.includes("motor test initialization failed")) {
+      toPage("setup", "onMotorTestFail", msg);
+    }
   }
 };
 }
