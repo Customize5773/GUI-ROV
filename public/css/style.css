@@ -1250,6 +1250,39 @@ body.pseudo-fs-lock { overflow: hidden; }
 .card__badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 10px rgba(55,211,146,.6); animation: pulse-dot 2s infinite; }
 .card .btn-wide { margin-top: auto; }
 
+.motor-diagram { width: 100%; height: 190px; color: var(--ink-dim); }
+.motor-dot { fill: rgba(255,255,255,.06); stroke: var(--ink-dim); stroke-width: 1.5; transition: fill .15s ease, stroke .15s ease, stroke-width .15s ease; }
+.motor-diagram text { fill: var(--ink); font-family: "JetBrains Mono", monospace; }
+.motor-fin { stroke: currentColor; stroke-width: 1.5; opacity: .7; fill: currentColor; }
+.hull-front-marker { fill: var(--alert); opacity: .8; }
+
+/* Pasangan counter-rotate (bukan klaim CW/CCW mutlak per motor — lihat
+   CONTROL-MAPPING.md §5.1) */
+.motor-dot--pairA { fill: rgba(20,216,255,.14); stroke: var(--sonar); }
+.motor-dot--pairB { fill: rgba(55,211,146,.14); stroke: var(--ok); }
+.motor-dot--pairC { fill: rgba(245,165,36,.14); stroke: var(--amber); }
+
+/* Overlay uji ditumpuk di atas warna pair: hanya menebalkan stroke + glow,
+   TIDAK menimpa fill supaya identitas pair tetap kelihatan saat diuji. */
+.motor-dot--active { stroke-width: 3.5; }
+.motor-dot--active.motor-dot--fwd { stroke: var(--ok); filter: drop-shadow(0 0 4px rgba(55,211,146,.7)); }
+.motor-dot--active.motor-dot--rev { stroke: var(--amber); filter: drop-shadow(0 0 4px rgba(245,165,36,.7)); }
+
+.field--inline { flex-direction: row; align-items: center; gap: 6px; min-width: 0; font-size: 11px; color: var(--ink-dim); white-space: nowrap; }
+
+.motor-test-row { display: flex; gap: 14px; flex-wrap: wrap; padding-top: 4px; }
+.motor-test-col { display: flex; flex-direction: column; align-items: center; gap: 6px; min-width: 56px; }
+.motor-test-col > small { color: var(--ink-dim); font-size: 9px; text-align: center; max-width: 70px; }
+.motor-slider-wrap { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.motor-slider--v {
+  writing-mode: vertical-lr; direction: rtl; /* Chromium/Firefox modern: orientasi vertikal */
+  -webkit-appearance: slider-vertical; /* fallback WebKit lama */
+  width: 20px; height: 110px; accent-color: var(--sonar);
+}
+.motor-slider--v:disabled { opacity: .35; }
+.motor-pct { font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink); min-width: 3.5em; text-align: center; }
+.card__info--sm { padding: 2px 6px; font-size: 10px; min-height: 1.4em; }
+
 /* responsive for the new pages */
 @media (max-width: 1100px) {
   .metrics { grid-template-columns: repeat(4, 1fr); }

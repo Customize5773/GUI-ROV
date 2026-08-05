@@ -19,6 +19,40 @@ const PID_FIELD_BY_PARAM = {
 };
 const PID_PARAM_NAMES = Object.keys(PID_FIELD_BY_PARAM);
 
+/* Posisi & fungsi axis motor 1-6 sesuai tabel faktor BlueROV1 resmi
+   (frame `bluerov`, FRAME_TYPE 0) — ardupilot.org/sub/docs/sub-frames.html.
+   Motor 1&2 = surge+yaw (horizontal, kiri-kanan tengah); 3&4 = heave depan
+   (vertikal); 5 = heave belakang-tengah (vertikal); 6 = lateral/sway
+   (horizontal, tengah). `pair` mengelompokkan yang counter-rotate untuk
+   pewarnaan diagram (A: 2&4, B: 1&3, C: 6&5) — lihat juga tabel di
+   CONTROL-MAPPING.md §5.1. */
+const MOTOR_LAYOUT = [
+  { id: 4, x: 55,  y: 42,  label: "T4", type: "vertical",   pair: "A", axis: "Heave (depan-kiri)" },
+  { id: 3, x: 145, y: 42,  label: "T3", type: "vertical",   pair: "B", axis: "Heave (depan-kanan)" },
+  { id: 2, x: 30,  y: 100, label: "T2", type: "horizontal", pair: "A", axis: "Surge + Yaw (kiri)" },
+  { id: 6, x: 100, y: 100, label: "T6", type: "horizontal", pair: "C", axis: "Lateral / Sway (tengah)" },
+  { id: 1, x: 170, y: 100, label: "T1", type: "horizontal", pair: "B", axis: "Surge + Yaw (kanan)" },
+  { id: 5, x: 100, y: 146, label: "T5", type: "vertical",   pair: "C", axis: "Heave (belakang-tengah)" },
+];
+
+/* Ikon SVG per orientasi thruster (dipusatkan di 0,0, discale/translate saat
+   dirender). Vertikal: kipas 4 mata angin (dilihat dari atas). Horizontal:
+   bowtie dua segitiga berhadapan (dorong depan-belakang/samping). */
+function motorIcon(type) {
+  if (type === "vertical") {
+    return `<g class="motor-fin">
+      <line x1="0" y1="-10" x2="0" y2="10"/>
+      <line x1="-10" y1="0" x2="10" y2="0"/>
+      <line x1="-7" y1="-7" x2="7" y2="7"/>
+      <line x1="-7" y1="7" x2="7" y2="-7"/>
+    </g>`;
+  }
+  return `<g class="motor-fin">
+    <polygon points="-9,-5 -1,0 -9,5"/>
+    <polygon points="9,-5 1,0 9,5"/>
+  </g>`;
+}
+
 function saveSetup() {
   try {
     localStorage.setItem(LS_KEY, JSON.stringify({
@@ -112,6 +146,38 @@ export const setupPage = {
             <label class="card__label">Reverse arah thruster</label>
             <div class="toggles" id="suReverse"></div>
             <button class="btn-wide" id="suApplyThruster">Apply Thruster Config</button>
+          </div>
+
+          <!-- THRUSTER TEST -->
+          <div class="card">
+            <span class="panel__eyebrow">THRUSTER TEST</span>
+            <h3 class="card__title">Uji Spin Per-Thruster</h3>
+            <p class="card__desc">
+              Meniru Motor Test QGroundControl/ArduSub: geser slider tiap thruster
+              untuk memutarnya sebentar (atas = maju, bawah = mundur) — pastikan
+              baling-baling &amp; area sekitar bebas hambatan dulu. Angka % di
+              bawah slider menunjukkan throttle yang sedang dikirim. Slider
+              kembali ke tengah otomatis; thruster berhenti sendiri setelah
+              durasi singkat. Centang "Rev" untuk membalik polaritas satu
+              thruster (terhubung ke toggle "Reverse arah thruster" di kartu
+              THRUSTER SETUP — satu sumber kebenaran, panel ini alat uji, bukan
+              konfigurasi baru).
+            </p>
+            <span class="badge" id="suMotorTestWarn">Slider aktif hanya saat wahana ARMED — uji di darat/tertambat</span>
+            <svg id="suMotorSvg" viewBox="0 0 200 190" class="motor-diagram">
+              <rect x="10" y="14" width="180" height="164" rx="16" fill="none" stroke="currentColor" opacity="0.3"/>
+              <polygon class="hull-front-marker" points="100,4 93,16 107,16"/>
+              ${MOTOR_LAYOUT.map((m) => `
+                <g transform="translate(${m.x},${m.y})">
+                  <circle id="motorDot${m.id}" cx="0" cy="0" r="14" class="motor-dot motor-dot--pair${m.pair}"></circle>
+                  ${motorIcon(m.type)}
+                </g>
+                <text x="${m.x}" y="${m.y + 24}" text-anchor="middle" font-size="11">${m.label}</text>
+              `).join("")}
+            </svg>
+            <label class="field field--sm"><span>Durasi tiap uji <small>s</small></span>
+              <input id="suMtDuration" type="number" step="0.1" min="0.2" max="2" value="1" /></label>
+            <div id="suMotorButtons"></div>
           </div>
 
           <!-- PID SETUP -->
@@ -239,6 +305,102 @@ export const setupPage = {
       log("Thruster configuration dikirim", "ok");
       log(`Thruster config dikirim — ${CONFIG.THRUSTER.frame}, gain ${CONFIG.THRUSTER.gain}%`, "ok");
     };
+
+    /* THRUSTER TEST — slider dua-arah + checkbox Reversed per thruster,
+       meniru Motor Test QGroundControl/ArduSub. Diagnostik saja: checkbox
+       Reversed di sini adalah TOMBOL YANG SAMA dengan toggle "Reverse arah
+       thruster" di kartu THRUSTER SETUP (revWrap.children[i]) — bukan state
+       kedua, supaya tidak ada dua sumber kebenaran untuk reversed[]. */
+    const MOTOR_TEST_THROTTLE_MAX = 20; // selaras MOTOR_TEST_MAX_THROTTLE di rov_motor_test.py
+    const motorButtonsWrap = root.querySelector("#suMotorButtons");
+    motorButtonsWrap.className = "motor-test-row";
+    let motorTestLastSent = 0;
+    const allMotorSliders = [];
+    MOTOR_LAYOUT.forEach((m) => {
+      const revBtn = revWrap.children[m.id - 1];
+      const col = document.createElement("div");
+      col.className = "motor-test-col";
+      col.innerHTML = `
+        <span class="card__label">${m.label}</span>
+        <div class="motor-slider-wrap">
+          <input type="range" class="motor-slider motor-slider--v" orient="vertical"
+                 min="-${MOTOR_TEST_THROTTLE_MAX}" max="${MOTOR_TEST_THROTTLE_MAX}" value="0" step="1" data-motor="${m.id}" />
+          <span class="motor-pct" id="suMotorPct${m.id}">0%</span>
+        </div>
+        <label class="field field--sm field--inline"><input type="checkbox" data-reversed-for="${m.id}" ${revBtn.getAttribute("aria-pressed") === "true" ? "checked" : ""} /> Rev</label>
+        <span class="card__info card__info--sm" id="suMotorStatus${m.id}"></span>
+        <small>${m.axis}</small>`;
+      motorButtonsWrap.appendChild(col);
+
+      const slider = col.querySelector(".motor-slider");
+      const pctEl = col.querySelector(".motor-pct");
+      const revCheckbox = col.querySelector("[data-reversed-for]");
+      const statusEl = col.querySelector("#suMotorStatus" + m.id);
+      const dot = document.getElementById("motorDot" + m.id);
+      allMotorSliders.push(slider);
+
+      // Checkbox ini cuma "wajah kedua" dari tombol T-n yang sudah ada di
+      // kartu THRUSTER SETUP — klik di sini menekan tombol aslinya juga.
+      revCheckbox.onchange = () => {
+        revBtn.setAttribute("aria-pressed", String(revCheckbox.checked));
+        revBtn.classList.toggle("toggle--on", revCheckbox.checked);
+      };
+
+      const stopVisual = () => dot.classList.remove("motor-dot--active", "motor-dot--fwd", "motor-dot--rev");
+
+      // Gerbang ARMED dicek lewat `disabled` (lihat syncArmedState di bawah),
+      // bukan di sini — kalau dicek tiap tick oninput, tiap tick memaksa
+      // slider.value = 0 selama drag berlangsung dan terasa seperti macet.
+      slider.oninput = () => {
+        // Throttle ~250ms supaya slider yang digeser cepat tidak membanjiri motor_test.
+        const now = Date.now();
+        if (now - motorTestLastSent < 250) return;
+        motorTestLastSent = now;
+
+        const raw = Number(slider.value);
+        if (raw === 0) { pctEl.textContent = "0%"; return; }
+
+        const reversed = revCheckbox.checked;
+        // Slider "maju" selalu berarti maju secara visual bagi operator;
+        // koreksi polaritas kalau thruster ditandai Reversed, sama seperti QGC.
+        const effective = reversed ? -raw : raw;
+        const throttle = Math.min(MOTOR_TEST_THROTTLE_MAX, Math.abs(effective));
+        const direction = effective >= 0 ? "forward" : "reverse";
+        const duration = Math.max(0.2, Math.min(2, parseFloat(root.querySelector("#suMtDuration").value) || 1));
+
+        wsSend({ type: "cmd", name: "motor_test", motor: m.id, throttle, duration, direction });
+
+        pctEl.textContent = `${direction === "forward" ? "▲" : "▼"} ${throttle}%`;
+        dot.classList.add("motor-dot--active", direction === "forward" ? "motor-dot--fwd" : "motor-dot--rev");
+        statusEl.textContent = "menguji...";
+        setTimeout(stopVisual, duration * 1000);
+
+        log(`Uji T${m.id} ${direction === "forward" ? "maju" : "mundur"} ${throttle}% selama ${duration}s`, "");
+      };
+
+      // Kembali ke tengah saat dilepas — meniru slider QGC yang snap ke 0.
+      // `mouseleave` sengaja TIDAK dipakai: trek slider tipis, gerakan mouse
+      // sedikit melenceng saat drag vertikal gampang memicunya dan me-reset
+      // slider secara prematur di tengah-tengah drag.
+      const resetSlider = () => { slider.value = 0; pctEl.textContent = "0%"; };
+      slider.addEventListener("pointerup", resetSlider);
+      slider.addEventListener("touchend", resetSlider);
+      slider.addEventListener("change", resetSlider);
+    });
+
+    // Slider hanya bisa digeser saat ARMED — direfleksikan via `disabled`
+    // (bukan dicek berulang di dalam oninput, lihat catatan di atas) dan
+    // disinkronkan reaktif tanpa perlu reload halaman.
+    const armBtnEl = document.getElementById("btnArm");
+    const syncMotorTestArmedState = () => {
+      const armed = armBtnEl?.getAttribute("aria-pressed") === "true";
+      allMotorSliders.forEach((s) => { s.disabled = !armed; });
+    };
+    if (armBtnEl) {
+      new MutationObserver(syncMotorTestArmedState)
+        .observe(armBtnEl, { attributes: true, attributeFilter: ["aria-pressed"] });
+    }
+    syncMotorTestArmedState();
 
     /* PID */
     this.els.pidSrc = root.querySelector("#suPidSrc");
@@ -375,5 +537,14 @@ export const setupPage = {
       this.els.pidSrc.textContent = `Dari FC · ${jam}`;
       this.els.pidSrc.className = "badge badge--ok";
     }
+  },
+
+  /* Balasan MAV_CMD_DO_MOTOR_TEST (nyata) atau mock SIM — lihat panel
+     THRUSTER TEST. Cuma memperbarui badge kecil per-thruster. */
+  onMotorTestAck(msg) {
+    if (!msg || !msg.motor) return;
+    const el = document.getElementById("suMotorStatus" + msg.motor);
+    if (!el) return;
+    el.textContent = msg.ok ? "OK" : `gagal${msg.reason ? ": " + msg.reason : ""}`;
   },
 };

@@ -370,7 +370,7 @@ wss.on("connection", (ws, req) => {
       recording.onCommand(msg.name, msg.value);
 
       // di mode SIM, pantulkan status perintah agar tombol header berefek nyata
-      if (SIM) applySimCommand(msg.name, msg.value);
+      if (SIM) applySimCommand(msg.name, msg.value, msg);
 
       // teruskan command ke Raspi via UDP
       let command = {
@@ -381,6 +381,13 @@ wss.on("connection", (ws, req) => {
 
       if (msg.name === "thruster_config") {
           command.motors = msg.motors;
+      }
+
+      if (msg.name === "motor_test") {
+          command.motor = msg.motor;
+          command.throttle = msg.throttle;
+          command.duration = msg.duration;
+          command.direction = msg.direction;
       }
 
       const packet = Buffer.from(JSON.stringify(command));
@@ -664,10 +671,21 @@ function applySimParamCommand(name, value) {
   return false;
 }
 
-function applySimCommand(name, value) {
+function applySimCommand(name, value, msg) {
   if (applySimParamCommand(name, value)) return;
 
   switch (name) {
+    case "motor_test": {
+      // Tidak ada wahana nyata di SIM — balas ack palsu setelah `duration`
+      // supaya panel Thruster Test di Setup bisa diuji tanpa hardware.
+      const motor = Number(msg && msg.motor);
+      const direction = (msg && msg.direction) || "forward";
+      const duration = Math.max(0.2, Math.min(2.0, Number(msg && msg.duration) || 1.0));
+      setTimeout(() => {
+        broadcast({ type: "motor_test_ack", motor, direction, ok: true });
+      }, duration * 1000);
+      break;
+    }
     case "arm":
       simState.armed = !!value;
       break;

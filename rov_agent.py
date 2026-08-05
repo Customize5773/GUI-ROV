@@ -8,6 +8,7 @@ from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
 from rov_modes import depth_hold_allowed, is_risky_mode, resolve_pilot_mode, warning_for_mode
+from rov_motor_test import validate_motor_test
 from rov_params import (
     coerce_param_value,
     decode_param_id,
@@ -227,6 +228,21 @@ GRIPPER_SEND_EPSILON = 1.0      # jangan spam MAVLink kalau beda < 1 PWM
 gripper_target = float(GRIPPER_PWM_NEUTRAL)
 gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
 gripper_lock = threading.Lock()
+
+# =========================
+# Rotate (pitch gripper)
+# =========================
+# Sama seperti gripper di atas: target diubah oleh handle_manipulator(),
+# rotate_sender() yang menggeser posisi servo perlahan lewat slew_toward()
+# supaya motor T-200 pitch tidak menyentak full-speed instan.
+ROTATE_SEND_INTERVAL = 0.1      # 10 Hz
+ROTATE_SEND_EPSILON = 1.0       # jangan spam MAVLink kalau beda < 1 PWM
+ROTATE_MAX_SPEED_PWM_S = 500.0  # bisa disetel beda dari grip kalau perlu
+ROTATE_EMA_ALPHA = 0.35
+
+rotate_target = float(SERVO_NEUTRAL)
+rotate_filtered = float(SERVO_NEUTRAL)
+rotate_lock = threading.Lock()
 
 # =========================
 # Parameter FC (halaman Vehicle)
@@ -576,6 +592,14 @@ def command_listener():
                     target=apply_thruster_config, args=(motors,), daemon=True
                 ).start()
 
+            elif name == "motor_test":
+                # value = {"motor": 1..6, "throttle": 1-100, "duration": s, "direction": "forward"|"reverse"}
+                # Thread terpisah: command_long_send tidak blocking lama, tapi
+                # tetap dipisah dari command_listener demi konsistensi pola.
+                threading.Thread(
+                    target=run_motor_test, args=(value,), daemon=True
+                ).start()
+
             elif name == "param_list":
                 # Minta seluruh tabel param FC. Jawabannya ~980 PARAM_VALUE
                 # yang ditangani & di-batch di loop RX main().
@@ -718,6 +742,46 @@ def apply_thruster_config(motors):
         print("[PARAM] Thruster configuration updated.")
     except Exception as e:
         print("[PARAM] gagal set thruster config:", e)
+
+
+def run_motor_test(payload):
+    """Putar SATU thruster sebentar lewat MAV_CMD_DO_MOTOR_TEST (ArduSub).
+
+    Dipakai panel "Thruster Test" di halaman Setup untuk memverifikasi arah
+    putar satu thruster tanpa menyalakan mixing penuh (MANUAL_CONTROL tidak
+    bisa mengisolasi satu motor). Klem/validasi ada di rov_motor_test.py
+    (defense in depth) selain klem di sisi GUI.
+    """
+    motor = payload.get("motor") if isinstance(payload, dict) else None
+    try:
+        motor, throttle, duration, direction, signed_throttle = validate_motor_test(payload)
+
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+            0,
+            motor,
+            mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
+            signed_throttle,
+            duration,
+            0, 0, 0,
+        )
+        print(f"[MOTORTEST] motor {motor} {direction} {throttle}% selama {duration}s")
+        send_to_gui({
+            "type": "motor_test_ack",
+            "motor": motor,
+            "direction": direction,
+            "ok": True,
+        })
+    except Exception as e:
+        print("[MOTORTEST] gagal:", e)
+        send_to_gui({
+            "type": "motor_test_ack",
+            "motor": motor,
+            "ok": False,
+            "reason": str(e),
+        })
 
 
 def apply_pid_gains(writes):
@@ -872,16 +936,17 @@ def handle_manipulator(device, action, direction):
 
     elif device == "rotate":
 
-        if action == "start":
+        global rotate_target
 
-            if direction == "left":
-                set_servo_pwm(ROTATE_CHANNEL, ROTATE_LEFT_PWM)
+        with rotate_lock:
+            if action == "start" and direction == "left":
+                rotate_target = ROTATE_LEFT_PWM
 
-            elif direction == "right":
-                set_servo_pwm(ROTATE_CHANNEL, ROTATE_RIGHT_PWM)
+            elif action == "start" and direction == "right":
+                rotate_target = ROTATE_RIGHT_PWM
 
-        elif action == "stop":
-            set_servo_pwm(ROTATE_CHANNEL, SERVO_NEUTRAL)
+            elif action == "stop":
+                rotate_target = SERVO_NEUTRAL
 
 def joystick_sender():
     """Kirim MANUAL_CONTROL 20 Hz.
@@ -972,6 +1037,57 @@ def gripper_sender():
                 print("[GRIPPER] gagal kirim:", e)
 
         time.sleep(GRIPPER_SEND_INTERVAL)
+
+def rotate_sender():
+    """Gerakkan servo pitch gripper menuju target 10 Hz dgn rate-limit + EMA.
+
+    Pola sama persis dengan gripper_sender(): perintah dari GUI hanya
+    mengubah rotate_target, thread ini yang menggeser posisi servo sedikit
+    demi sedikit lewat rov_gripper.slew_toward(), supaya motor T-200 pitch
+    tidak menyentak full-speed instan seperti sebelumnya.
+    """
+    global rotate_filtered
+
+    last_sent_pwm = None
+    last_ts = time.time()
+
+    while True:
+        if master is None:
+            time.sleep(0.1)
+            last_ts = time.time()
+            continue
+
+        now = time.time()
+        dt = now - last_ts
+        last_ts = now
+
+        with rotate_lock:
+            target = rotate_target
+
+        rotate_filtered = slew_toward(
+            rotate_filtered, target, dt,
+            max_speed=ROTATE_MAX_SPEED_PWM_S, ema_alpha=ROTATE_EMA_ALPHA,
+        )
+
+        # Hanya kirim kalau posisi benar-benar berubah — hindari membanjiri
+        # link serial 115200 yang dipakai bersama telemetry.
+        if last_sent_pwm is None or abs(rotate_filtered - last_sent_pwm) >= ROTATE_SEND_EPSILON:
+            pwm = int(round(rotate_filtered))
+            try:
+                master.mav.command_long_send(
+                    master.target_system,
+                    master.target_component,
+                    mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+                    0,
+                    ROTATE_CHANNEL,
+                    pwm,
+                    0, 0, 0, 0, 0
+                )
+                last_sent_pwm = rotate_filtered
+            except Exception as e:
+                print("[ROTATE] gagal kirim:", e)
+
+        time.sleep(ROTATE_SEND_INTERVAL)
 
 # =========================
 # Main koneksi Pixhawk
@@ -1065,6 +1181,7 @@ def main():
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=gripper_sender, daemon=True).start()
+    threading.Thread(target=rotate_sender, daemon=True).start()
 
     last_send = 0
     last_hb = 0
@@ -1169,6 +1286,10 @@ def main():
             if msg.command == mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM:
                 ok = msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
                 print(f"[MAV] ARM/DISARM {'diterima' if ok else 'DITOLAK'} "
+                      f"(result={msg.result})")
+            elif msg.command == mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST:
+                ok = msg.result == mavutil.mavlink.MAV_RESULT_ACCEPTED
+                print(f"[MAV] DO_MOTOR_TEST {'diterima' if ok else 'DITOLAK'} "
                       f"(result={msg.result})")
             else:
                 print(f"[MAV] ACK cmd={msg.command} result={msg.result}")
