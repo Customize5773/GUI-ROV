@@ -111,6 +111,12 @@ state = {
 }
 
 master = None
+# Melindungi SEMUA akses I/O ke `master` (send & recv) — port serial dipakai
+# bersama oleh reader thread (main) dan beberapa sender thread (joystick,
+# gripper, rotate, command_listener). Tanpa lock ini, dua thread bisa
+# menulis ke fd yang sama bersamaan dan merusak frame MAVLink di tengah
+# jalan, yang berujung pada drop_link() / mode tidak terkonfirmasi.
+master_lock = threading.Lock()
 
 # Gate otoritas dari GUI: "manual" | "autonomous". Sengaja BERBEDA dari pilot
 # mode ArduSub di bawah — yang ini menentukan siapa yang boleh memerintah,
@@ -438,14 +444,15 @@ def send_arm_disarm(arm):
 
     Tidak menunggu ACK — lihat handler COMMAND_ACK di main().
     """
-    master.mav.command_long_send(
-        master.target_system,
-        master.target_component,
-        mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
-        0,
-        1 if arm else 0,
-        0, 0, 0, 0, 0, 0,
-    )
+    with master_lock:
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_COMPONENT_ARM_DISARM,
+            0,
+            1 if arm else 0,
+            0, 0, 0, 0, 0, 0,
+        )
 
 
 def send_gcs_heartbeat():
@@ -455,11 +462,12 @@ def send_gcs_heartbeat():
     beberapa detik setelah arm (FS_GCS_ENABLE) — gejalanya arm terlihat
     "putus-putus" saat mulai trial.
     """
-    master.mav.heartbeat_send(
-        mavutil.mavlink.MAV_TYPE_GCS,
-        mavutil.mavlink.MAV_AUTOPILOT_INVALID,
-        0, 0, 0,
-    )
+    with master_lock:
+        master.mav.heartbeat_send(
+            mavutil.mavlink.MAV_TYPE_GCS,
+            mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+            0, 0, 0,
+        )
 
 
 def set_servo_pwm(channel, pwm):
@@ -468,15 +476,16 @@ def set_servo_pwm(channel, pwm):
     Channel menggunakan nomor SERVO (1-14).
     """
 
-    master.mav.command_long_send(
-        master.target_system,
-        master.target_component,
-        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-        0,
-        channel,
-        pwm,
-        0, 0, 0, 0, 0
-    )
+    with master_lock:
+        master.mav.command_long_send(
+            master.target_system,
+            master.target_component,
+            mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+            0,
+            channel,
+            pwm,
+            0, 0, 0, 0, 0
+        )
 
 # =========================
 # Command handler dari laptop
@@ -740,22 +749,24 @@ def command_listener():
                 with _param_lock:
                     _param_batch.clear()
                 print("[PARAM] minta seluruh daftar param")
-                master.mav.param_request_list_send(
-                    master.target_system,
-                    master.target_component,
-                )
+                with master_lock:
+                    master.mav.param_request_list_send(
+                        master.target_system,
+                        master.target_component,
+                    )
 
             elif name == "param_get":
                 param = normalize_param_name(value)
                 if param is None:
                     print(f"[PARAM] nama param ditolak: {value!r}")
                     continue
-                master.mav.param_request_read_send(
-                    master.target_system,
-                    master.target_component,
-                    param.encode("utf-8"),
-                    -1,   # -1 = cari berdasarkan nama, bukan indeks
-                )
+                with master_lock:
+                    master.mav.param_request_read_send(
+                        master.target_system,
+                        master.target_component,
+                        param.encode("utf-8"),
+                        -1,   # -1 = cari berdasarkan nama, bukan indeks
+                    )
 
             elif name == "param_set":
                 # value = {"name": ..., "value": ..., "type": <MAV_PARAM_TYPE>}
@@ -845,13 +856,14 @@ def set_param(name, value, type_id, expect_ack=True):
         print(f"[PARAM] {canonical}: {e}")
         return None
 
-    master.mav.param_set_send(
-        master.target_system,
-        master.target_component,
-        canonical.encode("utf-8"),
-        numeric,
-        type_id,
-    )
+    with master_lock:
+        master.mav.param_set_send(
+            master.target_system,
+            master.target_component,
+            canonical.encode("utf-8"),
+            numeric,
+            type_id,
+        )
 
     if expect_ack:
         with _param_lock:
@@ -890,22 +902,23 @@ def run_motor_test(payload):
     try:
         motor, throttle, duration, direction, signed_throttle = validate_motor_test(payload)
 
-        master.mav.command_long_send(
-            master.target_system,
-            master.target_component,
-            mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
-            0,
-            motor,
-            mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
-            signed_throttle,
-            duration,
-            0,
-            # param6 = motor test order. ArduSub menolak apa pun selain BOARD
-            # ("bad test type %.2f") — DEFAULT(0) yang dulu dipakai di sini
-            # SELALU ditolak firmware, itu sebabnya motor test timeout.
-            mavutil.mavlink.MOTOR_TEST_ORDER_BOARD,
-            0,
-        )
+        with master_lock:
+            master.mav.command_long_send(
+                master.target_system,
+                master.target_component,
+                mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
+                0,
+                motor,
+                mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
+                signed_throttle,
+                duration,
+                0,
+                # param6 = motor test order. ArduSub menolak apa pun selain BOARD
+                # ("bad test type %.2f") — DEFAULT(0) yang dulu dipakai di sini
+                # SELALU ditolak firmware, itu sebabnya motor test timeout.
+                mavutil.mavlink.MOTOR_TEST_ORDER_BOARD,
+                0,
+            )
         print(f"[MOTORTEST] motor {motor} {direction} {throttle}% selama {duration}s")
         send_to_gui({
             "type": "motor_test_ack",
@@ -1126,10 +1139,11 @@ def joystick_sender():
         mc = apply_heading_hold(mc, eff_axes)
 
         try:
-            master.mav.manual_control_send(
-                master.target_system,
-                mc["x"], mc["y"], mc["z"], mc["r"], mc["buttons"],
-            )
+            with master_lock:
+                master.mav.manual_control_send(
+                    master.target_system,
+                    mc["x"], mc["y"], mc["z"], mc["r"], mc["buttons"],
+                )
         except Exception as e:
             print("[JOY] gagal kirim MANUAL_CONTROL:", e)
 
@@ -1169,15 +1183,16 @@ def gripper_sender():
         if last_sent_pwm is None or abs(gripper_filtered - last_sent_pwm) >= GRIPPER_SEND_EPSILON:
             pwm = int(round(gripper_filtered))
             try:
-                master.mav.command_long_send(
-                    master.target_system,
-                    master.target_component,
-                    mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-                    0,
-                    GRIPPER_SERVO_CH,
-                    pwm,
-                    0, 0, 0, 0, 0
-                )
+                with master_lock:
+                    master.mav.command_long_send(
+                        master.target_system,
+                        master.target_component,
+                        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+                        0,
+                        GRIPPER_SERVO_CH,
+                        pwm,
+                        0, 0, 0, 0, 0
+                    )
                 last_sent_pwm = gripper_filtered
             except Exception as e:
                 print("[GRIPPER] gagal kirim:", e)
@@ -1220,15 +1235,16 @@ def rotate_sender():
         if last_sent_pwm is None or abs(rotate_filtered - last_sent_pwm) >= ROTATE_SEND_EPSILON:
             pwm = int(round(rotate_filtered))
             try:
-                master.mav.command_long_send(
-                    master.target_system,
-                    master.target_component,
-                    mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-                    0,
-                    ROTATE_CHANNEL,
-                    pwm,
-                    0, 0, 0, 0, 0
-                )
+                with master_lock:
+                    master.mav.command_long_send(
+                        master.target_system,
+                        master.target_component,
+                        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
+                        0,
+                        ROTATE_CHANNEL,
+                        pwm,
+                        0, 0, 0, 0, 0
+                    )
                 last_sent_pwm = rotate_filtered
             except Exception as e:
                 print("[ROTATE] gagal kirim:", e)
