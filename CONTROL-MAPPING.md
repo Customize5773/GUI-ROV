@@ -1,14 +1,18 @@
 # CONTROL-MAPPING.md
 
 GUI-ROV HYDROSHIP — Input Mapping Reference
-Version: 2.0 | Last Updated: 2026-07-30 | Wahana: **BlueROV1 frame, 6 thruster 6-DoF** (`FRAME_CONFIG = 0`)
+Version: 3.0 | Last Updated: 2026-08-05 | Wahana: **BlueROV1 frame, 6 thruster 6-DoF** (`FRAME_CONFIG = 0`)
 
-> Sumber kebenaran mapping default: [`public/js/joystick-defaults.json`](public/js/joystick-defaults.json).
-> File itu dibaca oleh server (`require`) **dan** browser (`fetch`), jadi tidak ada
-> lagi tabel default yang disalin ganda. Profil aktif operator tersimpan di
-> [`server/config/joystick-profile.json`](server/config/joystick-profile.json)
-> dan menang atas default. Dokumen ini menjelaskan isi keduanya — kalau berbeda,
-> **file JSON yang benar**.
+> Sumber kebenaran mapping default: [`shared/joystick-profile.js`](shared/joystick-profile.js).
+> Modul ES ini diimpor langsung oleh browser (`joystick-state.js`) dan server (`joystick-config.js` via `await import()`),
+> sehingga tidak ada tabel default yang disalin ganda.
+>
+> Profil aktif operator tersimpan di OS config dir (`~/.config/hydroship/` atau `%APPDATA%\hydroship\`),
+> overridable via `HYDROSHIP_CONFIG_DIR`. Salinan factory (`server/config/joystick-profile.json`, versi 2)
+> dipakai sebagai seed dan dimigrasi ke v3 saat pertama kali dimuat.
+>
+> `public/js/joystick-defaults.json` adalah **file stale** — hanya dirujuk dalam satu komentar di `config.js` dan
+> tidak lagi mencerminkan default aktual. Jangan acuan file ini.
 
 ---
 
@@ -27,6 +31,8 @@ sebagai *standard mapping* Xbox-style.
 
 Inilah sebabnya grip analog memakai sumber virtual bernama **`triggers`**
 (nilai = `RT − LT`) dan bukan "axis 4" — axis 4 tidak pernah ada di F310 X-Input.
+Perhitungan `triggers` terjadi di `joystick-state.js` (`updateJoystickStateFromGamepad`),
+membaca nilai tombol LT/RT langsung dari `rawButtons`, bukan dari `axisConfig`.
 
 ### 1.2 Axis (gerak wahana)
 

@@ -364,3 +364,16 @@ CAM_ALLOW_ANY=1 ./start-gui.sh
 # SIM dengan RPI_ADDR loop back
 RPI_ADDR=127.0.0.1 WS_PORT=8080 ./start-gui.sh sim
 ```
+
+--
+
+## 16. Shutdown (Sisi RPI (Aman & Tanpa Risk Corrupt SD Card))
+
+```bash
+# 1. Hentikan service agen
+sudo systemctl stop rov-agent
+
+# 2. Shutdown OS RPI
+sudo poweroff
+# ssh hydroships@192.168.2.2 "sudo systemctl stop rov-agent && sudo poweroff"
+```
