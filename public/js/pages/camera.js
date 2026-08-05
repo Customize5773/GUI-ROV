@@ -157,15 +157,10 @@ export const cameraPage = {
     const other = (i + 1) % cams.length;
     if (on && cams.length >= 2) {
       cell.pipLabel.textContent = `${cams[other].id} ${cams[other].role || ""}`.trim();
-      if (this.streaming && cams[other].url) {
-        cell.pipImg.src = camProxy(cams[other].url);
-      } else {
-        cell.pipImg.removeAttribute("src");
+      if (!this.streaming || !cams[other].url) {
         cell.pipImg.style.display = "none";
         cell.pipNo.style.display = "flex";
       }
-    } else {
-      cell.pipImg.removeAttribute("src");
     }
   },
 
@@ -226,46 +221,24 @@ export const cameraPage = {
   },
 
   _toggleStream() {
-      console.log("Start Stream diklik");
-
-      console.log(CONFIG.CAMERAS);
-
-      (CONFIG.CAMERAS || []).forEach((c, i) => {
-          console.log("Camera", i, c);
-
-          const url = camProxy(c.url);
-
-          console.log("Proxy =", url);
-
-          const cell = this.els.cells[i];
-
-          if (this.streaming && c.url) {
-              cell.img.src = url;
-              console.log("IMG =", cell.img.src);
-          }
-      });
-
       this.streaming = !this.streaming;
-
-      console.log("CONFIG CAMERAS =", CONFIG.CAMERAS);
-
       this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";
 
-      (CONFIG.CAMERAS || []).forEach((c, i) => {
-
-          console.log("Camera", i, c);
-
-          const url = camProxy(c.url);
-
-          console.log("URL =", url);
-
+      const cams = CONFIG.CAMERAS || [];
+      cams.forEach((c, i) => {
           const cell = this.els.cells[i];
-
           if (this.streaming && c.url) {
-              cell.img.src = url;
-              console.log("IMG SRC =", cell.img.src);
+              cell.img.src = camProxy(c.url);
           } else {
               cell.img.removeAttribute("src");
+          }
+          // set PiP sekali saat stream mulai/berhenti, bukan saat toggle fullscreen,
+          // agar tidak membuka koneksi MJPEG baru tepat saat transisi fullscreen (lag)
+          const other = cams[(i + 1) % cams.length];
+          if (this.streaming && other && other.url) {
+              cell.pipImg.src = camProxy(other.url);
+          } else {
+              cell.pipImg.removeAttribute("src");
           }
       });
   },
@@ -274,6 +247,9 @@ export const cameraPage = {
   _scanLoop() {
     this.scanRaf = requestAnimationFrame(() => this._scanLoop());
     if (!this.visible || !window.jsQR) return;
+    // Jeda scan selama ada sel fullscreen agar getImageData tidak bersaing
+    // dengan repaint transisi fullscreen (penyebab lag).
+    if ((this.els.cells || []).some((c) => c.fsOn)) return;
     const img = this.els.cells && this.els.cells[0] && this.els.cells[0].img;
     if (!img || !img.naturalWidth) return;
     // throttle: ~6x/detik
