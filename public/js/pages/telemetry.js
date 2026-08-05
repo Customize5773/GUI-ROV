@@ -14,10 +14,13 @@ const CHANNELS = [
   { key: "roll", title: "Roll", unit: "°" },
 ];
 
+// Orientasi mengikuti tabel resmi di CONTROL-MAPPING.md §5.1 (Frame & mixing):
+// T1/T2 = surge + yaw (horizontal), T3/T4/T5 = heave (vertical),
+// T6 = lateral/sway satu-satunya (horizontal) — jangan drift dari tabel itu.
 const THRUSTERS = [
   { id: "T1", type: "Horizontal" }, { id: "T2", type: "Horizontal" },
-  { id: "T3", type: "Horizontal" }, { id: "T4", type: "Horizontal" },
-  { id: "T5", type: "Vertical" }, { id: "T6", type: "Vertical" },
+  { id: "T3", type: "Vertical" }, { id: "T4", type: "Vertical" },
+  { id: "T5", type: "Vertical" }, { id: "T6", type: "Horizontal" },
 ];
 
 export const telemetryPage = {
