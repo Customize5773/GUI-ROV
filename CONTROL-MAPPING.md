@@ -49,77 +49,81 @@ negatif saat didorong ke atas, jadi `heave` dan `surge` memang dibalik.
 
 ### 1.3 Button — layer Regular
 
-| Btn | F310 | Aksi |
-|---|---|---|
-| 0 | A | `grip_close` |
-| 1 | B | `grip_open` |
-| 2 | X | `grip_neutral` |
-| 3 | Y | — |
-| 4 | LB | `gain_dec` |
-| 5 | RB | `gain_inc` |
-| 6 | LT | *(grip analog)* |
-| 7 | RT | *(grip analog)* |
-| 8 | Back | **`e_stop`** |
-| 9 | Start | `arm` |
-| 10 | LS klik | **shift modifier** |
-| 11 | RS klik | — |
-| 12 | D-Pad ↑ | `mode_depth_hold` |
-| 13 | D-Pad ↓ | `mode_manual` |
-| 14 | D-Pad ← | `mode_stabilize` |
-| 15 | D-Pad → | `light_toggle` |
-| 16 | Guide | — |
+| Btn | F310 | Aksi | Mode |
+|---|---|---|---|
+| 0 | A | `arm` | toggle |
+| 1 | B | `disarm` | toggle |
+| 2 | X | `mode_manual` | toggle |
+| 3 | Y | `mode_stabilize` | toggle |
+| 4 | LB | **shift** | — |
+| 5 | RB | `mode_depth_hold` | toggle |
+| 6 | LT | `grip_close` | hold |
+| 7 | RT | `grip_open` | hold |
+| 8 | Back | `input_hold_set` | toggle |
+| 9 | Start | `mount_center` | toggle |
+| 10 | L3 | `lights_dimmer` | hold |
+| 11 | R3 | `lights_brighter` | hold |
+| 12 | D-pad ↑ | `gain_dec` (depth up) | repeat |
+| 13 | D-pad ↓ | `gain_inc` (depth down) | repeat |
+| 14 | D-pad ← | `mount_tilt_up` | hold |
+| 15 | D-pad → | `mount_tilt_down` | hold |
+| 16 | Guide | `no_function` | toggle |
 
-### 1.4 Button — layer Shift (tahan **LS klik**)
+### 1.4 Button — layer Shift (tahan **LB**)
 
-| Btn | F310 | Aksi |
-|---|---|---|
-| 8 | Back | **`e_stop`** |
-| 9 | Start | `disarm` |
-| sisanya | | — |
+Semua tombol di layer shift bernilai `no_function` (emptyButtonLayer).
+Tombol shift adalah **LB** (button 4), bukan LS-click (button 10).
 
-> **`e_stop` sengaja ada di KEDUA layer.** Penekanan shift yang tidak disengaja
-> tidak boleh pernah menghilangkan tombol darurat.
->
-> Shift memakai LS klik (bukan tombol muka) supaya A/B/X/Y tetap bebas. Profil
-> lama memakai `shiftButton: 0` — tombol A — sehingga A praktis tidak bisa dipakai.
+> Shift memakai LB (bukan tombol muka) supaya A/B/X/Y tetap bebas.
+> Profil lama memakai `shiftButton: 0` — tombol A — sehingga A praktis tidak bisa dipakai.
 
 ### 1.5 Daftar aksi yang sah
 
-`no_function`, `arm`, `disarm`, `e_stop`, `mode_manual`, `mode_stabilize`,
-`mode_depth_hold`, `mode_acro`, `grip_open`, `grip_close`, `grip_neutral`,
-`light_toggle`, `gain_inc`, `gain_dec`.
+`BUTTON_ACTIONS` di `shared/joystick-profile.js`:
+
+`no_function`, `arm`, `disarm`, `mode_manual`, `mode_stabilize`,
+`mode_depth_hold`, `mode_acro`, `input_hold_set`, `mount_tilt_up`,
+`mount_tilt_down`, `mount_center`, `actuator1_inc`, `actuator1_dec`,
+`grip_open`, `grip_close`, `lights_brighter`, `lights_dimmer`,
+`gain_inc`, `gain_dec`.
 
 `mode_acro` sengaja **tidak** punya binding default: ke-16 tombol pad sudah
 terpakai, dan menggeser binding yang sudah dihafal operator demi mode paling
 berisiko adalah pertukaran yang buruk. Bind manual lewat halaman **Joystick**
 kalau memang dibutuhkan saat trial.
 
-Aksi lama (`mount_tilt_*`, `mount_center`, `actuator1_*`, `lights_brighter/dimmer`,
-`input_hold_set`) **sudah dihapus** — wahana tidak punya hardware-nya dan
-`rov_agent.py` tidak pernah punya handler-nya, jadi tombolnya diam-diam mati.
-Profil tersimpan yang masih memuatnya dimigrasikan otomatis saat dimuat.
+Aksi yang **dihapus** dari `BUTTON_ACTIONS`: `e_stop`, `grip_neutral`,
+`light_toggle`. Aksi-aksi ini tidak lagi ada di daftar yang bisa diassign
+tombol.
+
+Aksi `mount_tilt_*`, `mount_center`, `actuator1_*`, `lights_brighter/dimmer`,
+`input_hold_set` **masih ada** di `BUTTON_ACTIONS` dan masih bisa diassign
+tombol — mereka bukan aksi yang dihapus.
 
 ---
 
-## 2. Respons stik: deadzone → expo → gain → rate limit
+## 2. Respons stik: deadzone → expo → skala → min/max
 
-Empat parameter, semuanya bisa disetel di halaman **Joystick** dan ikut tersimpan
+Tiga parameter, semuanya bisa disetel di halaman **Joystick** dan ikut tersimpan
 di profil. Implementasi murni ada di
-[`public/js/axis-shaping.js`](public/js/axis-shaping.js).
+[`shared/joystick-profile.js`](shared/joystick-profile.js)
+(`mapAxisValue`, `applyDeadzoneExpo`), dipakai runtime maupun preview.
 
 ```
-raw(-1..1) → deadzone → expo → skala min/max(±1000) → × gain → rate limit → kirim
+raw(-1..1) → deadzone → expo → skala min/max(±1000) → kirim
 ```
+
+Tidak ada rate-limit di jalur runtime. `mapAxisValue` hanya melakukan
+deadzone → expo → min/max scale.
 
 | Parameter | Default | Guna |
 |---|---|---|
 | **Deadzone** | `0.12` | Drift stik di sekitar tengah jadi **tepat 0**. Memakai *rescale*, jadi keluaran mulai dari 0 di tepi zona — tidak melompat. |
-| **Expo** | `0.35` | Melandaikan bagian tengah untuk koreksi halus. Defleksi penuh **tetap** ±1000. |
-| **Gain** | 6 langkah `25%…100%`, mulai di `40%` | Membatasi thrust maksimum. Diubah saat operasi lewat **LB/RB**, tampil di HUD. Berlaku untuk keyboard juga. |
-| **Rate limit** | `4000 /detik` | Meredam hentakan stik jadi lonjakan arus baterai. Sapuan penuh ≈ 0,5 detik. |
+| **Expo** | `1.6` | Melandaikan bagian tengah untuk koreksi halus. Defleksi penuh **tetap** ±1000. Fungsi power (`sign(v) * |scaled|^expo`), bukan cubic blend. |
+| **Gain** | 6 langkah `25%…100%`, mulai di `40%` | Membatasi thrust maksimum. Diubah saat operasi lewat **LB/RB**, tampil di HUD. **Bukan** pengali thrust — `gain_inc`/`gain_dec` menggeser `depth_target` ±0.05m (DEPTH_STEP di `rov_agent.py`). `GAIN_STEPS` di `config.js` didefinisikan tapi tidak dipakai di runtime. Elemen `hudGain` ada di DOM tapi tidak pernah diperbarui. |
 
 Preview di halaman Joystick memanggil **fungsi yang sama persis** dengan jalur
-kirim (`axisOutputFor`), jadi angka di layar dijamin identik dengan yang diterima ROV.
+kirim (`mapAxisValue`), jadi angka di layar dijamin identik dengan yang diterima ROV.
 
 ---
 
@@ -132,9 +136,21 @@ Hanya aktif saat tab controller = **Keyboard**.
 | `W` / `S` | surge maju / mundur | | `H` | Gripper OPEN |
 | `A` / `D` | sway kiri / kanan | | `G` | Gripper CLOSE |
 | `Q` / `E` | yaw CCW / CW | | `Space` | **E-Stop** |
-| `R` / `F` | heave naik / turun | | | |
+| `R` / `F` | heave naik / turun | | `Arrow ↑` | `gain_dec` (naik ke permukaan) |
+| | | | `Arrow ↓` | `gain_inc` (makin dalam) |
 
-Besar langkah = `CONFIG.CONTROL.KEY_AXIS_STEP` (default **400**) dikali gain.
+Besar langkah axis = **50** (hardcoded di `KEY_AXIS` di `app.js`),
+**bukan** `CONFIG.CONTROL.KEY_AXIS_STEP` (400 di `config.js` tapi tidak dipakai).
+Keyboard **tidak** dikalikan gain — mengirim nilai raw 50.
+
+`Arrow ↑`/`Arrow ↓` menggeser setpoint kedalaman (`gain_dec`/`gain_inc`),
+bukan menggerakkan axis heave. Arah: `depth` positif ke bawah, jadi
+↑ (naik ke permukaan) = `gain_dec`.
+
+Tombol `H`/`G` memicu `btnGripOpen.click()` / `btnGripClose.click()`
+di DOM (pointer-events), yang mengirim Manipulator protocol packets
+(`gripper` open/close) ke server.
+
 Keyboard tunduk pada gerbang otoritas yang sama dengan gamepad: input ditolak
 saat mode Autonomous atau E-Stop terkunci. `Space` dan `H`/`G` aktif tanpa
 memandang tab controller.
@@ -146,8 +162,8 @@ memandang tab controller.
 ### 4.1 Mode ArduSub (`pilot_mode`)
 
 Peta nama mode punya **satu sumber kebenaran** per bahasa —
-[`rov_modes.PILOT_MODE_MAP`](rov_modes.py) di sisi Python dan
-[`shared/rov-modes.js`](shared/rov-modes.js) (`PILOT_MODE_MAP`,
+`rov_modes.PILOT_MODE_MAP` di sisi Python dan
+`shared/rov-modes.js` (`PILOT_MODE_MAP`,
 `ARDUSUB_MODE_TO_TAB`, `RISKY_ARDUSUB_MODES`, `ACRO_CONFIRM`) di sisi JS —
 diimpor langsung oleh `public/js/app.js`, bukan didefinisikan ulang di sana.
 Tambah mode baru di kedua file.
@@ -155,9 +171,14 @@ Tambah mode baru di kedua file.
 | Tab GUI | D-Pad | Perintah | Mode Pixhawk |
 |---|---|---|---|
 | Manual | ↓ | `pilot_mode="manual"` | `MANUAL` |
-| Stabilize | ← | `pilot_mode="stabilize"` | `STABILIZE` |
-| Depth Hold | ↑ | `pilot_mode="depth_hold"` | `ALT_HOLD` |
+| Alt Hold | ↑ | `pilot_mode="depth_hold"` | `ALT_HOLD` |
 | Acro | — (bind manual) | `pilot_mode="acro"` | `ACRO` |
+
+`stabilize` dan `depth_hold` keduanya dipetakan ke `ALT_HOLD` oleh
+`PILOT_MODE_MAP`. Tab STABILIZE telah dihapus dari dashboard
+(`index.html` hanya memiliki 3 tab: Manual, Alt Hold, Acro).
+Alias `mode_stabilize` tetap ada di `BUTTON_ACTIONS` supaya profil
+joystick tersimpan operator yang memakai binding lama tetap bekerja.
 
 Sorotan tab **tidak** diset lokal saat diklik — sumbernya hanya string mode dari
 HEARTBEAT di telemetry. Karena itu tab GUI dan D-Pad selalu sinkron, dan tab
@@ -165,14 +186,19 @@ tidak pernah membohongi operator kalau Pixhawk menolak perpindahan mode (mis.
 `ALT_HOLD` ditolak saat sumber kedalaman belum sehat). Tab yang menunggu
 konfirmasi tampil putus-putus; setelah 2 detik tanpa konfirmasi muncul peringatan.
 
-Mode di luar keempat tab (`SURFACE`, `POSHOLD`, …) tetap terbaca pada badge di
+Mode di luar tiga tab (`SURFACE`, `POSHOLD`, …) tetap terbaca pada badge di
 sebelah kanan tab bar.
 
 `ACRO` tidak ada di semua build/frame ArduSub. `rov_agent.py` memeriksanya lewat
-`master.mode_mapping()` — yang berasal dari firmware yang benar-benar terpasang
-— dan **menolak** perintah bila mode tidak ada, alih-alih mengirim `set_mode`
+`master.mode_mapping()` — yang berasal dari firmware yang benar-benar terpasang —
+dan **menolak** perintah bila mode tidak ada, alih-alih mengirim `set_mode`
 yang akan diabaikan diam-diam. Gejalanya di GUI: tab Acro tetap putus-putus dan
 muncul peringatan 2 detik kemudian.
+
+> **Peringatan STABILIZE:** Meskipun tidak bisa diminta dari GUI, STABILIZE
+> masih bisa dilaporkan oleh HEARTBEAT jika wahana masuk via RC/GCS.
+> `STABILIZE_WARNING` di `rov_modes.py` menampilkan peringatan di tab bar:
+> "STABILIZE: attitude distabilkan, tapi kedalaman TIDAK."
 
 ### 4.2 Konvensi throttle per mode
 
@@ -191,6 +217,10 @@ Netral tetap bermakna benar di keempatnya (diam / tidak mendorong), jadi jalur
 axis tidak butuh penanganan khusus per-mode. Yang **berbeda** di ACRO adalah
 konsekuensinya: tidak ada yang menahan wahana, jadi netral berarti melayang
 mengikuti daya apung, bukan diam di kedalaman.
+
+> STABILIZE tidak bisa diminta dari GUI (tidak ada tab), tapi wahana
+> masih bisa masuk STABILIZE lewat saklar RC / GCS. Lihat peringatan
+> di §4.1.
 
 ### 4.2.1 ACRO — apa yang berubah dan pengamannya
 
@@ -241,9 +271,34 @@ ArduSub di Pixhawk yang membagi ke keenam motor sesuai `FRAME_CONFIG`. Satu-satu
 kendali level motor dari dashboard adalah pembalik arah (`MOT_n_DIRECTION`) di
 halaman Setup.
 
-Gripper: servo **channel 10** (`SERVO10_FUNCTION = 7`), PWM buka `1900` / tutup
-`1100` / netral `1500`, dengan rate-limit + EMA di
-[`rov_gripper.py`](rov_gripper.py) supaya tidak menyentak.
+### Gripper & Manipulator
+
+Gripper sekarang bagian dari sistem **Manipulator** (`public/js/manipulator/`):
+`manipulator.js`, `grip.js`, `rotate.js`, `protocol.js`, `constants.js`, `state.js`.
+
+**Grip:** servo channel **10** (`GRIPPER_SERVO_CH = 10` di `rov_gripper.py`),
+`SERVO10_FUNCTION = 83` (bukan 7) di `parameters_ardusub.params`.
+PWM buka=1900, tutup=1100, netral=1500. Bekerja via thread
+`gripper_sender()` (10 Hz, slew_toward dengan rate-limit + EMA).
+
+Perintah grip dari GUI: `name == "gripper"`, `value == "open"/"close"` (string)
+atau angka -1000..1000. `gripper_value_to_pwm()` di `rov_gripper.py` menangani
+terjemahan tersebut.
+
+**Rotate/pitch:** servo channel **8** (`ROTATE_CHANNEL = 8` di `rov_agent.py`),
+`SERVO8_FUNCTION = 0` (unassigned di params). Thread `rotate_sender()` ada,
+tapi `handle_manipulator()` (yang menyetel `rotate_target`) adalah **dead code** —
+tidak pernah dipanggil dari `command_listener`.
+
+`handle_manipulator()` di `rov_agent.py` memakai `GRIP_CHANNEL = 7`
+(`SERVO7_FUNCTION = 0`, unassigned) — juga dead code.
+
+Mode hold: tekan LT/RT untuk mulai grip, lepas untuk kirim "stop" → neutral 1500.
+
+**Catatan:** `server.js` (line 350) memiliki handler untuk `name == "manipulator"`
+yang mengirim raw UDP, tapi client-side Manipulator protocol membuat paket
+`name: "gripper"` / `"gripper_rotate"`, **bukan** `name: "manipulator"`.
+Handler di `server.js` adalah dead code.
 
 ### 5.1 Calibration & Thruster Layout
 
@@ -259,12 +314,12 @@ konsekuensi tata letak 3-2-1 itu sendiri — lihat faktor Roll = −0.25 di T6
 pada tabel di bawah).
 
 ```
-              ▲ depan
-   T4 o------------o T3      (heave, depan)
-      |            |
-  T2 o    T6 o    o T1        (surge+yaw kiri/kanan · lateral tengah)
-      |            |
-      o-----T5-----o          (heave, belakang-tengah)
+               ▲ depan
+    T4 o------------o T3      (heave, depan)
+       |            |
+   T2 o    T6 o    o T1        (surge+yaw kiri/kanan · lateral tengah)
+       |            |
+       o-----T5-----o          (heave, belakang-tengah)
 ```
 
 | Motor | Posisi (top-down)        | Roll | Pitch | Yaw   | Throttle | Forward | Lateral | Kontribusi axis     |
@@ -299,7 +354,7 @@ menghilangkan tebak-tebak yang biasanya berulang tiap sesi trial.
 | Axis berhenti sampai ke Pi > 0,5 dtk | Pi **streaming NEUTRAL** (`z=500`, sisanya 0) dan menandai `cmd_link: "stale"`; dashboard menampilkan banner merah | [`rov_axes.resolve_manual_packet`](rov_axes.py), `joystick_sender` di [`rov_agent.py`](rov_agent.py) |
 | WebSocket putus | E-Stop dikunci, semua axis dinetralkan | `app.js` |
 | Gamepad dicabut | Semua axis dinetralkan seketika | `gamepaddisconnected` |
-| `Space` / Back / tombol STOP | Netralkan seluruh thruster + disarm, joystick terkunci | `btnStop` |
+| Tombol STOP / `Space` | Netralkan seluruh thruster + disarm, joystick terkunci | `btnStop` |
 | Mode Autonomous | Thruster & gripper dari GUI diblokir | gerbang di `pollGamepad`, keydown, dan `sendGripper` |
 | ARM ulang | Melepas kunci E-Stop | `btnArm` |
 
@@ -315,9 +370,13 @@ operator sedang tidak menyentuh stik.
 
 ### Urutan darurat
 
-1. **Back** (gamepad) / **Spasi** / tombol **STOP** → thruster netral seketika.
+1. **Tombol STOP** / **Spasi** → thruster netral seketika.
 2. Bila tidak respons, **ARM** untuk disarm.
 3. Setelah aman, **Start** (ARM ulang) untuk mengaktifkan kembali kontrol.
+
+> **Catatan:** Tidak ada tombol gamepad yang mapped ke `e_stop`.
+> Emergency stop hanya via tombol STOP di UI dan tombol `Space` di keyboard.
+> Tombol Back (gamepad) tidak lagi berfungsi sebagai e_stop.
 
 ---
 
@@ -325,7 +384,7 @@ operator sedang tidak menyentuh stik.
 
 ```
 Gamepad / Keyboard
-  app.js · joystick-state.js (deadzone → expo → gain → rate limit)
+  app.js · joystick-state.js (deadzone → expo → min/max scale)
         │  WebSocket :8080   {type:"cmd", name, value}
   server/server.js  (clamp ±1000, tap rekaman)
         │  UDP JSON :14550   {name, value, t}
@@ -334,6 +393,11 @@ Gamepad / Keyboard
   Pixhawk ArduSub  (mixing BlueROV1 → 6 thruster)
 ```
 Telemetry balik: Pixhawk → `rov_agent.py` → UDP :14551 → server → WS → dashboard.
+
+Perintah Manipulator (`gripper`, `gripper_rotate`) mengalir melalui
+routing `cmd` normal — bukan melalui handler khusus `manipulator` di
+`server.js` (handler tersebut adalah dead code karena client mengirim
+`name: "gripper"` / `"gripper_rotate"`, bukan `"manipulator"`).
 
 ---
 
