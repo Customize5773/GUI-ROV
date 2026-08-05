@@ -16,6 +16,11 @@ export const PILOT_MODE_MAP = {
   manual: "MANUAL",
   stabilize: "ALT_HOLD",
   depth_hold: "ALT_HOLD",
+  /* "poshold" adalah OVERLAY sisi Pi di atas ALT_HOLD (tahan kedalaman + tahan
+   * heading), BUKAN mode POSHOLD firmware ArduSub — itu butuh estimasi posisi
+   * horizontal dari EKF yang tidak ada di bawah air. Ia TIDAK menahan posisi
+   * x/y. Alasan lengkapnya di docstring rov_modes.py. */
+  poshold: "ALT_HOLD",
   acro: "ACRO",
 };
 
@@ -23,7 +28,12 @@ export const PILOT_MODE_MAP = {
  *
  * STABILIZE TIDAK ada di sini: tidak ada lagi tab untuknya, jadi kalau wahana
  * berada di sana (saklar RC / GCS lain) tidak ada tab yang menyala dan
- * #modeActual menampilkan "STABILIZE" apa adanya — lihat syncModeTabs(). */
+ * #modeActual menampilkan "STABILIZE" apa adanya — lihat syncModeTabs().
+ *
+ * "poshold" juga TIDAK ada di sini, dan itu disengaja: peta ini satu-arah,
+ * sedangkan ALT_HOLD bisa berarti dua tab (Alt Hold atau Pos Hold). Yang
+ * memisahkan keduanya adalah flag `poshold` di telemetri — lihat syncModeTabs()
+ * di app.js. */
 export const ARDUSUB_MODE_TO_TAB = {
   MANUAL: "manual",
   ALT_HOLD: "depth_hold",

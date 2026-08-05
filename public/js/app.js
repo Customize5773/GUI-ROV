@@ -288,12 +288,17 @@ function applyTelemetry(d) {
 
   // Mode pilot: satu-satunya penggerak sorotan tab adalah mode yang dilaporkan
   // Pixhawk lewat HEARTBEAT, bukan klik operator.
+  // ...kecuali POSHOLD, yang TIDAK terlihat di HEARTBEAT: ia berjalan di
+  // ALT_HOLD dan hanya ditandai flag `poshold` dari agent. Tetap prinsip yang
+  // sama — sorotan mengikuti apa yang dilaporkan wahana, bukan klik operator.
+  if (typeof d.poshold === "boolean") lastPosHold = d.poshold;
+
   if (typeof d.mode === "string") {
     if (d.mode !== lastPilotMode) {
       lastPilotMode = d.mode;
       log(`Mode pilot aktif: ${d.mode}`, ACTUAL_MODE_WARNINGS[d.mode] ? "warn" : "ok");
     }
-    syncModeTabs(d.mode);
+    syncModeTabs(d.mode, lastPosHold);
   }
 
   applyMission5(d.mission5);
@@ -477,6 +482,15 @@ function connect() {
     // severity MAVLink: 0..3 darurat/kritis, 4 warning, 5+ informasi.
     const sev = Number(msg.severity);
     log(`FC: ${msg.text}`, sev <= 3 ? "err" : sev === 4 ? "warn" : "");
+    // ArduSub menolak motor test (mis. "10 second cooldown required...",
+    // "motor test initialization failed!") lewat STATUSTEXT terpisah dari
+    // motor_test_ack — ack cuma menandakan command TERKIRIM, bukan diterima
+    // FC. Deteksi di sini supaya panel Thruster Test bisa mengunci slider
+    // reaktif alih-alih menebak cooldown di muka.
+    const t = String(msg.text || "").toLowerCase();
+    if (t.includes("cooldown") || t.includes("motor test initialization failed")) {
+      toPage("setup", "onMotorTestFail", msg);
+    }
   }
 };
 }
@@ -654,7 +668,7 @@ els.btnStop.onclick = () => {
   sendCmd("stop", true); reflectArm(false); markPending("arm", false);
   neutralizeGamepadAxes();
   ["surge", "sway", "yaw", "heave"].forEach((a) => setAxis(a, 0));
-  log("⏹ STOP — semua thruster netral", "err");
+  log("⏹ EMERGENCY STOP — semua thruster netral", "err");
 };
 
 els.btnHud.onclick = () => {
@@ -802,7 +816,7 @@ function doRequestPilotMode(mode, label) {
   requestPilotMode.pendingSince = performance.now();
   sendCmd("pilot_mode", mode);
   log(`Minta mode pilot: ${label}`, "ok");
-  syncModeTabs(lastPilotMode);
+  syncModeTabs(lastPilotMode, lastPosHold);
 }
 
 /* Gerbang konfirmasi ACRO. Modal DOM kustom (bukan confirm() bawaan) HANYA
@@ -849,11 +863,18 @@ const REPEAT_DELAY_MS = 400;
 const REPEAT_INTERVAL_MS = 150;
 
 let lastPilotMode = null;
+// Overlay POSHOLD terakhir yang dilaporkan agent (lihat applyTelemetry).
+let lastPosHold = false;
 let modeTimeoutWarned = false;
 
-function syncModeTabs(actualMode) {
+function syncModeTabs(actualMode, posholdActive) {
   const actual = typeof actualMode === "string" ? actualMode : null;
-  const activeTab = actual ? ARDUSUB_MODE_TO_TAB[actual] : null;
+  let activeTab = actual ? ARDUSUB_MODE_TO_TAB[actual] : null;
+
+  /* ALT_HOLD bisa berarti dua tab: Alt Hold biasa, atau Pos Hold (ALT_HOLD +
+     overlay heading-hold sisi Pi). ARDUSUB_MODE_TO_TAB tidak bisa membedakannya
+     karena mode ArduSub-nya identik — flag dari agent yang memutuskan. */
+  if (activeTab === "depth_hold" && posholdActive) activeTab = "poshold";
 
   // Permintaan sudah terkonfirmasi Pixhawk -> tidak ada yang pending lagi.
   if (requestPilotMode.pending && requestPilotMode.pending === activeTab) {
@@ -1141,12 +1162,25 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
+    // Emergency Stop: aksi terpisah dari mode_manual, supaya tombol yang
+    // meminta pilot mode MANUAL dan tombol yang menghentikan seluruh
+    // thruster tidak lagi menumpang pada action id yang sama.
+    case "emergency_stop": {
+      els.btnStop.click();
+      return;
+    }
+
     // Keduanya berujung di ALT_HOLD. "stabilize" dipertahankan sebagai alias
     // supaya profil joystick tersimpan operator tetap bekerja setelah tab
     // STABILIZE dihapus — lihat PILOT_MODE_MAP di shared/rov-modes.js.
     case "mode_stabilize":
     case "mode_depth_hold": {
       requestPilotMode("depth_hold", "ALT HOLD");
+      return;
+    }
+
+    case "mode_poshold": {
+      requestPilotMode("poshold", "POS HOLD");
       return;
     }
 

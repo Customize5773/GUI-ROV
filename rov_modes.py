@@ -5,8 +5,8 @@ pemetaan nama mode dan aturan keselamatan per-mode bisa di-unit-test tanpa
 pymavlink, socket, atau hardware.
 
 Dua lapis nama yang sengaja dibedakan:
-    - Nama GUI  : "manual", "stabilize", "depth_hold", "acro" — yang dikirim
-      dashboard lewat command JSON {"name": "pilot_mode", "value": ...}.
+    - Nama GUI  : "manual", "stabilize", "depth_hold", "poshold", "acro" — yang
+      dikirim dashboard lewat command JSON {"name": "pilot_mode", "value": ...}.
     - Nama ArduSub : "MANUAL", "STABILIZE", "ALT_HOLD", "ACRO" — yang dipakai
       master.mode_mapping() dan yang dilaporkan balik lewat HEARTBEAT.
 
@@ -29,6 +29,27 @@ Tentang ACRO
     kedalaman. Karena itu ACRO tidak masuk DEPTH_HOLD_MODES: bias depth-hold
     tidak boleh ikut campur saat tidak ada cascade PID kedalaman yang menahan
     wahana.
+
+Kenapa "poshold" menunjuk ALT_HOLD, bukan mode POSHOLD ArduSub
+    POSHOLD ArduSub butuh estimasi posisi horizontal yang dipercaya EKF
+    (EK3_SRC1_POSXY = 3, yaitu GPS — lihat parameters_ardusub.params). Di bawah
+    air tidak ada GPS, dan wahana ini tidak punya DVL, optical flow, maupun
+    sumber VISION_POSITION_ESTIMATE. Meminta mode POSHOLD firmware karena itu
+    akan ditolak, atau lebih buruk: diterima dengan estimasi posisi yang
+    ngawur.
+
+    Yang dipakai sebagai gantinya adalah OVERLAY sisi Python di atas ALT_HOLD
+    (lihat apply_heading_hold di rov_agent.py + rov_heading.py): kedalaman
+    ditahan cascade PID ArduSub, heading ditahan koreksi P dari sisi Pi.
+
+    KONSEKUENSI YANG HARUS DIKETAHUI OPERATOR: mode ini menahan KEDALAMAN dan
+    HEADING, BUKAN posisi x/y. Arus lateral tetap menggeser wahana dan tidak
+    ada sensor yang bisa mendeteksinya.
+
+    Karena "poshold" dan "depth_hold" memetakan ke mode ArduSub yang SAMA,
+    HEARTBEAT tidak bisa membedakan keduanya. Yang membedakan adalah flag
+    poshold_active di agent, yang dipantulkan lewat telemetry (state["poshold"])
+    dan dipakai GUI untuk menyorot tab yang benar.
 """
 
 # Nama GUI -> nama mode ArduSub. "stabilize" sengaja menunjuk ALT_HOLD juga —
@@ -37,8 +58,15 @@ PILOT_MODE_MAP = {
     "manual": "MANUAL",
     "stabilize": "ALT_HOLD",
     "depth_hold": "ALT_HOLD",
+    # Overlay heading-hold sisi Python, BUKAN mode POSHOLD firmware — lihat
+    # docstring modul.
+    "poshold": "ALT_HOLD",
     "acro": "ACRO",
 }
+
+# Nama GUI untuk station-keep. Dipakai agent supaya tidak membandingkan string
+# mentah di tengah handler command.
+POSHOLD_MODE = "poshold"
 
 # Mode yang menjalankan cascade PID kedalaman dari autopilot, sehingga
 # menggeser setpoint kedalaman lewat bias throttle masuk akal.
@@ -87,6 +115,17 @@ def resolve_pilot_mode(name):
     if not isinstance(name, str):
         return None
     return PILOT_MODE_MAP.get(name.strip().lower())
+
+
+def is_poshold_request(name):
+    """True kalau nama mode dari GUI meminta overlay station-keep.
+
+    Sengaja terpisah dari resolve_pilot_mode(): keduanya berujung di ALT_HOLD,
+    jadi hasil resolve TIDAK cukup untuk tahu apakah overlay harus hidup.
+    """
+    if not isinstance(name, str):
+        return False
+    return name.strip().lower() == POSHOLD_MODE
 
 
 def depth_hold_allowed(mode):

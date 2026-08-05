@@ -23,13 +23,25 @@ function test(name, fn) {
 
 test("PILOT_MODE_MAP memetakan nama GUI ke nama ArduSub yang benar", () => {
   assert.deepStrictEqual(PILOT_MODE_MAP, {
-    manual: "MANUAL",
     // alias: tab STABILIZE sudah dihapus, tapi profil joystick lama masih
     // mengirim nama ini — lihat docstring rov_modes.py.
     stabilize: "ALT_HOLD",
     depth_hold: "ALT_HOLD",
+    // Overlay heading-hold sisi Pi di atas ALT_HOLD, bukan mode POSHOLD
+    // firmware (butuh EKF POSXY yang tidak ada di bawah air).
+    poshold: "ALT_HOLD",
     acro: "ACRO",
   });
+});
+
+test("poshold sengaja tidak punya entri balik di ARDUSUB_MODE_TO_TAB", () => {
+  // ALT_HOLD bisa berarti dua tab (Alt Hold / Pos Hold) dan peta ini satu-arah.
+  // Kalau ada yang menambahkan ARDUSUB_MODE_TO_TAB.ALT_HOLD = "poshold", tab
+  // Alt Hold biasa tidak akan pernah menyala lagi — jadi entri baliknya HARUS
+  // tetap "depth_hold", dan pemisahnya adalah flag `poshold` di telemetri
+  // (lihat syncModeTabs di public/js/app.js).
+  assert.strictEqual(ARDUSUB_MODE_TO_TAB.ALT_HOLD, "depth_hold");
+  assert.strictEqual(Object.values(ARDUSUB_MODE_TO_TAB).includes("poshold"), false);
 });
 
 test("setiap tab punya mode ArduSub, dan tidak ada tab untuk STABILIZE", () => {

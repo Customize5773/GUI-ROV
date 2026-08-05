@@ -458,6 +458,10 @@ const PILOT_MODE_MAP = {
   manual: "MANUAL",
   stabilize: "ALT_HOLD",
   depth_hold: "ALT_HOLD",
+  // Overlay heading-hold sisi Pi di atas ALT_HOLD, BUKAN mode POSHOLD firmware
+  // — lihat docstring rov_modes.py. Karena mode ArduSub-nya sama dengan
+  // depth_hold, yang membedakan di GUI adalah flag `poshold` di telemetri.
+  poshold: "ALT_HOLD",
   acro: "ACRO",
 };
 
@@ -469,6 +473,9 @@ const simState = {
   light: false,
   controlMode: "manual", // gate otoritas GUI: manual | autonomous
   pilotMode: "MANUAL",   // mode ArduSub yang "dilaporkan" wahana palsu
+  // Padanan poshold_active di rov_agent.py. Tidak bisa disimpulkan dari
+  // pilotMode: POSHOLD dan Alt Hold sama-sama ALT_HOLD.
+  poshold: false,
 };
 
 /* Tabel param palsu (halaman Vehicle) — diisi saat start() bila mode SIM.
@@ -707,6 +714,9 @@ function applySimCommand(name, value, msg) {
         break;
       }
       simState.pilotMode = mapped;
+      // Setiap permintaan mode mematikan overlay lebih dulu, persis seperti
+      // handler pilot_mode di rov_agent.py.
+      simState.poshold = String(value).toLowerCase() === "poshold";
       // Masuk depth hold = pasang setpoint default, bukan kedalaman saat ini.
       if (DEPTH_HOLD_MODES.has(mapped)) {
         simDepthTarget = clampSimDepthTarget(simDepthDefault);
@@ -750,6 +760,10 @@ if (SIM) {
         // Sama seperti ROV sungguhan: field `mode` adalah mode ArduSub dari
         // HEARTBEAT, bukan control_mode.
         mode: simState.pilotMode,
+        // Overlay heading-hold: tidak terlihat di `mode` (ia berjalan di
+        // ALT_HOLD), jadi tab POSHOLD di GUI menyala dari flag ini.
+        poshold: simState.poshold,
+        heading_target: simState.poshold ? 90 : null,
         control_mode: simState.controlMode,
         pool_depth: simPoolDepth,
         depth_target: simDepthTarget,
