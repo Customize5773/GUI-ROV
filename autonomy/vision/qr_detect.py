@@ -189,6 +189,8 @@ class VisionPipeline:
         rtsp_url: str = 'rtsp://hydroship:8554/cam',
         callback: Optional[Callable] = None,
         fps: int = 10,
+        cam_width: int = 1280,
+        cam_height: int = 720,
         calib_file: Optional[str] = None,
         qr_length: float = 0.04,
         hook_hsv_range=None,
@@ -206,6 +208,9 @@ class VisionPipeline:
         rtsp_url   : URL RTSP/HTTP jika source='rtsp'
         callback   : fungsi dipanggil tiap deteksi QR
         fps        : target frame-rate capture
+        cam_width, cam_height : resolusi capture USB (px). HARUS sama dgn resolusi saat
+                     kalibrasi (lihat calib_file) — K/dist tak valid bila resolusi beda.
+                     Default 1280x720 (kalibrasi dwe.npz saat ini).
         calib_file : .npz kalibrasi kamera → aktifkan PBVS (solvePnP). None → IBVS.
         qr_length  : sisi fisik QR payload (m) utk solvePnP — KKI 2026 = 0.04 (4×4 cm)
         hook_hsv_range : [[h,s,v],[h,s,v]] opsional utk deteksi hook berbasis warna
@@ -224,6 +229,8 @@ class VisionPipeline:
         self.rtsp_url = rtsp_url
         self.callback = callback
         self.fps = fps
+        self.cam_width = cam_width
+        self.cam_height = cam_height
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._cap = None
@@ -360,6 +367,9 @@ class VisionPipeline:
         if not self._cap.isOpened():
             log.error("[vision] Tidak bisa membuka sumber kamera: %s", src)
             return
+        if self.source == 'usb':
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cam_height)
 
         interval = 1.0 / self.fps
         log.info("[vision] Kamera terbuka: %s", src)

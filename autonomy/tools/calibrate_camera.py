@@ -106,7 +106,8 @@ def calibrate_and_save():
 # ── Mode FOLDER ──────────────────────────────────────────────────────────────
 if args.from_folder:
     files = sorted(glob.glob(os.path.join(args.from_folder, "*.png")) +
-                   glob.glob(os.path.join(args.from_folder, "*.jpg")))
+                   glob.glob(os.path.join(args.from_folder, "*.jpg")) +
+                   glob.glob(os.path.join(args.from_folder, "*.jpeg")))
     if not files:
         sys.exit(f"Tidak ada gambar di {args.from_folder}")
     for f in files:

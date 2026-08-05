@@ -178,3 +178,189 @@ cd /home/rasya/GUI-ROV && ./start-gui.sh
 cd /home/rasya/GUI-ROV && ./start-gui.sh sim
 # Browser otomatis buka http://localhost:8080
 ```
+
+---
+
+## 8. Pre-Trial Health Check
+
+Cek cepat sebelum arm. Jalankan di laptop (dan SSH ke RPI untuk yang bertanda `*`):
+
+```bash
+# Laptop: ping RPI
+ping -c 3 192.168.2.2
+
+# Laptop: pastikan port 8080 tidak bentrok
+lsof -ti:8080 || echo "port 8080 free"
+
+# Laptop: pastikan npm deps terpasang
+[ -d server/node_modules ] && echo "deps OK" || (cd server && npm install)
+
+# * RPI: pastikan rov-agent aktif
+ssh hydroships@192.168.2.2 "sudo systemctl is-active rov-agent && echo 'ROV agent OK'"
+
+# * RPI: pastikan Pixhawk terdeteksi
+ssh hydroships@192.168.2.2 "ls /dev/ttyACM* && echo 'Pixhawk detected'"
+```
+
+---
+
+## 9. Trial Start Commands
+
+### One-liner: Start Everything (LIVE)
+
+```bash
+# Laptop: restart RPI agent + start GUI server sekaligus
+ssh hydroships@192.168.2.2 'sudo systemctl restart rov-agent' && cd /home/rasya/GUI-ROV && ./start-gui.sh
+```
+
+### One-liner: Start Everything (SIM)
+
+```bash
+cd /home/rasya/GUI-ROV && ./start-gui.sh sim
+```
+
+### Restart hanya ROV agent (setelah edit kode di Pi)
+
+```bash
+ssh hydroships@192.168.2.2 'sudo systemctl restart rov-agent && journalctl -u rov-agent -n 5 -f'
+```
+
+---
+
+## 10. Direct UDP Commands to ROV
+
+Kirim perintah langsung via UDP (port `14550`) bila GUI tidak responsif atau untuk scripting:
+
+```bash
+# Arm ROV
+echo '{"name":"arm","value":true}' | nc -u -w1 192.168.2.2 14550
+
+# Disarm ROV
+echo '{"name":"arm","value":false}' | nc -u -w1 192.168.2.2 14550
+
+# E-Stop (stop + disarm)
+echo '{"name":"stop","value":true}' | nc -u -w1 192.168.2.2 14550
+
+# Toggle lampu
+echo '{"name":"light","value":true}' | nc -u -w1 192.168.2.2 14550
+
+# Set pilot mode (MANUAL / STABILIZE / ALT_HOLD / ACRO)
+echo '{"name":"pilot_mode","value":"ALT_HOLD"}' | nc -u -w1 192.168.2.2 14550
+
+# Set pool depth (meter) — wajib sebelum depth hold
+echo '{"name":"pool_depth","value":0.9}' | nc -u -w1 192.168.2.2 14550
+
+# Set default depth target untuk depth hold (meter)
+echo '{"name":"depth_default","value":0.3}' | nc -u -w1 192.168.2.2 14550
+
+# Adjust depth target +/-0.05m (setara D-pad)
+echo '{"name":"gain_inc","value":true}' | nc -u -w1 192.168.2.2 14550   # naikkan target
+echo '{"name":"gain_dec","value":true}' | nc -u -w1 192.168.2.2 14550   # turunkan target
+
+# Kontrol gripper
+echo '{"name":"gripper","value":"open"}' | nc -u -w1 192.168.2.2 14550
+echo '{"name":"gripper","value":"close"}' | nc -u -w1 192.168.2.2 14550
+
+# Motor test: motor 1 maju 15% selama 1s
+echo '{"name":"motor_test","value":{"motor":1,"throttle":15,"duration":1,"direction":"forward"}}' | nc -u -w1 192.168.2.2 14550
+```
+
+> Semaphore `timestamp`/`t` otomatis ditambah server.js. Perintah ini hanya untuk LIVE mode ke RPI.
+
+---
+
+## 11. Motor Test Quick Reference
+
+Uji semua thruster secara berurutan:
+
+```bash
+# Test semua motor 1-6
+for m in 1 2 3 4 5 6; do
+  echo "{\"name\":\"motor_test\",\"value\":{\"motor\":$m,\"throttle\":15,\"duration\":1,\"direction\":\"forward\"}}" | nc -u -w1 192.168.2.2 14550
+  sleep 1.5
+done
+
+# Test motor 3 mundur
+echo '{"name":"motor_test","value":{"motor":3,"throttle":15,"duration":1,"direction":"reverse"}}' | nc -u -w1 192.168.2.2 14550
+```
+
+> Throttle maksimal motor_test = 20% (di-hardcode di `rov_motor_test.py`).
+
+---
+
+## 12. Recording Management
+
+```bash
+# Laptop: list rekaman (via HTTP API)
+curl -s http://localhost:8080/api/recordings | python3 -m json.tool
+
+# Laptop: bersihkan rekaman lama (>24h)
+find /home/rasya/GUI-ROV/server/recordings -maxdepth 1 -type d -mtime +1 -exec rm -rf {} +
+
+# Laptop: list direktori rekaman dengan ukuran
+du -sh /home/rasya/GUI-ROV/server/recordings/* 2>/dev/null
+```
+
+---
+
+## 13. Post-Trial Cleanup
+
+```bash
+# Laptop: disarm ROV
+echo '{"name":"arm","value":false}' | nc -u -w1 192.168.2.2 14550
+
+# Laptop: kill server (Ctrl+C juga jika terminal masih terbuka)
+pkill -f "node server.js" || lsof -ti:8080 | xargs kill -9
+
+# * RPI: stop rov-agent
+ssh hydroships@192.168.2.2 'sudo systemctl stop rov-agent && echo "ROV agent stopped"'
+```
+
+> **Shutdown RPI hanya bila perlu secara fisik** (mis. baterai habis). Untuk trial
+> berikutnya cukup `restart` agar lebih cepat:
+> ```bash
+> ssh hydroships@192.168.2.2 'sudo systemctl restart rov-agent'
+> ```
+
+---
+
+## 14. Test Commands
+
+Verifikasi cepat setelah perubahan kode:
+
+```bash
+# Python unit tests (dari repo root)
+python3 -m unittest test_rov_axes -v
+python3 -m unittest test_rov_modes -v
+python3 -m unittest test_rov_mavlink -v
+python3 -m unittest test_rov_pid -v
+python3 -m unittest test_rov_motor_test -v
+python3 -m unittest test_rov_params -v
+python3 -m unittest test_rov_gripper -v
+
+# JS server tests
+cd server && npm test
+
+# JS mode-gating test (ESM)
+node test/mode-gating.test.mjs
+```
+
+---
+
+## 15. Environment Variables Quick Reference
+
+Override via env var sebelum `./start-gui.sh`:
+
+```bash
+# Override alamat RPI (subnet berbeda)
+RPI_ADDR=192.168.2.2 ./start-gui.sh
+
+# Override port server
+WS_PORT=8081 ./start-gui.sh
+
+# Izinkan proxy /cam ke host kamera mana saja (lab/testing only)
+CAM_ALLOW_ANY=1 ./start-gui.sh
+
+# SIM dengan RPI_ADDR loop back
+RPI_ADDR=127.0.0.1 WS_PORT=8080 ./start-gui.sh sim
+```
