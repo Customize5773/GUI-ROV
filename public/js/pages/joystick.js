@@ -109,10 +109,11 @@ const ACTION_LABELS = {
   no_function: "No function",
   arm: "Arm",
   disarm: "Disarm",
-  mode_manual: "Mode manual",
+  mode_manual: "Emergency stop",
   // Keduanya berujung di ALT_HOLD — lihat PILOT_MODE_MAP di shared/rov-modes.js.
   mode_stabilize: "Mode alt hold (stabilize+depth)",
   mode_depth_hold: "Mode alt hold (stabilize+depth)",
+  mode_poshold: "Mode pos hold (alt hold + tahan heading)",
   mode_acro: "Mode acro (berisiko)",
   input_hold_set: "Input hold set",
   mount_tilt_up: "Mount tilt up",

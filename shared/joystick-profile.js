@@ -23,16 +23,27 @@
 
 /* v3: D-pad ↑/↓ pindah dari mount tilt ke geser setpoint kedalaman (mode
    "repeat"), mount tilt turun ke D-pad ←/→. Versi dinaikkan supaya profil
-   tersimpan operator ikut dimigrasikan, bukan diam-diam menahan binding lama. */
-export const SCHEMA_VERSION = 3;
+   tersimpan operator ikut dimigrasikan, bukan diam-diam menahan binding lama.
+
+   v4: aksi "mode_poshold" (Alt Hold + tahan heading) masuk BUTTON_ACTIONS.
+   Versi dinaikkan supaya profil tersimpan divalidasi ulang terhadap daftar aksi
+   yang baru. */
+export const SCHEMA_VERSION = 4;
 
 export const BUTTON_ACTIONS = [
   "no_function",
   "arm",
   "disarm",
+  // Nama aksi dipertahankan untuk kompatibilitas profil tersimpan, tapi
+  // sekarang memicu Emergency Stop (bukan lagi pilot mode MANUAL, yang sudah
+  // dihapus dari GUI — lihat rov_modes.py & executeJoystickAction di app.js).
   "mode_manual",
   "mode_stabilize",
   "mode_depth_hold",
+  // Alt Hold + tahan heading (overlay sisi Pi). Tidak ter-bind di
+  // defaultButtonLayer() dengan alasan yang sama seperti ACRO: ke-16 tombol pad
+  // sudah terpakai. Bind manual lewat halaman Setup > Joystick.
+  "mode_poshold",
   // ACRO tidak ter-bind di defaultButtonLayer(): ke-16 tombol pad sudah
   // terpakai, dan mode ini terlalu berisiko untuk menggeser binding yang sudah
   // dihafal operator. Bind manual lewat halaman Setup > Joystick.

@@ -103,7 +103,7 @@
         <button class="ctrl ctrl--arm" id="btnArm" aria-pressed="false">
           <span class="ctrl__led"></span> <span id="armLabel">DISARMED</span>
         </button>
-        <button class="stop" id="btnStop" title="Hentikan semua thruster (Spasi)">STOP</button>
+        <button class="stop" id="btnStop" title="Emergency Stop — hentikan semua thruster seketika (Spasi)">EMERGENCY STOP</button>
       </header>
 
       <!-- ========================= TELEMETRY STRIP ========================= -->
@@ -145,12 +145,20 @@
                    lokal saat diklik — ia mengikuti HEARTBEAT dari Pixhawk,
                    sehingga tab GUI dan tombol D-pad gamepad selalu sinkron. -->
               <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode">
-                <button class="mode" data-mode="manual" role="tab">Manual</button>
+                <!-- Tab pilot mode MANUAL sengaja tidak ada: raw joystick tanpa
+                     stabilisasi/depth hold tidak boleh diminta dari GUI.
+                     Fungsinya digantikan tombol Emergency Stop (#btnStop). -->
                 <!-- STABILIZE tidak punya tab sendiri: ia menstabilkan attitude
                      tapi TIDAK menahan kedalaman, sedangkan ALT_HOLD memberi
                      keduanya sekaligus. Lihat docstring rov_modes.py. -->
                 <button class="mode" data-mode="depth_hold" role="tab"
                         title="Attitude (roll/pitch) distabilkan + PID depth hold. Masuk mode ini langsung menyetel target kedalaman default.">Alt Hold</button>
+                <!-- POSHOLD: overlay sisi Pi di atas ALT_HOLD (lihat
+                     rov_modes.py). Mode ArduSub-nya SAMA dengan Alt Hold, jadi
+                     sorotan tab ini datang dari flag `poshold` di telemetri,
+                     bukan dari HEARTBEAT. -->
+                <button class="mode" data-mode="poshold" role="tab"
+                        title="Alt Hold + tahan heading otomatis. Lepas stik = kedalaman & arah hadap dipertahankan. TIDAK menahan posisi x/y — arus lateral tetap menggeser wahana.">Pos Hold</button>
                 <!-- ACRO: tanpa stabilisasi attitude, dan throttle netral TIDAK
                      menahan kedalaman. Diberi kelas mode--risky supaya jelas
                      berbeda, dan klik-nya meminta konfirmasi di app.js. -->

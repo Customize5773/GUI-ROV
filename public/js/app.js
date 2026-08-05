@@ -288,12 +288,17 @@ function applyTelemetry(d) {
 
   // Mode pilot: satu-satunya penggerak sorotan tab adalah mode yang dilaporkan
   // Pixhawk lewat HEARTBEAT, bukan klik operator.
+  // ...kecuali POSHOLD, yang TIDAK terlihat di HEARTBEAT: ia berjalan di
+  // ALT_HOLD dan hanya ditandai flag `poshold` dari agent. Tetap prinsip yang
+  // sama — sorotan mengikuti apa yang dilaporkan wahana, bukan klik operator.
+  if (typeof d.poshold === "boolean") lastPosHold = d.poshold;
+
   if (typeof d.mode === "string") {
     if (d.mode !== lastPilotMode) {
       lastPilotMode = d.mode;
       log(`Mode pilot aktif: ${d.mode}`, ACTUAL_MODE_WARNINGS[d.mode] ? "warn" : "ok");
     }
-    syncModeTabs(d.mode);
+    syncModeTabs(d.mode, lastPosHold);
   }
 
   applyMission5(d.mission5);
@@ -654,7 +659,7 @@ els.btnStop.onclick = () => {
   sendCmd("stop", true); reflectArm(false); markPending("arm", false);
   neutralizeGamepadAxes();
   ["surge", "sway", "yaw", "heave"].forEach((a) => setAxis(a, 0));
-  log("⏹ STOP — semua thruster netral", "err");
+  log("⏹ EMERGENCY STOP — semua thruster netral", "err");
 };
 
 els.btnHud.onclick = () => {
@@ -766,7 +771,7 @@ const camFs = makeFullscreen(els.camStage, {
 });
 els.btnCamFull.onclick = () => camFs.toggle();
 
-/* pilot mode tabs: Manual | Stabilize | Depth Hold | Acro
+/* pilot mode tabs: Stabilize | Depth Hold | Acro
  *
  * Sorotan tab TIDAK diset saat diklik. Klik hanya MEMINTA mode; yang menyorot
  * adalah syncModeTabs() dari HEARTBEAT Pixhawk (lihat applyTelemetry). Dengan
@@ -802,7 +807,7 @@ function doRequestPilotMode(mode, label) {
   requestPilotMode.pendingSince = performance.now();
   sendCmd("pilot_mode", mode);
   log(`Minta mode pilot: ${label}`, "ok");
-  syncModeTabs(lastPilotMode);
+  syncModeTabs(lastPilotMode, lastPosHold);
 }
 
 /* Gerbang konfirmasi ACRO. Modal DOM kustom (bukan confirm() bawaan) HANYA
@@ -849,11 +854,18 @@ const REPEAT_DELAY_MS = 400;
 const REPEAT_INTERVAL_MS = 150;
 
 let lastPilotMode = null;
+// Overlay POSHOLD terakhir yang dilaporkan agent (lihat applyTelemetry).
+let lastPosHold = false;
 let modeTimeoutWarned = false;
 
-function syncModeTabs(actualMode) {
+function syncModeTabs(actualMode, posholdActive) {
   const actual = typeof actualMode === "string" ? actualMode : null;
-  const activeTab = actual ? ARDUSUB_MODE_TO_TAB[actual] : null;
+  let activeTab = actual ? ARDUSUB_MODE_TO_TAB[actual] : null;
+
+  /* ALT_HOLD bisa berarti dua tab: Alt Hold biasa, atau Pos Hold (ALT_HOLD +
+     overlay heading-hold sisi Pi). ARDUSUB_MODE_TO_TAB tidak bisa membedakannya
+     karena mode ArduSub-nya identik — flag dari agent yang memutuskan. */
+  if (activeTab === "depth_hold" && posholdActive) activeTab = "poshold";
 
   // Permintaan sudah terkonfirmasi Pixhawk -> tidak ada yang pending lagi.
   if (requestPilotMode.pending && requestPilotMode.pending === activeTab) {
@@ -1136,8 +1148,12 @@ function executeJoystickAction(action, mode = "toggle") {
     }
 
     /* ================= CONTROL MODE ================= */
+    // Pilot mode MANUAL sudah dihapus dari GUI (lihat rov_modes.py). Binding
+    // gamepad lama "mode_manual" tetap dipertahankan sebagai alias, tapi
+    // sekarang memicu Emergency Stop — supaya profil joystick tersimpan
+    // operator tidak diam-diam berhenti berfungsi.
     case "mode_manual": {
-      requestPilotMode("manual", "MANUAL");
+      els.btnStop.click();
       return;
     }
 
@@ -1147,6 +1163,11 @@ function executeJoystickAction(action, mode = "toggle") {
     case "mode_stabilize":
     case "mode_depth_hold": {
       requestPilotMode("depth_hold", "ALT HOLD");
+      return;
+    }
+
+    case "mode_poshold": {
+      requestPilotMode("poshold", "POS HOLD");
       return;
     }
 

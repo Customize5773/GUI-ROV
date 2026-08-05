@@ -110,6 +110,12 @@ export const telemetryPage = {
       mode: d.mode || "unknown",
       thrusterVerticalPwm: d.thruster_vertical_pwm || 0,
       pidP: d.pid_p_out || 0, pidI: d.pid_i_out || 0, pidD: d.pid_d_out || 0,
+      // POSHOLD: setpoint heading + status overlay. Tanpa dua kolom ini,
+      // menyetel HEADING_P (rov_heading.py) sesudah trial jadi tebak-tebakan.
+      // null (belum di-seed) sengaja diekspor sebagai kolom kosong, bukan 0 —
+      // 0° adalah heading yang sah.
+      headingSetpoint: Number.isFinite(d.heading_target) ? d.heading_target : null,
+      poshold: d.poshold === true,
     };
     for (const c of CHANNELS) pushRing(this.buf[c.key], real[c.key], WINDOW);
     // arus thruster nyata bila ROV mengirim (array A: [T1..T6]); jika tidak, biarkan null
@@ -122,6 +128,8 @@ export const telemetryPage = {
         real.depthSetpoint.toFixed(3), real.mode, real.thrusterVerticalPwm,
         real.pidP.toFixed(3), real.pidI.toFixed(3), real.pidD.toFixed(3),
         depthError.toFixed(3),
+        real.headingSetpoint === null ? "" : real.headingSetpoint.toFixed(2),
+        real.poshold ? 1 : 0,
       ].join(","));
     }
   },
@@ -180,7 +188,7 @@ export const telemetryPage = {
   },
   _exportCsv() {
     if (!this.csvRows.length) { log("Tidak ada sampel untuk diekspor", "warn"); return; }
-    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,depth_error";
+    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,depth_error,heading_setpoint,poshold";
     const blob = new Blob([header + "\n" + this.csvRows.join("\n")], { type: "text/csv" });
     const trial = parseInt(document.getElementById("teleTrial")?.value, 10) || 1;
     const a = document.createElement("a");

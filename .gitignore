@@ -19,6 +19,8 @@ autonomy/config/*.local.json
 # saja dari seed; jangan commit gambarnya.
 autonomy/dataset/
 dataset/
+autonomy/calib_imgs_trial2
+autonomy/calib_imgs_trial2_dense
 # ZIP dinamai dari --outdir (mis. dataset/ -> dataset.zip)
 autonomy/dataset.zip
 dataset.zip
