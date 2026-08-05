@@ -899,7 +899,12 @@ def run_motor_test(payload):
             mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
             signed_throttle,
             duration,
-            0, 0, 0,
+            0,
+            # param6 = motor test order. ArduSub menolak apa pun selain BOARD
+            # ("bad test type %.2f") — DEFAULT(0) yang dulu dipakai di sini
+            # SELALU ditolak firmware, itu sebabnya motor test timeout.
+            mavutil.mavlink.MOTOR_TEST_ORDER_BOARD,
+            0,
         )
         print(f"[MOTORTEST] motor {motor} {direction} {throttle}% selama {duration}s")
         send_to_gui({
