@@ -27,17 +27,23 @@
 
    v4: aksi "mode_poshold" (Alt Hold + tahan heading) masuk BUTTON_ACTIONS.
    Versi dinaikkan supaya profil tersimpan divalidasi ulang terhadap daftar aksi
-   yang baru. */
-export const SCHEMA_VERSION = 4;
+   yang baru.
+
+   v5: aksi baru "emergency_stop" masuk BUTTON_ACTIONS, dan default binding
+   digeser: disarm pindah dari B ke LB (button 4), mode_manual pindah dari X
+   ke B (button 1), emergency_stop menempati X (button 2, slot lama
+   mode_manual). Versi dinaikkan supaya default binding baru diterapkan ke
+   profil tersimpan operator, bukan diam-diam menahan binding lama. */
+export const SCHEMA_VERSION = 5;
 
 export const BUTTON_ACTIONS = [
   "no_function",
   "arm",
   "disarm",
-  // Nama aksi dipertahankan untuk kompatibilitas profil tersimpan, tapi
-  // sekarang memicu Emergency Stop (bukan lagi pilot mode MANUAL, yang sudah
-  // dihapus dari GUI — lihat rov_modes.py & executeJoystickAction di app.js).
   "mode_manual",
+  // Menghentikan seluruh thruster seketika (netralkan axis + disarm). Aksi
+  // terpisah dari mode_manual supaya keduanya tidak menumpang satu action id.
+  "emergency_stop",
   "mode_stabilize",
   "mode_depth_hold",
   // Alt Hold + tahan heading (overlay sisi Pi). Tidak ter-bind di
@@ -146,9 +152,10 @@ export const DEFAULT_EXPO = 1.6;
 function defaultButtonLayer() {
   return [
     { action: "arm", button: 0, mode: "toggle" },              // A
-    { action: "disarm", button: 1, mode: "toggle" },           // B
-    { action: "mode_manual", button: 2, mode: "toggle" },      // X
+    { action: "mode_manual", button: 1, mode: "toggle" },      // B
+    { action: "emergency_stop", button: 2, mode: "toggle" },   // X
     { action: "mode_stabilize", button: 3, mode: "toggle" },   // Y
+    { action: "disarm", button: 4, mode: "toggle" },           // LB
     { action: "mode_depth_hold", button: 5, mode: "toggle" },  // RB
     { action: "grip_close", button: 6, mode: "hold" },         // LT (analog)
     { action: "grip_open", button: 7, mode: "hold" },          // RT (analog)

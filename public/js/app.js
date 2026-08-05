@@ -771,7 +771,7 @@ const camFs = makeFullscreen(els.camStage, {
 });
 els.btnCamFull.onclick = () => camFs.toggle();
 
-/* pilot mode tabs: Stabilize | Depth Hold | Acro
+/* pilot mode tabs: Manual | Stabilize | Depth Hold | Acro
  *
  * Sorotan tab TIDAK diset saat diklik. Klik hanya MEMINTA mode; yang menyorot
  * adalah syncModeTabs() dari HEARTBEAT Pixhawk (lihat applyTelemetry). Dengan
@@ -1148,11 +1148,15 @@ function executeJoystickAction(action, mode = "toggle") {
     }
 
     /* ================= CONTROL MODE ================= */
-    // Pilot mode MANUAL sudah dihapus dari GUI (lihat rov_modes.py). Binding
-    // gamepad lama "mode_manual" tetap dipertahankan sebagai alias, tapi
-    // sekarang memicu Emergency Stop — supaya profil joystick tersimpan
-    // operator tidak diam-diam berhenti berfungsi.
     case "mode_manual": {
+      requestPilotMode("manual", "MANUAL");
+      return;
+    }
+
+    // Emergency Stop: aksi terpisah dari mode_manual, supaya tombol yang
+    // meminta pilot mode MANUAL dan tombol yang menghentikan seluruh
+    // thruster tidak lagi menumpang pada action id yang sama.
+    case "emergency_stop": {
       els.btnStop.click();
       return;
     }

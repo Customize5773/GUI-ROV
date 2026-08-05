@@ -11,11 +11,9 @@
  * attitude tapi TIDAK menahan kedalaman, sementara ALT_HOLD memberi keduanya.
  * Tab STABILIZE sudah dihapus dari dashboard; aliasnya dipertahankan supaya
  * profil joystick tersimpan dengan aksi `mode_stabilize` tetap bekerja.
- * Alasan lengkapnya ada di docstring rov_modes.py.
- *
- * Tidak ada lagi entry "manual": tab pilot mode MANUAL dihapus dari dashboard,
- * fungsinya digantikan tombol Emergency Stop (lihat #btnStop di app.js). */
+ * Alasan lengkapnya ada di docstring rov_modes.py. */
 export const PILOT_MODE_MAP = {
+  manual: "MANUAL",
   stabilize: "ALT_HOLD",
   depth_hold: "ALT_HOLD",
   /* "poshold" adalah OVERLAY sisi Pi di atas ALT_HOLD (tahan kedalaman + tahan
@@ -28,16 +26,16 @@ export const PILOT_MODE_MAP = {
 
 /* Nama mode ArduSub (dari HEARTBEAT) -> data-mode tab GUI.
  *
- * STABILIZE dan MANUAL TIDAK ada di sini: tidak ada lagi tab untuk keduanya,
- * jadi kalau wahana berada di salah satunya (saklar RC / GCS lain) tidak ada
- * tab yang menyala dan #modeActual menampilkan nama mode apa adanya — lihat
- * syncModeTabs().
+ * STABILIZE TIDAK ada di sini: tidak ada lagi tab untuknya, jadi kalau wahana
+ * berada di sana (saklar RC / GCS lain) tidak ada tab yang menyala dan
+ * #modeActual menampilkan "STABILIZE" apa adanya — lihat syncModeTabs().
  *
  * "poshold" juga TIDAK ada di sini, dan itu disengaja: peta ini satu-arah,
  * sedangkan ALT_HOLD bisa berarti dua tab (Alt Hold atau Pos Hold). Yang
  * memisahkan keduanya adalah flag `poshold` di telemetri — lihat syncModeTabs()
  * di app.js. */
 export const ARDUSUB_MODE_TO_TAB = {
+  MANUAL: "manual",
   ALT_HOLD: "depth_hold",
   ACRO: "acro",
 };

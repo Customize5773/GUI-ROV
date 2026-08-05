@@ -5,19 +5,10 @@ pemetaan nama mode dan aturan keselamatan per-mode bisa di-unit-test tanpa
 pymavlink, socket, atau hardware.
 
 Dua lapis nama yang sengaja dibedakan:
-    - Nama GUI  : "stabilize", "depth_hold", "poshold", "acro" — yang dikirim
-      dashboard lewat command JSON {"name": "pilot_mode", "value": ...}.
+    - Nama GUI  : "manual", "stabilize", "depth_hold", "poshold", "acro" — yang
+      dikirim dashboard lewat command JSON {"name": "pilot_mode", "value": ...}.
     - Nama ArduSub : "MANUAL", "STABILIZE", "ALT_HOLD", "ACRO" — yang dipakai
       master.mode_mapping() dan yang dilaporkan balik lewat HEARTBEAT.
-
-Kenapa tidak ada lagi "manual" di GUI
-    Tab pilot mode MANUAL (raw joystick, tanpa stabilisasi attitude maupun
-    depth hold) dihapus dari dashboard: operator tidak boleh lagi meminta
-    MANUAL lewat GUI. Fungsinya digantikan tombol Emergency Stop (command
-    "stop" di rov_agent.py), yang menetralkan axis dan disarm alih-alih
-    berpindah ke mode kendali mentah. Permintaan pilot_mode="manual" yang
-    lama (mis. dari cache browser) DITOLAK oleh resolve_pilot_mode() karena
-    entry-nya sudah tidak ada di PILOT_MODE_MAP — bukan fallback diam-diam.
 
 Kenapa "stabilize" sekarang alias ALT_HOLD
     Di STABILIZE attitude (roll/pitch) distabilkan, TAPI kedalaman tidak —
@@ -64,6 +55,7 @@ Kenapa "poshold" menunjuk ALT_HOLD, bukan mode POSHOLD ArduSub
 # Nama GUI -> nama mode ArduSub. "stabilize" sengaja menunjuk ALT_HOLD juga —
 # lihat catatan di docstring modul.
 PILOT_MODE_MAP = {
+    "manual": "MANUAL",
     "stabilize": "ALT_HOLD",
     "depth_hold": "ALT_HOLD",
     # Overlay heading-hold sisi Python, BUKAN mode POSHOLD firmware — lihat

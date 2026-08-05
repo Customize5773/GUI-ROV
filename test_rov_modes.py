@@ -22,15 +22,9 @@ from rov_modes import (
 
 class TestResolvePilotMode(unittest.TestCase):
     def test_semua_mode_yang_didukung(self):
+        self.assertEqual(resolve_pilot_mode("manual"), "MANUAL")
         self.assertEqual(resolve_pilot_mode("depth_hold"), "ALT_HOLD")
         self.assertEqual(resolve_pilot_mode("acro"), "ACRO")
-
-    def test_manual_tidak_lagi_didukung(self):
-        # Tab pilot mode MANUAL dihapus dari GUI — fungsinya digantikan tombol
-        # Emergency Stop (command "stop" di rov_agent.py). Permintaan lama
-        # (mis. dari profil joystick/cache browser) harus DITOLAK, bukan
-        # diam-diam diterima.
-        self.assertIsNone(resolve_pilot_mode("manual"))
 
     def test_stabilize_adalah_alias_alt_hold(self):
         # Tab STABILIZE sudah dihapus dari GUI karena ia menstabilkan attitude
