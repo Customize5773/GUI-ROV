@@ -31,13 +31,9 @@ from rov_pid import (
     valid_depth_target,
     valid_pool_depth,
 )
+
 from attitude_filter import AttitudeFilter
-from rov_gripper import (
-    GRIPPER_PWM_NEUTRAL,
-    GRIPPER_SERVO_CH,
-    gripper_value_to_pwm,
-    slew_toward,
-)
+from gripper_controller import GripperController
 
 # =========================
 # Konfigurasi jaringan
@@ -65,22 +61,6 @@ telem_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.bind(("0.0.0.0", UDP_CMD_PORT))
 cmd_sock.settimeout(0.2)
-
-
-# ==========================
-# Manipulator Configuration
-# ==========================
-
-GRIP_CHANNEL = 7
-ROTATE_CHANNEL = 8
-
-SERVO_NEUTRAL = 1500
-
-GRIP_OPEN_PWM = 1900
-GRIP_CLOSE_PWM = 1100
-
-ROTATE_LEFT_PWM = 1100
-ROTATE_RIGHT_PWM = 1900
 
 # =========================
 # Status telemetry lokal
@@ -111,6 +91,7 @@ state = {
 }
 
 master = None
+gripper = None
 # Melindungi SEMUA akses I/O ke `master` (send & recv) — port serial dipakai
 # bersama oleh reader thread (main) dan beberapa sender thread (joystick,
 # gripper, rotate, command_listener). Tanpa lock ini, dua thread bisa
@@ -316,30 +297,6 @@ GUI_ONLY_COMMANDS = frozenset({
 # =========================
 # Gripper
 # =========================
-# Target = posisi yang diminta operator (keyboard/tombol/axis gamepad).
-# Filtered = posisi yang benar-benar dikirim ke servo, hasil rate-limit + EMA
-# di rov_gripper.slew_toward() supaya gerakan halus dan tidak menyentak.
-GRIPPER_SEND_INTERVAL = 0.1     # 10 Hz
-GRIPPER_SEND_EPSILON = 1.0      # jangan spam MAVLink kalau beda < 1 PWM
-
-gripper_target = float(GRIPPER_PWM_NEUTRAL)
-gripper_filtered = float(GRIPPER_PWM_NEUTRAL)
-gripper_lock = threading.Lock()
-
-# =========================
-# Rotate (pitch gripper)
-# =========================
-# Sama seperti gripper di atas: target diubah oleh handle_manipulator(),
-# rotate_sender() yang menggeser posisi servo perlahan lewat slew_toward()
-# supaya motor T-200 pitch tidak menyentak full-speed instan.
-ROTATE_SEND_INTERVAL = 0.1      # 10 Hz
-ROTATE_SEND_EPSILON = 1.0       # jangan spam MAVLink kalau beda < 1 PWM
-ROTATE_MAX_SPEED_PWM_S = 500.0  # bisa disetel beda dari grip kalau perlu
-ROTATE_EMA_ALPHA = 0.35
-
-rotate_target = float(SERVO_NEUTRAL)
-rotate_filtered = float(SERVO_NEUTRAL)
-rotate_lock = threading.Lock()
 
 # =========================
 # Parameter FC (halaman Vehicle)
@@ -469,30 +426,11 @@ def send_gcs_heartbeat():
             0, 0, 0,
         )
 
-
-def set_servo_pwm(channel, pwm):
-    """
-    Mengirim PWM ke output servo Pixhawk.
-    Channel menggunakan nomor SERVO (1-14).
-    """
-
-    with master_lock:
-        master.mav.command_long_send(
-            master.target_system,
-            master.target_component,
-            mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-            0,
-            channel,
-            pwm,
-            0, 0, 0, 0, 0
-        )
-
 # =========================
 # Command handler dari laptop
 # =========================
 def command_listener():
     global last_joystick_update
-    global gripper_target
     global depth_target
     global requested_mode
     global current_control_mode
@@ -813,11 +751,40 @@ def command_listener():
                     mavlink_stream_requested_at = None
 
             elif name == "gripper":
-                # "open"/"close" dari tombol & keyboard H/G, atau angka
-                # -1000..1000 dari axis analog gamepad. Yang disimpan hanya
-                # TARGET; gripper_sender() yang menggerakkannya perlahan.
-                with gripper_lock:
-                    gripper_target = gripper_value_to_pwm(value)
+
+                if gripper is None:
+                    print("[GRIPPER] Controller belum siap")
+                    continue
+
+                if value == "open":
+                    gripper.open()
+
+                elif value == "close":
+                    gripper.close()
+
+                elif value == "stop":
+                    gripper.stop()
+
+                else:
+                    print(f"[GRIPPER] Unknown command: {value}")
+
+            elif name == "gripper_rotate":
+
+                if gripper is None:
+                    print("[ROTATE] Controller belum siap")
+                    continue
+
+                if value == "left":
+                    gripper.rotate_left()
+
+                elif value == "right":
+                    gripper.rotate_right()
+
+                elif value == "stop":
+                    gripper.rotate_stop()
+
+                else:
+                    print(f"[ROTATE] Unknown command: {value}")
 
             elif name in AXIS_RANGE:
                 with joystick_lock:
@@ -1068,38 +1035,6 @@ def maybe_stream_mavlink(msg, mtype, now):
 
     send_to_gui({"type": "mavlink_msg", "msg": mtype, "t": now, "fields": fields})
 
-
-def handle_manipulator(device, action, direction):
-
-    print(f"[MANIP] {device} | {action} | {direction}")
-
-    if device == "grip":
-
-        if action == "start":
-
-            if direction == "open":
-                set_servo_pwm(GRIP_CHANNEL, GRIP_OPEN_PWM)
-
-            elif direction == "close":
-                set_servo_pwm(GRIP_CHANNEL, GRIP_CLOSE_PWM)
-
-        elif action == "stop":
-            set_servo_pwm(GRIP_CHANNEL, SERVO_NEUTRAL)
-
-    elif device == "rotate":
-
-        global rotate_target
-
-        with rotate_lock:
-            if action == "start" and direction == "left":
-                rotate_target = ROTATE_LEFT_PWM
-
-            elif action == "start" and direction == "right":
-                rotate_target = ROTATE_RIGHT_PWM
-
-            elif action == "stop":
-                rotate_target = SERVO_NEUTRAL
-
 def joystick_sender():
     """Kirim MANUAL_CONTROL 20 Hz.
 
@@ -1149,114 +1084,12 @@ def joystick_sender():
 
         time.sleep(JOYSTICK_SEND_INTERVAL)
 
-def gripper_sender():
-    """Gerakkan servo gripper menuju target 10 Hz dgn rate-limit + EMA.
-
-    Sengaja dipisah dari command_listener: perintah dari GUI hanya mengubah
-    TARGET, sedangkan thread ini yang menggeser posisi servo sedikit demi
-    sedikit. Efeknya gripper tidak menyentak walau operator menekan
-    open/close berulang cepat, dan posisi terakhir DITAHAN (tidak balik
-    sendiri) saat tidak ada perintah baru.
-    """
-    global gripper_filtered
-
-    last_sent_pwm = None
-    last_ts = time.time()
-
-    while True:
-        if master is None:
-            time.sleep(0.1)
-            last_ts = time.time()
-            continue
-
-        now = time.time()
-        dt = now - last_ts
-        last_ts = now
-
-        with gripper_lock:
-            target = gripper_target
-
-        gripper_filtered = slew_toward(gripper_filtered, target, dt)
-
-        # Hanya kirim kalau posisi benar-benar berubah — hindari membanjiri
-        # link serial 115200 yang dipakai bersama telemetry.
-        if last_sent_pwm is None or abs(gripper_filtered - last_sent_pwm) >= GRIPPER_SEND_EPSILON:
-            pwm = int(round(gripper_filtered))
-            try:
-                with master_lock:
-                    master.mav.command_long_send(
-                        master.target_system,
-                        master.target_component,
-                        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-                        0,
-                        GRIPPER_SERVO_CH,
-                        pwm,
-                        0, 0, 0, 0, 0
-                    )
-                last_sent_pwm = gripper_filtered
-            except Exception as e:
-                print("[GRIPPER] gagal kirim:", e)
-
-        time.sleep(GRIPPER_SEND_INTERVAL)
-
-def rotate_sender():
-    """Gerakkan servo pitch gripper menuju target 10 Hz dgn rate-limit + EMA.
-
-    Pola sama persis dengan gripper_sender(): perintah dari GUI hanya
-    mengubah rotate_target, thread ini yang menggeser posisi servo sedikit
-    demi sedikit lewat rov_gripper.slew_toward(), supaya motor T-200 pitch
-    tidak menyentak full-speed instan seperti sebelumnya.
-    """
-    global rotate_filtered
-
-    last_sent_pwm = None
-    last_ts = time.time()
-
-    while True:
-        if master is None:
-            time.sleep(0.1)
-            last_ts = time.time()
-            continue
-
-        now = time.time()
-        dt = now - last_ts
-        last_ts = now
-
-        with rotate_lock:
-            target = rotate_target
-
-        rotate_filtered = slew_toward(
-            rotate_filtered, target, dt,
-            max_speed=ROTATE_MAX_SPEED_PWM_S, ema_alpha=ROTATE_EMA_ALPHA,
-        )
-
-        # Hanya kirim kalau posisi benar-benar berubah — hindari membanjiri
-        # link serial 115200 yang dipakai bersama telemetry.
-        if last_sent_pwm is None or abs(rotate_filtered - last_sent_pwm) >= ROTATE_SEND_EPSILON:
-            pwm = int(round(rotate_filtered))
-            try:
-                with master_lock:
-                    master.mav.command_long_send(
-                        master.target_system,
-                        master.target_component,
-                        mavutil.mavlink.MAV_CMD_DO_SET_SERVO,
-                        0,
-                        ROTATE_CHANNEL,
-                        pwm,
-                        0, 0, 0, 0, 0
-                    )
-                last_sent_pwm = rotate_filtered
-            except Exception as e:
-                print("[ROTATE] gagal kirim:", e)
-
-        time.sleep(ROTATE_SEND_INTERVAL)
-
 # =========================
 # Main koneksi Pixhawk
 # =========================
 def connect_pixhawk():
     """Buka link serial + tunggu heartbeat + minta stream. Kembalikan koneksi."""
-    global master
+    global master, gripper
 
     print(f"[MAV] Connecting to Pixhawk on {PIXHAWK_PORT} @ {PIXHAWK_BAUD} ...")
     link = mavutil.mavlink_connection(PIXHAWK_PORT, baud=PIXHAWK_BAUD)
@@ -1269,6 +1102,8 @@ def connect_pixhawk():
     print(f"[MAV] System {link.target_system}, Component {link.target_component}")
 
     master = link
+    gripper = GripperController(master)
+    print("[GRIPPER] Controller initialized")
 
     # Minta stream data secara periodik
     try:
@@ -1332,9 +1167,11 @@ def connect_pixhawk():
 
 def drop_link(reason):
     """Tandai link mati supaya thread sender berhenti mengirim, lalu tutup."""
-    global master
+    global master, gripper
 
     link, master = master, None
+    gripper = None
+    
     print(f"[MAV] link terputus ({reason}) — mencoba sambung ulang...")
 
     # Jangan tampilkan status basi di GUI.
@@ -1373,8 +1210,6 @@ def main():
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
-    threading.Thread(target=gripper_sender, daemon=True).start()
-    threading.Thread(target=rotate_sender, daemon=True).start()
 
     last_send = 0
     last_hb = 0
