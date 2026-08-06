@@ -533,6 +533,12 @@ def command_listener():
 
         if master is None:
             print("[CMD] Pixhawk not connected yet")
+            if not quiet:
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Command '{name}' ditolak — Pixhawk belum terhubung",
+                    "level": "err",
+                })
             continue
 
         try:
@@ -644,6 +650,11 @@ def command_listener():
                 # penekanan tepat setelah ganti mode hilang tanpa jejak.
                 if not depth_hold_active():
                     print(f"[DEPTH] {name} diabaikan — mode bukan depth hold")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth set diabaikan — vehicle tidak dalam mode depth hold",
+                        "level": "warn",
+                    })
                     continue
 
                 if not _gain_rate.allow("depth_target", time.time()):
@@ -833,6 +844,11 @@ def command_listener():
 
         except Exception as e:
             print("[CMD] error executing command:", e)
+            send_to_gui({
+                "type": "event",
+                "text": f"Command '{name}' gagal dieksekusi: {e}",
+                "level": "err",
+            })
 
 def set_param(name, value, type_id, expect_ack=True):
     """Tulis SATU parameter ke FC. Mengembalikan nama kanoniknya, atau None.

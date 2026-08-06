@@ -509,7 +509,12 @@ function scheduleReconnect() {
   reconnectTimer = setTimeout(connect, 1500);
 }
 function send(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+    return true;
+  }
+  log(`Tidak terkirim (koneksi terputus): ${obj.name || obj.type}`, "err");
+  return false;
 }
 function sendCmd(name, value, quiet = false) {
   send({ type: "cmd", name, value });
