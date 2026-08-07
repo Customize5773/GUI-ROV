@@ -7,9 +7,9 @@ from pymavlink import mavutil
 GRIPPER_SERVO_CH = 7
 ROTATE_SERVO_CH = 8
 
-GRIPPER_PWM_OPEN = 1900
+GRIPPER_PWM_OPEN = 1550
 GRIPPER_PWM_NEUTRAL = 1500
-GRIPPER_PWM_CLOSE = 1100
+GRIPPER_PWM_CLOSE = 1450
 
 # Axis gamepad dikirim di rentang kira-kira -1000..1000 (lihat joystick-state.js).
 GRIPPER_AXIS_DEADZONE = 100
