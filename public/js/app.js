@@ -1234,6 +1234,20 @@ function executeJoystickAction(action, mode = "toggle") {
         return;
     }
 
+    case "mount_tilt_up": {
+        const pkt = Manipulator.rotateRight();
+        sendPacket(pkt);
+        log("Mount tilt up", "ok");
+        return;
+    }
+
+    case "mount_tilt_down": {
+        const pkt = Manipulator.rotateLeft();
+        sendPacket(pkt);
+        log("Mount tilt down", "ok");
+        return;
+    }
+
     /* ================= CAMERA SWITCH ================= */
     case "cam_prev":
     case "cam_next": {
@@ -1283,11 +1297,26 @@ function executeJoystickRelease(action) {
         case "grip_close":
             sendPacket(Manipulator.stopGrip(), true);
             return;
+
+        // Sama seperti gripper: mode "hold" perlu berhenti saat tombol dilepas,
+        // atau servo/motor mount tilt terus bergerak sampai batas PWM.
+        case "mount_tilt_up":
+        case "mount_tilt_down":
+            sendPacket(Manipulator.stopRotate(), true);
+            return;
     }
 }
 
+// Nama historis "grip" tapi sekarang mencakup semua aksi manipulator AUX
+// (gripper + mount tilt) yang harus tetap bisa dipakai lepas dari otoritas
+// manual/E-Stop navigasi ROV — lihat komentar di jalur AUX pada pollGamepad().
 function isGripAction(action) {
-  return action === "grip_open" || action === "grip_close";
+  return (
+    action === "grip_open" ||
+    action === "grip_close" ||
+    action === "mount_tilt_up" ||
+    action === "mount_tilt_down"
+  );
 }
 
 /* Proses tombol gamepad yang aksinya lolos `accept`.
