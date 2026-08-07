@@ -137,6 +137,11 @@ depth_lock = threading.Lock()
 _GAIN_RATE_HZ = 1.0 / 0.15
 _gain_rate = RateLimiter(_GAIN_RATE_HZ)
 
+# manual_control_send() gagal di 20 Hz -> tanpa throttle satu link serial
+# yang goyah bisa membanjiri GUI dengan event beruntun. 1 Hz cukup untuk
+# operator tahu ada masalah tanpa firehose.
+_joy_send_err_rate = RateLimiter(1.0)
+
 # Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
 # None = belum diberi tahu -> depth_target hanya dibatasi di permukaan, persis
 # perilaku sebelumnya. Begitu diisi, jadi batas bawah depth_target (lihat
@@ -149,6 +154,16 @@ pool_depth = None
 # ganti mode akan diabaikan diam-diam.
 requested_mode = None
 
+# Kapan requested_mode di-set (time.time()). Kalau FC MENOLAK perpindahan mode
+# (pre-arm check gagal, EKF belum siap, dsb.) HEARTBEAT tidak pernah membawa
+# state["mode"] == requested_mode, jadi tanpa batas waktu requested_mode akan
+# dipercaya SELAMANYA dan gain_inc/gain_dec terus "berhasil" walau wahana
+# sebenarnya masih di mode lama. REQUESTED_MODE_TIMEOUT membatasi jendela
+# percaya-optimistis ini; sesudahnya depth_hold_active() jatuh balik ke
+# state["mode"] yang benar-benar terkonfirmasi.
+requested_mode_ts = 0.0
+REQUESTED_MODE_TIMEOUT = 3.0
+
 # Depth hold didelegasikan ke ALT_HOLD ArduSub; depth_target hanya menggeser
 # setpoint lewat bias kecil pada throttle. Dibatasi supaya tidak pernah bisa
 # melawan operator atau menyelam tak terkendali di kolam dangkal.
@@ -157,10 +172,25 @@ DEPTH_BIAS_LIMIT = 80     # |bias| maksimum terhadap Z_NEUTRAL (500)
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
 
 
+def _effective_requested_mode():
+    """requested_mode kalau masih dalam jendela REQUESTED_MODE_TIMEOUT, else None.
+
+    Tanpa expiry ini, mode yang DITOLAK firmware (pre-arm check gagal, EKF
+    belum siap) membuat requested_mode tersangkut selamanya karena
+    state["mode"] tidak akan pernah menyusulnya lewat HEARTBEAT.
+    """
+    if requested_mode is None:
+        return None
+    if time.time() - requested_mode_ts > REQUESTED_MODE_TIMEOUT:
+        return None
+    return requested_mode
+
+
 def depth_hold_active():
     """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
 
-    requested_mode ikut dipakai karena state["mode"] baru ter-update saat
+    requested_mode ikut dipakai (selama belum kedaluwarsa, lihat
+    _effective_requested_mode) karena state["mode"] baru ter-update saat
     HEARTBEAT berikutnya datang. Tanpa itu, penekanan gain_inc/gain_dec tepat
     setelah ganti mode akan diabaikan diam-diam.
 
@@ -168,7 +198,7 @@ def depth_hold_active():
     kedalaman, jadi bias depth-hold hanya akan mendorong wahana tanpa umpan
     balik apa pun yang menstabilkannya.
     """
-    return depth_hold_allowed(requested_mode or state["mode"])
+    return depth_hold_allowed(_effective_requested_mode() or state["mode"])
 
 
 def apply_depth_hold_bias(mc, axes):
@@ -223,7 +253,7 @@ def poshold_engaged():
     GCS lain, overlay ikut mati sendiri — bukan diam-diam terus mengoreksi yaw
     di MANUAL.
     """
-    return poshold_active and depth_hold_allowed(requested_mode or state["mode"])
+    return poshold_active and depth_hold_allowed(_effective_requested_mode() or state["mode"])
 
 
 def apply_heading_hold(mc, axes):
@@ -433,6 +463,7 @@ def command_listener():
     global last_joystick_update
     global depth_target
     global requested_mode
+    global requested_mode_ts
     global current_control_mode
     global mavlink_stream_requested_at
     global pool_depth
@@ -521,6 +552,7 @@ def command_listener():
 
                 master.set_mode(mode_mapping[pixhawk_mode])
                 requested_mode = pixhawk_mode
+                requested_mode_ts = time.time()
 
                 # "poshold" dan "depth_hold" sama-sama berujung di ALT_HOLD,
                 # jadi pixhawk_mode TIDAK cukup untuk membedakannya — yang
@@ -582,6 +614,20 @@ def command_listener():
                 print(f"[LIGHT] set to {state['light']}")
 
             elif name in ("gain_inc", "gain_dec"):
+
+                # Disarmed -> ArduSub mengabaikan MANUAL_CONTROL sepenuhnya,
+                # jadi menggeser depth_target di sini hanya membuat GUI
+                # terlihat "aman" padahal wahana tidak akan bergerak sama
+                # sekali. Dicek terpisah dari depth_hold_active() supaya
+                # pesannya jelas: masalahnya arming, bukan mode.
+                if not state.get("armed"):
+                    print(f"[DEPTH] {name} diabaikan — vehicle belum armed")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth set diabaikan — vehicle belum armed",
+                        "level": "warn",
+                    })
+                    continue
 
                 # Pakai requested_mode juga: state["mode"] baru ter-update saat
                 # HEARTBEAT berikutnya, jadi kalau hanya mengandalkan itu maka
@@ -1097,6 +1143,15 @@ def joystick_sender():
                 )
         except Exception as e:
             print("[JOY] gagal kirim MANUAL_CONTROL:", e)
+            # Ini jalur yang benar-benar menggerakkan wahana; kalau gagal
+            # diam-diam, GUI tetap menampilkan command lain (mis. depth set)
+            # sebagai "aman" padahal tidak ada apa pun yang sampai ke FC.
+            if _joy_send_err_rate.allow("manual_control_send", time.time()):
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Gagal kirim MANUAL_CONTROL ke Pixhawk: {e}",
+                    "level": "err",
+                })
 
         time.sleep(JOYSTICK_SEND_INTERVAL)
 
