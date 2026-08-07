@@ -1235,16 +1235,23 @@ function executeJoystickAction(action, mode = "toggle") {
     }
 
     case "mount_tilt_up": {
-        const pkt = Manipulator.rotateRight();
+        const pkt = Manipulator.rotateLeft();
+        console.log("ROTATE LEFT =", pkt);
         sendPacket(pkt);
-        log("Mount tilt up", "ok");
         return;
     }
 
     case "mount_tilt_down": {
-        const pkt = Manipulator.rotateLeft();
+        const pkt = Manipulator.rotateRight();
+        console.log("ROTATE RIGHT =", pkt);
         sendPacket(pkt);
-        log("Mount tilt down", "ok");
+        return;
+    }
+
+    case "mount_tilt_stop": {
+        const pkt = Manipulator.stopRotate();
+        console.log("ROTATE STOP =", pkt);
+        sendPacket(pkt, true);
         return;
     }
 
@@ -1296,14 +1303,13 @@ function executeJoystickRelease(action) {
         case "grip_open":
         case "grip_close":
             sendPacket(Manipulator.stopGrip(), true);
-            return;
 
-        // Sama seperti gripper: mode "hold" perlu berhenti saat tombol dilepas,
-        // atau servo/motor mount tilt terus bergerak sampai batas PWM.
+            return;
         case "mount_tilt_up":
         case "mount_tilt_down":
             sendPacket(Manipulator.stopRotate(), true);
             return;
+        
     }
 }
 
