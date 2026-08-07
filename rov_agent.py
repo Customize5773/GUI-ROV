@@ -118,6 +118,20 @@ joystick = {
 
 depth_target = 0.0
 
+# Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
+# dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
+# depth 0 operator = permukaan sungguhan, bukan origin baro/EKF mentah yang
+# bisa drift atau tidak pas 0 saat ROV di-arm. TANPA ini, apply_depth_hold_bias()
+# menghitung error dari depth mentah sementara GUI menampilkan angka yang sudah
+# ditare secara kosmetik — bias yang dikirim ke thruster bisa jauh dari nol
+# padahal GUI terlihat "Depth = 0.00 m, aman".
+depth_offset = 0.0
+
+# Depth mentah (belum ditare) dari AHRS2 terakhir, diisi di handler AHRS2.
+# Dipakai saat command `set_surface` datang: offset yang disimpan harus nilai
+# mentah SAAT ITU, bukan state["depth"] yang sudah ditare sebelumnya.
+_raw_depth = 0.0
+
 # Setpoint yang dipasang otomatis setiap kali masuk mode depth hold. Nilai awal
 # dari rov_pid.DEFAULT_DEPTH_TARGET, bisa diubah operator lewat command
 # `depth_default` (halaman Setup) tanpa mengubah kode.
@@ -318,7 +332,6 @@ VERBOSE_TELEMETRY = False
 # benar-benar hanya berisi hal yang perlu diperiksa.
 GUI_ONLY_COMMANDS = frozenset({
     "controller",     # tab Keyboard/Gamepad di dashboard
-    "set_surface",    # reset acuan permukaan (dihitung sisi GUI)
     "snapshot",       # tangkapan frame di browser
     "record",         # perekaman di browser
     "viewer_access",  # buka/tutup akses viewer mobile — murni sisi server/GUI
@@ -467,6 +480,7 @@ def command_listener():
     global current_control_mode
     global mavlink_stream_requested_at
     global pool_depth
+    global depth_offset
     global default_depth_target
     global poshold_active
     global heading_target
@@ -612,6 +626,21 @@ def command_listener():
                 # Belum dihubungkan ke hardware lampu, simpan status saja
                 state["light"] = bool(value)
                 print(f"[LIGHT] set to {state['light']}")
+
+            elif name == "set_surface":
+
+                # Tare permukaan HARUS di backend, bukan cuma tampilan GUI:
+                # apply_depth_hold_bias() menghitung error dari state["depth"],
+                # jadi kalau tare hanya kosmetik di browser, bias yang benar-
+                # benar dikirim ke thruster dihitung dari depth mentah yang
+                # bisa jauh dari nol walau GUI menampilkan "Depth = 0.00 m".
+                depth_offset = _raw_depth
+                print(f"[DEPTH] Surface di-set — offset = {depth_offset:.2f} m")
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Surface level diset — offset {depth_offset:.2f} m",
+                    "level": "ok",
+                })
 
             elif name in ("gain_inc", "gain_dec"):
 
@@ -1268,6 +1297,7 @@ def drop_link(reason):
 
 def main():
     global prev_attitude_ts
+    global _raw_depth
 
     connect_pixhawk()
 
@@ -1405,7 +1435,12 @@ def main():
 
             # altitude bernilai negatif saat ROV berada di bawah permukaan
             if hasattr(msg, "altitude"):
-                state["depth"] = max(0.0, -float(msg.altitude))
+                _raw_depth = max(0.0, -float(msg.altitude))
+                # depth_offset ditare lewat command `set_surface` (lihat
+                # command_listener) supaya depth 0 = permukaan sungguhan,
+                # bukan origin baro/EKF mentah yang bisa drift atau tidak pas
+                # 0 saat ROV di-arm.
+                state["depth"] = max(0.0, _raw_depth - depth_offset)
 
         # --------------------------------
         # SERVO_OUTPUT_RAW: PWM thruster vertikal (T3/T4/T5 = heave)

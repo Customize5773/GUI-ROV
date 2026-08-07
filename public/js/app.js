@@ -224,8 +224,6 @@ function updateTape(depth) {
 
 /*  render telemetri  */
 let lastTelemetry = 0;
-let surfaceOffset = 0;   // tare depth — diset via tombol "Set Surface Level & Depth = 0"
-let lastRawDepth = 0;    // depth mentah (sebelum offset) dari telemetry terakhir
 function applyTelemetry(d) {
   const isDemo = !!d.__demo;
   // jika ini telemetry nyata (bukan simulasi) dan simulator sedang berjalan,
@@ -241,8 +239,8 @@ function applyTelemetry(d) {
     if (!isDemo && !demo) { setLink("on"); log("Telemetri pulih", "ok"); }
   }
   lastTelemetry = performance.now();
-  if (Number.isFinite(d.depth)) lastRawDepth = d.depth;
-  if (Number.isFinite(d.depth)) d.depth = Math.max(0, d.depth - surfaceOffset);
+  // d.depth sudah ditare backend (lihat command `set_surface`, rov_agent.py) —
+  // tare dua kali di sini akan memotong depth yang sama dua kali lipat.
   els.heading.textContent = num(d.heading, 0);
   els.depth.textContent = num(d.depth, 2);
   // altitude = ketinggian ROV (titik tengah) di atas dasar kolam
@@ -1509,11 +1507,11 @@ window.addEventListener("gamepaddisconnected", (e) => {
    saat di-mount, lihat pages/joystick.js. */
 requestAnimationFrame(pollGamepad);
 
-/* set surface level */
+/* set surface level — backend menare state["depth"] dan mengonfirmasi lewat
+   event "type":"event" (lihat handler `set_surface` di rov_agent.py), jadi
+   log di sini tidak optimis di sisi klien lagi. */
 $("btnSetSurface").onclick = () => {
-  surfaceOffset = lastRawDepth;
-  sendCmd("set_surface", true);   // tetap kirim, backend abaikan (GUI-only by design)
-  log(`Surface level diset — Depth = 0 (offset ${lastRawDepth.toFixed(2)} m)`, "ok");
+  sendCmd("set_surface", true);
 };
 
 /* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
