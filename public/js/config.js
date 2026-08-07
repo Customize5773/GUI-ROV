@@ -11,8 +11,8 @@ export const CONFIG = {
   // sumber kamera untuk halaman Camera (label + peran + url)
   // KKI 2026: camera 1 = bottom (lantai/QR), camera 2 = wall (dinding)
   CAMERAS: [
-    { id: "CAM 1", role: "BOTTOM", url: "" },
-    { id: "CAM 2", role: "WALL", url: "" },
+    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream" },
+    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream" },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".
@@ -29,7 +29,7 @@ export const CONFIG = {
   // setpoint kedalaman yang dipasang otomatis saat masuk mode ALT_HOLD.
   // Padanan rov_pid.DEFAULT_DEPTH_TARGET — dikirim ke wahana lewat command
   // `depth_default` dari halaman Setup.
-  DEPTH_DEFAULT: 0.3,
+  DEPTH_DEFAULT: 0.0,
 
   /* konfigurasi thruster (ArduSub mixer) — KKI 2026 maksimal 6 thruster.
      Wahana ini memakai frame BlueROV1 (6 thruster, 6-DoF):

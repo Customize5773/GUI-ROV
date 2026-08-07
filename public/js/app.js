@@ -1313,8 +1313,16 @@ function executeJoystickRelease(action) {
     }
 }
 
+// Nama historis "grip" tapi sekarang mencakup semua aksi manipulator AUX
+// (gripper + mount tilt) yang harus tetap bisa dipakai lepas dari otoritas
+// manual/E-Stop navigasi ROV — lihat komentar di jalur AUX pada pollGamepad().
 function isGripAction(action) {
-  return action === "grip_open" || action === "grip_close";
+  return (
+    action === "grip_open" ||
+    action === "grip_close" ||
+    action === "mount_tilt_up" ||
+    action === "mount_tilt_down"
+  );
 }
 
 /* Proses tombol gamepad yang aksinya lolos `accept`.
