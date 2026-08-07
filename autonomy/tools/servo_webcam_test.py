@@ -42,6 +42,8 @@ from tools.detection_log import DetectionCsvLogger
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--device", type=int, default=0)
+ap.add_argument("--url", default=None,
+                help="stream kamera ROV (mis. http://192.168.2.2:8080/stream) — override --device")
 ap.add_argument("--data", default=None, help="hanya proses QR yang isinya memuat substring ini")
 ap.add_argument("--target-area", type=float, default=3000.0, help="IBVS: luas engage (px^2)")
 ap.add_argument("--calib", default=None, help="path .npz kalibrasi → mode PBVS")
@@ -64,9 +66,10 @@ else:
     servo = VisualServo(target_area=args.target_area)
     print("Mode IBVS (piksel) — beri --calib untuk PBVS")
 
-cap = cv2.VideoCapture(args.device)
+src = args.url if args.url else args.device
+cap = cv2.VideoCapture(src)
 if not cap.isOpened():
-    sys.exit(f"Tidak bisa membuka webcam index {args.device}")
+    sys.exit(f"Tidak bisa membuka sumber kamera: {src}")
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.cam_width)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.cam_height)
 

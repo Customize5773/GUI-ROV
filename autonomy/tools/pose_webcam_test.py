@@ -36,6 +36,8 @@ ap.add_argument("--calib", required=True, help="file .npz kalibrasi (K, dist)")
 ap.add_argument("--qr-size", type=float, default=0.04, help="sisi QR payload fisik (m) — KKI 2026 = 0.04")
 ap.add_argument("--data", default=None, help="hanya proses QR yang isinya memuat substring ini")
 ap.add_argument("--device", type=int, default=0)
+ap.add_argument("--url", default=None,
+                help="stream kamera ROV (mis. http://192.168.2.2:8080/stream) — override --device")
 ap.add_argument("--target-dist", type=float, default=0.30)
 ap.add_argument("--csv", default=None, help="tulis log deteksi per-frame ke file CSV ini")
 ap.add_argument("--cam-width", type=int, default=1280, help="minta resolusi lebar kamera (bantu QR jauh)")
@@ -49,9 +51,10 @@ objp = np.array([[-L/2, L/2, 0], [L/2, L/2, 0], [L/2, -L/2, 0], [-L/2, -L/2, 0]]
 
 servo = PoseServo(target_dist=a.target_dist)
 
-cap = cv2.VideoCapture(a.device)
+src = a.url if a.url else a.device
+cap = cv2.VideoCapture(src)
 if not cap.isOpened():
-    sys.exit(f"Tidak bisa membuka webcam {a.device}")
+    sys.exit(f"Tidak bisa membuka sumber kamera: {src}")
 cap.set(cv2.CAP_PROP_FRAME_WIDTH, a.cam_width)
 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, a.cam_height)
 print(f"PBVS test — QR payload, sisi={L} m, target {a.target_dist} m. 'q' keluar.")

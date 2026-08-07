@@ -86,9 +86,12 @@ except ImportError:
 try:
     from pyzbar import pyzbar
     PYZBAR_OK = True
-except ImportError:
+except Exception as _e:
+    # ImportError (paket tak terpasang) ATAU error load DLL native (mis. libzbar-64.dll /
+    # libiconv.dll tak ketemu di Windows) — keduanya berarti pyzbar tak bisa dipakai.
+    # decode_qr() tetap jalan lewat fallback cv2.QRCodeDetector di bawah.
     PYZBAR_OK = False
-    log.warning("[vision] pyzbar tidak tersedia — QR detection dinonaktifkan")
+    log.warning(f"[vision] pyzbar tidak tersedia ({_e}) — pakai fallback cv2.QRCodeDetector")
 
 # Mapping QR → sisi kolam A/B/C/D dilakukan oleh wall_from_qr() di atas
 # (isi QR sesuai panduan KKI 2026 hal. 52; toleran terhadap prefiks/sufiks).
@@ -374,7 +377,7 @@ class VisionPipeline:
         interval = 1.0 / self.fps
         log.info("[vision] Kamera terbuka: %s", src)
         if not PYZBAR_OK:
-            log.error("[vision] pyzbar tidak tersedia — QR tak bisa dideteksi dari kamera")
+            log.warning("[vision] pyzbar tidak tersedia — pakai fallback cv2.QRCodeDetector (kurang robust)")
 
         while self._running:
             t_start = time.time()
