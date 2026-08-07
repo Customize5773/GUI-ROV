@@ -48,7 +48,7 @@ SURFACE_HPA_DEFAULT = 1013.25
 
 # Channel servo (SERVOn_FUNCTION di ArduSub). VERIFIKASI dgn QGroundControl.
 LIGHT_SERVO_CH = 9         # contoh — sesuaikan
-GRIPPER_SERVO_CH = 10      # contoh — sesuaikan
+GRIPPER_SERVO_CH = 7       # SERVO7, sesuai konfigurasi ArduSub aktual
 GRIPPER_PWM_OPEN = 1900
 GRIPPER_PWM_CLOSE = 1100
 LIGHT_PWM_ON = 1900

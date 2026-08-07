@@ -33,7 +33,7 @@ from rov_pid import (
 )
 
 from attitude_filter import AttitudeFilter
-from gripper_controller import GripperController
+from rov_gripper import GripperController
 
 # =========================
 # Konfigurasi jaringan
@@ -1170,6 +1170,8 @@ def drop_link(reason):
     global master, gripper
 
     link, master = master, None
+    if gripper is not None:
+        gripper.shutdown()
     gripper = None
     
     print(f"[MAV] link terputus ({reason}) — mencoba sambung ulang...")
