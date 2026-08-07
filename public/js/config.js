@@ -6,13 +6,13 @@ export const CONFIG = {
   UNIVERSITY: "Politeknik Perkapalan Negeri Surabaya",
 
   //http://192.168.2.2:8080/?action=stream
-  CAMERA_URL: "",
+  CAMERA_URL: "http://192.168.2.2:8081/stream",
 
   // sumber kamera untuk halaman Camera (label + peran + url)
   // KKI 2026: camera 1 = bottom (lantai/QR), camera 2 = wall (dinding)
   CAMERAS: [
-    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream" },
-    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream" },
+    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8080/stream" },
+    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8081/stream" },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".
