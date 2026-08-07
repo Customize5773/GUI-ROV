@@ -220,6 +220,20 @@ export const cameraPage = {
     handle.addEventListener("pointercancel", rend);
   },
 
+  /* dipanggil dari D-pad kiri/kanan (app.js executeJoystickAction) untuk
+     berpindah kamera fullscreen: dir=1 → berikutnya, dir=-1 → sebelumnya. */
+  cycleCamera(dir) {
+    const cams = CONFIG.CAMERAS || [];
+    const cells = this.els.cells || [];
+    if (cams.length < 2 || !cells.length) return;
+    const current = cells.findIndex((c) => c.fsOn);
+    const from = current >= 0 ? current : 0;
+    const next = (from + dir + cams.length) % cams.length;
+    if (next === current) return;
+    if (current >= 0) cells[current].fs.toggle();
+    cells[next].fs.toggle();
+  },
+
   _toggleStream() {
       this.streaming = !this.streaming;
       this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";

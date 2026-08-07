@@ -645,15 +645,17 @@ function applyControlCamera() {
   syncControlCameraButton();
 }
 
+function cycleControlCamera(dir) {
+  const sources = getControlCameraSources();
+  if (sources.length < 2) return;
+  controlCamIndex = (controlCamIndex + dir + sources.length) % sources.length;
+  CONFIG.CAMERA_URL = sources[controlCamIndex];
+  applyControlCamera();
+  log(`Kamera kontrol: ${controlCamIndex + 1}`, "ok");
+}
+
 if (els.btnCamSwitch) {
-  els.btnCamSwitch.onclick = () => {
-    const sources = getControlCameraSources();
-    if (sources.length < 2) return;
-    controlCamIndex = (controlCamIndex + 1) % sources.length;
-    CONFIG.CAMERA_URL = sources[controlCamIndex];
-    applyControlCamera();
-    log(`Kamera kontrol: ${controlCamIndex + 1}`, "ok");
-  };
+  els.btnCamSwitch.onclick = () => cycleControlCamera(1);
 }
 
 applyControlCamera();
@@ -1234,21 +1236,17 @@ function executeJoystickAction(action, mode = "toggle") {
         return;
     }
 
-      case "mount_tilt_up": {
-      const pkt = Manipulator.rotateLeft();
-      console.log("ROTATE LEFT =", pkt);
-      console.log(pkt);
-      sendPacket(pkt);
+    /* ================= CAMERA SWITCH ================= */
+    case "cam_prev":
+    case "cam_next": {
+      const dir = action === "cam_next" ? 1 : -1;
+      if (pages.camera && pages.camera.style.display !== "none") {
+        cameraPage.cycleCamera(dir);
+      } else {
+        cycleControlCamera(dir);
+      }
       return;
-  }
-
-  case "mount_tilt_down": {
-      const pkt = Manipulator.rotateRight();
-      console.log("ROTATE RIGHT =", pkt);
-      console.log(pkt);
-      sendPacket(pkt);
-      return;
-  }
+    }
 
     /* ================= LIGHT ================= */
     case "lights_brighter": {
@@ -1278,11 +1276,6 @@ function executeJoystickRelease(action) {
     if (!action || action === "no_function") return;
 
     switch (action) {
-
-        case "mount_tilt_up":
-        case "mount_tilt_down":
-            sendPacket(Manipulator.stopRotate(), true);
-            return;
 
         /* grip_open/grip_close adalah nama HASIL migrasi dari actuator1_*.
            Tanpa case ini, gripper mode "hold" tidak pernah berhenti saat

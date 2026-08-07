@@ -57,6 +57,8 @@ export const BUTTON_ACTIONS = [
   "input_hold_set",
   "mount_tilt_up",
   "mount_tilt_down",
+  "cam_prev",
+  "cam_next",
   "mount_center",
   "actuator1_inc",
   "actuator1_dec",
@@ -165,8 +167,8 @@ function defaultButtonLayer() {
     // `depth` positif ke bawah, jadi arahnya memang terbalik dari nama command.
     { action: "gain_dec", button: 12, mode: "repeat" },        // D-pad ↑ (naik)
     { action: "gain_inc", button: 13, mode: "repeat" },        // D-pad ↓ (turun)
-    { action: "mount_tilt_up", button: 14, mode: "hold" },     // D-pad ←
-    { action: "mount_tilt_down", button: 15, mode: "hold" },   // D-pad →
+    { action: "cam_prev", button: 14, mode: "toggle" },        // D-pad ← : CAM sebelumnya
+    { action: "cam_next", button: 15, mode: "toggle" },        // D-pad → : CAM berikutnya
     { action: "lights_dimmer", button: 10, mode: "hold" },     // L3
     { action: "lights_brighter", button: 11, mode: "hold" },   // R3
     { action: "no_function", button: 16, mode: "toggle" },     // Logitech
