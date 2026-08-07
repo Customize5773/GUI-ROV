@@ -33,7 +33,7 @@ from rov_pid import (
 )
 
 from attitude_filter import AttitudeFilter
-from rov_gripper import GripperController
+from gripper_controller import GripperController
 
 # =========================
 # Konfigurasi jaringan
@@ -1143,15 +1143,6 @@ def joystick_sender():
                 )
         except Exception as e:
             print("[JOY] gagal kirim MANUAL_CONTROL:", e)
-            # Ini jalur yang benar-benar menggerakkan wahana; kalau gagal
-            # diam-diam, GUI tetap menampilkan command lain (mis. depth set)
-            # sebagai "aman" padahal tidak ada apa pun yang sampai ke FC.
-            if _joy_send_err_rate.allow("manual_control_send", time.time()):
-                send_to_gui({
-                    "type": "event",
-                    "text": f"Gagal kirim MANUAL_CONTROL ke Pixhawk: {e}",
-                    "level": "err",
-                })
 
         time.sleep(JOYSTICK_SEND_INTERVAL)
 
