@@ -1234,6 +1234,27 @@ function executeJoystickAction(action, mode = "toggle") {
         return;
     }
 
+    case "mount_tilt_up": {
+        const pkt = Manipulator.rotateLeft();
+        console.log("ROTATE LEFT =", pkt);
+        sendPacket(pkt);
+        return;
+    }
+
+    case "mount_tilt_down": {
+        const pkt = Manipulator.rotateRight();
+        console.log("ROTATE RIGHT =", pkt);
+        sendPacket(pkt);
+        return;
+    }
+
+    case "mount_tilt_stop": {
+        const pkt = Manipulator.stopRotate();
+        console.log("ROTATE STOP =", pkt);
+        sendPacket(pkt, true);
+        return;
+    }
+
     /* ================= CAMERA SWITCH ================= */
     case "cam_prev":
     case "cam_next": {
@@ -1282,7 +1303,13 @@ function executeJoystickRelease(action) {
         case "grip_open":
         case "grip_close":
             sendPacket(Manipulator.stopGrip(), true);
+
             return;
+        case "mount_tilt_up":
+        case "mount_tilt_down":
+            sendPacket(Manipulator.stopRotate(), true);
+            return;
+        
     }
 }
 
