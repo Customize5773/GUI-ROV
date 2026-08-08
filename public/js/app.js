@@ -926,7 +926,7 @@ document.querySelectorAll("#modeBar .mode").forEach((btn) => {
 });
 
 /* controller tabs: Keyboard | Gamepad */
-let activeController = "Keyboard";
+let activeController = "Gamepad";
 document.querySelectorAll(".ctab").forEach((btn) => {
   btn.onclick = () => {
     const prev = activeController;
@@ -949,6 +949,11 @@ document.querySelectorAll(".ctab").forEach((btn) => {
     if (activeController === "Gamepad") logGamepadStatus();
   };
 });
+
+// GUI selalu start dalam mode Gamepad: samakan backend & badge status
+// dengan seolah-olah tab Gamepad baru saja diklik, tanpa perlu klik manual.
+sendCmd("controller", activeController);
+logGamepadStatus();
 
 /* axis fields: Surge | Sway | Yaw | Vertical */
 const axisEls = { surge: els.axSurge, sway: els.axSway, yaw: els.axYaw, heave: els.axHeave };
@@ -1234,6 +1239,27 @@ function executeJoystickAction(action, mode = "toggle") {
         return;
     }
 
+    case "mount_tilt_up": {
+        const pkt = Manipulator.rotateLeft();
+        console.log("ROTATE LEFT =", pkt);
+        sendPacket(pkt);
+        return;
+    }
+
+    case "mount_tilt_down": {
+        const pkt = Manipulator.rotateRight();
+        console.log("ROTATE RIGHT =", pkt);
+        sendPacket(pkt);
+        return;
+    }
+
+    case "mount_tilt_stop": {
+        const pkt = Manipulator.stopRotate();
+        console.log("ROTATE STOP =", pkt);
+        sendPacket(pkt, true);
+        return;
+    }
+
     /* ================= CAMERA SWITCH ================= */
     case "cam_prev":
     case "cam_next": {
@@ -1282,12 +1308,26 @@ function executeJoystickRelease(action) {
         case "grip_open":
         case "grip_close":
             sendPacket(Manipulator.stopGrip(), true);
+
             return;
+        case "mount_tilt_up":
+        case "mount_tilt_down":
+            sendPacket(Manipulator.stopRotate(), true);
+            return;
+        
     }
 }
 
+// Nama historis "grip" tapi sekarang mencakup semua aksi manipulator AUX
+// (gripper + mount tilt) yang harus tetap bisa dipakai lepas dari otoritas
+// manual/E-Stop navigasi ROV — lihat komentar di jalur AUX pada pollGamepad().
 function isGripAction(action) {
-  return action === "grip_open" || action === "grip_close";
+  return (
+    action === "grip_open" ||
+    action === "grip_close" ||
+    action === "mount_tilt_up" ||
+    action === "mount_tilt_down"
+  );
 }
 
 /* Proses tombol gamepad yang aksinya lolos `accept`.

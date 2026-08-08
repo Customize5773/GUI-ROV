@@ -86,9 +86,12 @@ except ImportError:
 try:
     from pyzbar import pyzbar
     PYZBAR_OK = True
-except ImportError:
+except Exception as _e:
+    # ImportError (paket tak terpasang) ATAU error load DLL native (mis. libzbar-64.dll /
+    # libiconv.dll tak ketemu di Windows) — keduanya berarti pyzbar tak bisa dipakai.
+    # decode_qr() tetap jalan lewat fallback cv2.QRCodeDetector di bawah.
     PYZBAR_OK = False
-    log.warning("[vision] pyzbar tidak tersedia — QR detection dinonaktifkan")
+    log.warning(f"[vision] pyzbar tidak tersedia ({_e}) — pakai fallback cv2.QRCodeDetector")
 
 # Mapping QR → sisi kolam A/B/C/D dilakukan oleh wall_from_qr() di atas
 # (isi QR sesuai panduan KKI 2026 hal. 52; toleran terhadap prefiks/sufiks).
@@ -199,6 +202,12 @@ class VisionPipeline:
         wall_cnn=None,
         wall_cnn_votes: int = 3,
         wall_cnn_min_conf: float = 0.8,
+        qr_device=None,
+        qr_url: Optional[str] = None,
+        hook_device=None,
+        hook_url: Optional[str] = None,
+        calib_file_qr: Optional[str] = None,
+        calib_file_hook: Optional[str] = None,
     ):
         """
         Parameters
@@ -223,6 +232,17 @@ class VisionPipeline:
                      — ambil lewat latest_wall_hint(). Lihat vision/wall_cnn.py.
         wall_cnn_votes    : jumlah frame berturut-turut yang harus sepakat (WallVoter)
         wall_cnn_min_conf : confidence minimum agar sebuah tebakan dihitung
+
+        qr_device, qr_url, hook_device, hook_url : ROV punya DUA kamera fisik (BOTTOM
+                     utk QR docking, WALL utk hook). Isi qr_url/qr_device (utk kamera
+                     BOTTOM) DAN hook_url/hook_device (utk kamera WALL) sekaligus untuk
+                     mengaktifkan mode dual-camera (dua capture + dua thread independen).
+                     Isi salah satu saja → keduanya berbagi kamera itu (mode lama, dgn
+                     warning). Tak isi keduanya → source/device/rtsp_url di atas dipakai
+                     persis seperti sebelumnya (satu kamera utk QR+hook, tak berubah).
+        calib_file_qr, calib_file_hook : kalibrasi terpisah per kamera dlm mode dual
+                     (mis. vision/calibration/bottom.npz & wall.npz). Diabaikan bila
+                     mode dual tak aktif — pakai calib_file biasa.
         """
         self.source = source
         self.device = device
@@ -233,11 +253,33 @@ class VisionPipeline:
         self.cam_height = cam_height
         self._running = False
         self._thread: Optional[threading.Thread] = None
+        self._thread_qr: Optional[threading.Thread] = None
+        self._thread_hook: Optional[threading.Thread] = None
         self._cap = None
+        self._cap_qr = None
+        self._cap_hook = None
         self._last_result: Optional[dict] = None
         self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
         self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
         self._last_wall_hint: Optional[dict] = None   # tebakan CNN saat decode GAGAL (opt-in)
+
+        # ── Dual-camera (BOTTOM utk QR, WALL utk hook) ─────────────────────────
+        qr_src = qr_url if qr_url is not None else qr_device
+        hook_src = hook_url if hook_url is not None else hook_device
+        self._dual = False
+        self._qr_src = None
+        self._hook_src = None
+        if qr_src is not None and hook_src is not None:
+            self._dual = True
+            self._qr_src = qr_src
+            self._hook_src = hook_src
+        elif qr_src is not None or hook_src is not None:
+            shared = qr_src if qr_src is not None else hook_src
+            log.warning("[vision] hanya 1 kamera dikonfigurasi (qr=%s, hook=%s) — "
+                        "QR dan hook berbagi kamera itu", qr_src, hook_src)
+            self.device = shared
+            if self.source != 'mock':
+                self.source = 'usb'   # cv2.VideoCapture terima str (URL) maupun int
 
         # Fallback sisi kolam (opsional). Dimuat malas & gagal-lunak: ROV tetap terbang
         # walau bobot belum diekspor — QR normal tak boleh ikut mati gara-gara ini.
@@ -271,6 +313,26 @@ class VisionPipeline:
             except Exception as e:
                 log.warning("[vision] gagal muat kalibrasi %s: %s — fallback IBVS", calib_file, e)
 
+        # Kalibrasi per-kamera dlm mode dual (dipakai _run_qr_camera/_run_hook_camera).
+        # Mode non-dual: _K_qr/_K_hook dibiarkan None, kode fallback ke self._K bersama.
+        self._K_qr, self._dist_qr = None, None
+        self._K_hook, self._dist_hook = None, None
+        if self._dual and CV2_OK:
+            if calib_file_qr:
+                try:
+                    d = np.load(calib_file_qr)
+                    self._K_qr, self._dist_qr = d['K'], d['dist']
+                    log.info("[vision] Kalibrasi QR/BOTTOM dimuat: %s", calib_file_qr)
+                except Exception as e:
+                    log.warning("[vision] gagal muat kalibrasi QR %s: %s", calib_file_qr, e)
+            if calib_file_hook:
+                try:
+                    d = np.load(calib_file_hook)
+                    self._K_hook, self._dist_hook = d['K'], d['dist']
+                    log.info("[vision] Kalibrasi hook/WALL dimuat: %s", calib_file_hook)
+                except Exception as e:
+                    log.warning("[vision] gagal muat kalibrasi hook %s: %s", calib_file_hook, e)
+
     # ── Public API ────────────────────────────────────────────────────────────
 
     def start(self):
@@ -278,17 +340,34 @@ class VisionPipeline:
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._run, daemon=True, name='VisionThread')
-        self._thread.start()
-        log.info("[vision] Started (source=%s)", self.source)
+        if self._dual and self.source != 'mock':
+            self._thread_qr = threading.Thread(target=self._run_qr_camera, daemon=True,
+                                               name='VisionThreadQR')
+            self._thread_hook = threading.Thread(target=self._run_hook_camera, daemon=True,
+                                                 name='VisionThreadHook')
+            self._thread_qr.start()
+            self._thread_hook.start()
+            log.info("[vision] Started dual-camera (qr=%s, hook=%s)", self._qr_src, self._hook_src)
+        else:
+            self._thread = threading.Thread(target=self._run, daemon=True, name='VisionThread')
+            self._thread.start()
+            log.info("[vision] Started (source=%s)", self.source)
 
     def stop(self):
         """Hentikan thread capture."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=3)
+        if self._thread_qr:
+            self._thread_qr.join(timeout=3)
+        if self._thread_hook:
+            self._thread_hook.join(timeout=3)
         if self._cap and CV2_OK:
             self._cap.release()
+        if self._cap_qr and CV2_OK:
+            self._cap_qr.release()
+        if self._cap_hook and CV2_OK:
+            self._cap_hook.release()
         log.info("[vision] Stopped")
 
     def last_result(self) -> Optional[dict]:
@@ -374,7 +453,7 @@ class VisionPipeline:
         interval = 1.0 / self.fps
         log.info("[vision] Kamera terbuka: %s", src)
         if not PYZBAR_OK:
-            log.error("[vision] pyzbar tidak tersedia — QR tak bisa dideteksi dari kamera")
+            log.warning("[vision] pyzbar tidak tersedia — pakai fallback cv2.QRCodeDetector (kurang robust)")
 
         while self._running:
             t_start = time.time()
@@ -418,6 +497,86 @@ class VisionPipeline:
             elapsed = time.time() - t_start
             sleep_t = max(0, interval - elapsed)
             time.sleep(sleep_t)
+
+    def _open_capture(self, src):
+        """Buka cv2.VideoCapture utk `src` (index int ATAU URL str), atur resolusi bila USB."""
+        cap = cv2.VideoCapture(src)
+        if not cap.isOpened():
+            log.error("[vision] Tidak bisa membuka sumber kamera: %s", src)
+            return None
+        if isinstance(src, int):
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.cam_width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.cam_height)
+        log.info("[vision] Kamera terbuka: %s", src)
+        return cap
+
+    def _run_qr_camera(self):
+        """Thread dual-camera — kamera BOTTOM, deteksi QR saja (mirror _run_camera)."""
+        self._cap_qr = self._open_capture(self._qr_src)
+        if self._cap_qr is None:
+            return
+        interval = 1.0 / self.fps
+        if not PYZBAR_OK:
+            log.warning("[vision] pyzbar tidak tersedia — pakai fallback cv2.QRCodeDetector (kurang robust)")
+        K = self._K_qr if self._K_qr is not None else self._K
+        dist = self._dist_qr if self._K_qr is not None else self._dist
+
+        while self._running:
+            t_start = time.time()
+            ret, frame = self._cap_qr.read()
+            if not ret:
+                log.warning("[vision] Frame QR gagal dibaca, retry...")
+                time.sleep(0.5)
+                continue
+
+            dets = decode_qr(frame)
+            if not dets:
+                self._try_wall_fallback(frame)
+            elif self._wall_voter is not None:
+                self._wall_voter.reset()
+                self._last_wall_hint = None
+            for det in dets:
+                data = det['data']
+                pts = det['pts']
+                center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
+                area = float(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32)))
+                frame = self._annotate(frame, data, center, pts.astype(int))
+                result = self._build_result(data, center, area, frame)
+                if K is not None and len(pts) >= 4:
+                    ordered = self._order_corners(pts)
+                    result['pose'] = self._estimate_pose_pts(ordered, self.qr_length, K=K, dist=dist)
+                self._dispatch(result)
+
+            elapsed = time.time() - t_start
+            time.sleep(max(0, interval - elapsed))
+
+    def _run_hook_camera(self):
+        """Thread dual-camera — kamera WALL, deteksi hook saja (mirror _run_camera)."""
+        self._cap_hook = self._open_capture(self._hook_src)
+        if self._cap_hook is None:
+            return
+        interval = 1.0 / self.fps
+        K = self._K_hook if self._K_hook is not None else self._K
+
+        while self._running:
+            t_start = time.time()
+            ret, frame = self._cap_hook.read()
+            if not ret:
+                log.warning("[vision] Frame hook gagal dibaca, retry...")
+                time.sleep(0.5)
+                continue
+
+            focal = float(K[0, 0]) if K is not None else None
+            hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
+                               min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
+                               focal_px=focal)
+            if hook is not None:
+                self._last_hook = hook
+                log.debug("[vision] Deteksi hook center=%s area=%.0f conf=%.2f method=%s",
+                          hook['center'], hook['area'], hook['confidence'], hook['method'])
+
+            elapsed = time.time() - t_start
+            time.sleep(max(0, interval - elapsed))
 
     # ── Helper ────────────────────────────────────────────────────────────────
 
@@ -512,17 +671,20 @@ class VisionPipeline:
         bl = pts[np.argmax(d)]              # y-x terbesar
         return np.array([tl, tr, br, bl], dtype=np.float32)
 
-    def _estimate_pose_pts(self, img_pts, side) -> Optional[dict]:
+    def _estimate_pose_pts(self, img_pts, side, K=None, dist=None) -> Optional[dict]:
         """Pose fiducial persegi via solvePnP dari 4 sudut TERURUT (TL,TR,BR,BL) + sisi (m).
-        Camera frame OpenCV: +x kanan, +y bawah, +z depan. → {x,y,z,dist (m), yaw_deg}."""
-        if self._K is None or not CV2_OK:
+        Camera frame OpenCV: +x kanan, +y bawah, +z depan. → {x,y,z,dist (m), yaw_deg}.
+        K/dist opsional (mode dual-camera, kalibrasi per-kamera) — default self._K/_dist."""
+        K = K if K is not None else self._K
+        dist = dist if dist is not None else self._dist
+        if K is None or not CV2_OK:
             return None
         L = side
         objp = np.array([[-L / 2, L / 2, 0], [L / 2, L / 2, 0],
                          [L / 2, -L / 2, 0], [-L / 2, -L / 2, 0]], dtype=np.float32)
         img = np.asarray(img_pts, dtype=np.float32).reshape(4, 2)
         flags = getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', cv2.SOLVEPNP_ITERATIVE)
-        ok, rvec, tvec = cv2.solvePnP(objp, img, self._K, self._dist, flags=flags)
+        ok, rvec, tvec = cv2.solvePnP(objp, img, K, dist, flags=flags)
         if not ok:
             return None
         tvec = np.asarray(tvec, dtype=float).ravel()   # (3,1) → (3,); aman di numpy 2.x

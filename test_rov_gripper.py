@@ -5,7 +5,7 @@
 
 import unittest
 
-from rov_gripper import (
+from gripper_controller import (
     GRIPPER_AXIS_DEADZONE,
     GRIPPER_PWM_CLOSE,
     GRIPPER_PWM_NEUTRAL,
@@ -119,11 +119,11 @@ class TestKonsistensiDenganRovLink(unittest.TestCase):
             m = re.search(rf"^{name}\s*=\s*(\d+)", src, re.M)
             return int(m.group(1)) if m else None
 
-        import rov_gripper
+        import gripper_controller
 
-        self.assertEqual(const("GRIPPER_SERVO_CH"), rov_gripper.GRIPPER_SERVO_CH)
-        self.assertEqual(const("GRIPPER_PWM_OPEN"), rov_gripper.GRIPPER_PWM_OPEN)
-        self.assertEqual(const("GRIPPER_PWM_CLOSE"), rov_gripper.GRIPPER_PWM_CLOSE)
+        self.assertEqual(const("GRIPPER_SERVO_CH"), gripper_controller.GRIPPER_SERVO_CH)
+        self.assertEqual(const("GRIPPER_PWM_OPEN"), gripper_controller.GRIPPER_PWM_OPEN)
+        self.assertEqual(const("GRIPPER_PWM_CLOSE"), gripper_controller.GRIPPER_PWM_CLOSE)
 
 
 if __name__ == "__main__":

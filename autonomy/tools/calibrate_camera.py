@@ -33,6 +33,18 @@ python tools/pose_webcam_test.py  --device 0 --calib vision/calibration/laptop.n
   python tools/calibrate_camera.py --device 0 --auto --save-dir calib_imgs \
          --cols 9 --rows 6 --square 25 --out vision/calibration/dwe.npz
 
+  # Mode STREAM ROV (--url): kalibrasi pakai kamera ROV langsung (bottom & wall),
+  # bukan webcam laptop. URL sesuai public/js/config.js (CAMERAS[].url).
+  # Jalankan SEKALI PER KAMERA (satu proses = satu kamera), --out berbeda tiap kamera.
+  # Lakukan DI DALAM AIR di kolam (lihat catatan refraksi di atas) sambil papan
+  # catur digerakkan perlahan di depan kamera.
+  python tools/calibrate_camera.py --url http://192.168.2.2:8080/stream --auto \
+         --save-dir calib_imgs_bottom --cols 9 --rows 6 --square 25 \
+         --out vision/calibration/bottom.npz
+  python tools/calibrate_camera.py --url http://192.168.2.2:8081/stream --auto \
+         --save-dir calib_imgs_wall --cols 9 --rows 6 --square 25 \
+         --out vision/calibration/wall.npz
+
   # Mode FOLDER (dari gambar tersimpan — paling anti-gagal, tak butuh GUI/tombol)
   python tools/calibrate_camera.py --from-folder calib_imgs --cols 9 --rows 6 --square 25 \
          --out vision/calibration/dwe.npz
@@ -48,6 +60,8 @@ import numpy as np
 
 ap = argparse.ArgumentParser()
 ap.add_argument("--device", type=int, default=0)
+ap.add_argument("--url", default=None,
+                help="stream kamera ROV (mis. http://192.168.2.2:8080/stream) — override --device")
 ap.add_argument("--from-folder", default=None, help="kalibrasi dari folder gambar (*.png/*.jpg)")
 ap.add_argument("--cols", type=int, default=9, help="jumlah SUDUT-DALAM per baris")
 ap.add_argument("--rows", type=int, default=6, help="jumlah SUDUT-DALAM per kolom")
@@ -124,9 +138,10 @@ if args.from_folder:
     sys.exit(0)
 
 # ── Mode LIVE ────────────────────────────────────────────────────────────────
-cap = cv2.VideoCapture(args.device)
+src = args.url if args.url else args.device
+cap = cv2.VideoCapture(src)
 if not cap.isOpened():
-    sys.exit(f"Tidak bisa membuka webcam index {args.device}")
+    sys.exit(f"Tidak bisa membuka sumber kamera: {src}")
 
 last_cap_t = 0.0
 last_center = None
