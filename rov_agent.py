@@ -179,10 +179,37 @@ requested_mode_ts = 0.0
 REQUESTED_MODE_TIMEOUT = 3.0
 
 # Depth hold didelegasikan ke ALT_HOLD ArduSub; depth_target hanya menggeser
-# setpoint lewat bias kecil pada throttle. Dibatasi supaya tidak pernah bisa
-# melawan operator atau menyelam tak terkendali di kolam dangkal.
-DEPTH_BIAS_GAIN = 200.0   # unit z per meter error
-DEPTH_BIAS_LIMIT = 80     # |bias| maksimum terhadap Z_NEUTRAL (500)
+# setpoint lewat bias pada throttle. Dibatasi supaya tidak pernah bisa melawan
+# operator atau menyelam tak terkendali di kolam dangkal.
+#
+# ALT_HOLD ArduSub punya DEADZONE throttle (param THR_DZ, saat ini 100 PWM):
+# input dalam +-THR_DZ dari netral diartikan "tahan kedalaman sekarang", BUKAN
+# perintah naik/turun. MANUAL_CONTROL.z 0..1000 dipetakan ke 1100..1900 PWM,
+# jadi 1 unit z = 0.8 PWM dan deadzone 100 PWM = 125 unit z.
+#
+# Trial kolam 2026-08-08 membuktikan konsekuensinya: dengan LIMIT lama = 80
+# (setara HANYA 64 PWM), bias maksimum pun masih tenggelam di dalam deadzone,
+# sehingga perintah kedalaman TIDAK PERNAH sampai ke controller ALT_HOLD.
+# Di CSV terlihat error -1.74 m (4x titik saturasi) selama >1 detik dengan
+# depth rata sempurna di 1.89 m — wahana tidak bergerak sama sekali.
+#
+# Karena itu bias TIDAK naik proporsional dari nol, melainkan langsung
+# di-offset melewati deadzone begitu error melewati DEPTH_BIAS_EPSILON (lihat
+# apply_depth_hold_bias). Error nol tetap menghasilkan netral persis.
+DEPTH_BIAS_GAIN = 200.0   # unit z per meter error, DI ATAS offset deadzone
+DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
+
+# Offset minimum supaya perintah benar-benar keluar dari deadzone ALT_HOLD.
+# 130 > 125 (THR_DZ=100 PWM) dengan margin kecil terhadap pembulatan.
+# NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
+DEPTH_BIAS_DEADZONE = 130
+
+# Di bawah error ini bias dimatikan total (netral persis = ALT_HOLD menahan
+# kedalaman dengan PID-nya sendiri). Tanpa ambang ini, offset deadzone yang
+# besar akan membuat wahana terus bolak-balik melewati setpoint. Setengah
+# DEPTH_STEP: operator tidak akan pernah membidik lebih halus dari itu.
+DEPTH_BIAS_EPSILON = DEPTH_STEP / 2.0
+
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
 
 
@@ -215,8 +242,28 @@ def depth_hold_active():
     return depth_hold_allowed(_effective_requested_mode() or state["mode"])
 
 
+def depth_hold_bias(error):
+    """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
+
+    Dipisah dari apply_depth_hold_bias() supaya bisa diuji tanpa state global.
+
+    Bentuknya BUKAN proporsional murni: ALT_HOLD ArduSub mengabaikan input di
+    dalam deadzone THR_DZ, jadi bias proporsional dari nol berarti semua error
+    kecil hilang tanpa jejak (dan error besar pun hilang kalau limit-nya lebih
+    kecil dari deadzone — persis bug trial 2026-08-08). Maka: di bawah
+    DEPTH_BIAS_EPSILON bias nol persis, di atasnya langsung melompat ke
+    DEPTH_BIAS_DEADZONE lalu bertambah proporsional.
+    """
+    if abs(error) < DEPTH_BIAS_EPSILON:
+        return 0.0
+
+    magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN
+    magnitude = min(magnitude, DEPTH_BIAS_LIMIT)
+    return magnitude if error > 0 else -magnitude
+
+
 def apply_depth_hold_bias(mc, axes):
-    """Geser MANUAL_CONTROL.z sedikit ke arah depth_target saat ALT_HOLD.
+    """Geser MANUAL_CONTROL.z ke arah depth_target saat ALT_HOLD.
 
     Hanya berlaku kalau stik heave benar-benar netral — begitu operator
     menyentuh stik, input manual menang mutlak. Di MANUAL/ACRO fungsi ini
@@ -231,8 +278,9 @@ def apply_depth_hold_bias(mc, axes):
         target = depth_target
 
     # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
-    error = target - state["depth"]
-    bias = max(-DEPTH_BIAS_LIMIT, min(DEPTH_BIAS_LIMIT, error * DEPTH_BIAS_GAIN))
+    bias = depth_hold_bias(target - state["depth"])
+    if bias == 0.0:
+        return mc
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
