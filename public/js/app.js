@@ -926,7 +926,7 @@ document.querySelectorAll("#modeBar .mode").forEach((btn) => {
 });
 
 /* controller tabs: Keyboard | Gamepad */
-let activeController = "Keyboard";
+let activeController = "Gamepad";
 document.querySelectorAll(".ctab").forEach((btn) => {
   btn.onclick = () => {
     const prev = activeController;
@@ -949,6 +949,11 @@ document.querySelectorAll(".ctab").forEach((btn) => {
     if (activeController === "Gamepad") logGamepadStatus();
   };
 });
+
+// GUI selalu start dalam mode Gamepad: samakan backend & badge status
+// dengan seolah-olah tab Gamepad baru saja diklik, tanpa perlu klik manual.
+sendCmd("controller", activeController);
+logGamepadStatus();
 
 /* axis fields: Surge | Sway | Yaw | Vertical */
 const axisEls = { surge: els.axSurge, sway: els.axSway, yaw: els.axYaw, heave: els.axHeave };
