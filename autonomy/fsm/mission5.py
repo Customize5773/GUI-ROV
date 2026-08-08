@@ -72,7 +72,9 @@ QR_SIDE_M          = 0.04     # sisi fisik QR payload (m) — KKI 2026 = 4 cm (u
 SERVO_TARGET_AREA  = 3000.0   # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
 SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payload (TUNE di kolam)
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
-CALIB_FILE         = None     # path .npz kalibrasi kamera; None → IBVS (piksel)
+CALIB_FILE         = None     # path .npz kalibrasi kamera (jalur satu-kamera lama); None → IBVS
+CALIB_FILE_BOTTOM  = "vision/calibration/bottom.npz"  # kalibrasi kamera QR/BOTTOM (mode dual-camera)
+CALIB_FILE_WALL    = "vision/calibration/wall.npz"    # kalibrasi kamera hook/WALL (mode dual-camera)
 
 # Gain PID servo docking (TUNE di kolam — pindahkan lwt --config bila sering diubah)
 IBVS_KP_SWAY, IBVS_KP_SURGE, IBVS_KP_VERT = 45.0, 40.0, 35.0    # mode IBVS (piksel)
@@ -992,9 +994,23 @@ def main():
     ap.add_argument('--rtsp', default='rtsp://192.168.1.10:8554/cam',
                     help='URL RTSP jika --vision=rtsp')
     ap.add_argument('--calib', default=CALIB_FILE,
-                    help='path .npz kalibrasi kamera → aktifkan PBVS (solvePnP). Tanpa ini = IBVS')
+                    help='path .npz kalibrasi kamera (jalur satu-kamera lama) → aktifkan PBVS. Tanpa ini = IBVS')
     ap.add_argument('--qr-size', type=float, default=QR_SIDE_M,
                     help='sisi QR payload fisik (m) utk solvePnP PBVS (KKI 2026 = 0.04)')
+    ap.add_argument('--bottom-url', default=None,
+                    help='URL stream kamera BOTTOM (QR docking). Isi bersama --wall-url utk mode dual-camera.')
+    ap.add_argument('--wall-url', default=None,
+                    help='URL stream kamera WALL (hook). Isi bersama --bottom-url utk mode dual-camera.')
+    ap.add_argument('--calib-bottom', default=CALIB_FILE_BOTTOM,
+                    help='kalibrasi .npz kamera BOTTOM (mode dual-camera)')
+    ap.add_argument('--calib-wall', default=CALIB_FILE_WALL,
+                    help='kalibrasi .npz kamera WALL (mode dual-camera)')
+    ap.add_argument('--no-wall-cnn', action='store_true',
+                    help='matikan fallback wall-CNN saat decode_qr() gagal (default: AKTIF)')
+    ap.add_argument('--wall-cnn-votes', type=int, default=3,
+                    help='jumlah frame berturut-turut sepakat sebelum wall-CNN dipercaya')
+    ap.add_argument('--wall-cnn-min-conf', type=float, default=0.8,
+                    help='confidence minimum agar tebakan wall-CNN dihitung')
     ap.add_argument('--start-state', default='DIVE',
                     choices=['DIVE', 'M5_REDIVE', 'M5_DOCK'],
                     help='DIVE=full misi 1-5; M5_REDIVE=misi 5 autonomous (1-4 manual via GUI); '
@@ -1019,7 +1035,12 @@ def main():
                            rtsp_url=args.rtsp,
                            calib_file=args.calib, qr_length=args.qr_size,
                            hook_hsv_range=HOOK_COLOR_HSV_RANGE,
-                           hook_min_area=HOOK_MIN_AREA, hook_pipe_diam=HOOK_PIPE_DIAM_M)
+                           hook_min_area=HOOK_MIN_AREA, hook_pipe_diam=HOOK_PIPE_DIAM_M,
+                           qr_url=args.bottom_url, hook_url=args.wall_url,
+                           calib_file_qr=args.calib_bottom, calib_file_hook=args.calib_wall,
+                           wall_cnn=None if args.no_wall_cnn else True,
+                           wall_cnn_votes=args.wall_cnn_votes,
+                           wall_cnn_min_conf=args.wall_cnn_min_conf)
     log.info("[main] Mode visi: %s", "PBVS (solvePnP)" if args.calib else "IBVS (piksel)")
 
     telem.start()

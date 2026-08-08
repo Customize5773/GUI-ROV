@@ -38,8 +38,12 @@ import time
 
 from pymavlink import mavutil
 
-from fsm.mission5 import Mission5FSM, State, CommandSender, TelemetryReceiver
+from fsm.mission5 import (Mission5FSM, State, CommandSender, TelemetryReceiver,
+                          QR_SIDE_M, HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA, HOOK_PIPE_DIAM_M)
 from vision.qr_detect import VisionPipeline
+
+CALIB_BOTTOM_DEFAULT = "vision/calibration/bottom.npz"
+CALIB_WALL_DEFAULT   = "vision/calibration/wall.npz"
 
 # ───────────────────────── Konfigurasi yang perlu DIVERIFIKASI ke setup ArduSub kalian ──
 WATER_RHO = 997.0          # kg/m³ air tawar (kolam). Air laut ≈ 1025.
@@ -246,7 +250,22 @@ class RovLink:
         device = self.args.fsm_vision_device if device is None else device
         cmd = CommandSender(host="127.0.0.1", port=self.args.json_rx_port)
         telem = TelemetryReceiver(host="0.0.0.0", port=self.fsm_telem_port)
-        vision = VisionPipeline(source=vision_source, device=device)
+        # Dual-camera (BOTTOM=QR docking, WALL=hook) bila kedua URL diisi; jika tidak,
+        # jatuh ke jalur lama (satu kamera dari --fsm-vision-source/--fsm-vision-device).
+        bottom_url = getattr(self.args, "fsm_bottom_url", None)
+        wall_url = getattr(self.args, "fsm_wall_url", None)
+        wall_cnn_on = getattr(self.args, "fsm_wall_cnn", True)
+        vision = VisionPipeline(
+            source=vision_source, device=device,
+            rtsp_url=getattr(self.args, "fsm_rtsp_url", None) or "rtsp://hydroship:8554/cam",
+            qr_url=bottom_url, hook_url=wall_url,
+            calib_file_qr=getattr(self.args, "fsm_calib_bottom", None),
+            calib_file_hook=getattr(self.args, "fsm_calib_wall", None),
+            qr_length=getattr(self.args, "fsm_qr_size", QR_SIDE_M),
+            hook_hsv_range=HOOK_COLOR_HSV_RANGE,
+            hook_min_area=HOOK_MIN_AREA, hook_pipe_diam=HOOK_PIPE_DIAM_M,
+            wall_cnn=True if wall_cnn_on else None,
+        )
         telem.start()
         vision.start()
         fsm = Mission5FSM(cmd=cmd, telem=telem, vision=vision)
@@ -375,7 +394,25 @@ def main():
                      help="port loopback tempat Mission5FSM in-process menerima telemetri (auto-dikelola oleh toggle GUI)")
     ap.add_argument("--fsm-vision-source", default="usb", choices=["mock", "usb", "rtsp"],
                      help="sumber video Mission5FSM saat autonomy dimulai dari GUI")
-    ap.add_argument("--fsm-vision-device", type=int, default=0, help="index USB webcam utk Mission5FSM (jika --fsm-vision-source usb)")
+    ap.add_argument("--fsm-vision-device", type=int, default=0, help="index USB webcam utk Mission5FSM (jika --fsm-vision-source usb, jalur satu-kamera lama)")
+    ap.add_argument("--fsm-rtsp-url", default=None,
+                     help="URL RTSP/HTTP eksplisit jalur satu-kamera lama (jika --fsm-vision-source rtsp). "
+                          "Tanpa ini, default hardcode rtsp://hydroship:8554/cam BUKAN kamera ROV asli.")
+    ap.add_argument("--fsm-bottom-url", default=None,
+                     help="URL stream kamera BOTTOM (QR docking), mis. http://192.168.2.2:8080/stream. "
+                          "Isi bersama --fsm-wall-url utk aktifkan mode dual-camera.")
+    ap.add_argument("--fsm-wall-url", default=None,
+                     help="URL stream kamera WALL (hook), mis. http://192.168.2.2:8081/stream. "
+                          "Isi bersama --fsm-bottom-url utk aktifkan mode dual-camera.")
+    ap.add_argument("--fsm-calib-bottom", default=CALIB_BOTTOM_DEFAULT,
+                     help="kalibrasi .npz kamera BOTTOM (mode dual-camera)")
+    ap.add_argument("--fsm-calib-wall", default=CALIB_WALL_DEFAULT,
+                     help="kalibrasi .npz kamera WALL (mode dual-camera)")
+    ap.add_argument("--fsm-qr-size", type=float, default=QR_SIDE_M,
+                     help="sisi fisik QR payload (m) utk solvePnP PBVS")
+    ap.add_argument("--fsm-wall-cnn", type=lambda s: s.lower() not in ("0", "false", "no", "off"),
+                     default=True, metavar="BOOL",
+                     help="aktifkan fallback wall-CNN saat decode_qr() gagal (default aktif)")
     args = ap.parse_args()
     RovLink(args).run()
 
