@@ -7,14 +7,16 @@ import unittest
 
 from rov_pid import (
     DEPTH_BIAS_DEADZONE,
-    DEPTH_BIAS_EPSILON,
+    DEPTH_BIAS_ENGAGE,
     DEPTH_BIAS_GAIN,
     DEPTH_BIAS_LIMIT,
+    DEPTH_BIAS_RELEASE,
     PARAM_TO_PID,
     PID_PARAM_MAP,
     PID_WRITE_ORDER,
     REAL32,
     clamp_depth_target,
+    depth_bias_active,
     depth_hold_bias,
     pid_param_names,
     resolve_pid_writes,

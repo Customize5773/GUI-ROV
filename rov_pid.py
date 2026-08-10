@@ -152,8 +152,8 @@ def resolve_pid_writes(payload):
 # depth rata sempurna di 1.89 m — wahana tidak bergerak sama sekali.
 #
 # Karena itu bias TIDAK naik proporsional dari nol, melainkan langsung
-# di-offset melewati deadzone begitu error melewati DEPTH_BIAS_EPSILON (lihat
-# apply_depth_hold_bias). Error nol tetap menghasilkan netral persis.
+# di-offset melewati deadzone begitu bias diaktifkan (lihat depth_bias_active
+# di bawah). Error nol tetap menghasilkan netral persis.
 DEPTH_BIAS_GAIN = 200.0   # unit z per meter error, DI ATAS offset deadzone
 DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
 
@@ -162,20 +162,46 @@ DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
 # NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
 DEPTH_BIAS_DEADZONE = 130
 
-# Di bawah error ini bias dimatikan total (netral persis = ALT_HOLD menahan
-# kedalaman dengan PID-nya sendiri). Tanpa ambang ini, offset deadzone yang
-# besar (DEPTH_BIAS_DEADZONE) akan membuat wahana terus bolak-balik melewati
-# setpoint: error sekecil apa pun langsung memicu dorongan penuh 130 unit z.
+# DUA ambang, bukan satu — ini HISTERESIS, dan perbedaannya menentukan apakah
+# wahana menahan kedalaman atau berosilasi di sekitarnya.
 #
-# 0.025 m kira-kira sebesar noise pembacaan baro di kolam dangkal, jadi di
-# bawahnya "error" yang terlihat bukan error sungguhan. Ini juga toleransi
-# akhir depth-set: tekan SET lalu OFF/ON akan kembali ke kedalaman yang sama
-# dalam +-nilai ini, bukan lebih presisi.
-DEPTH_BIAS_EPSILON = 0.025
+# Bias tidak bisa naik landai dari nol (deadzone THR_DZ menelannya), jadi begitu
+# aktif ia langsung melompat ke DEPTH_BIAS_DEADZONE. Dengan SATU ambang, error
+# yang bergetar di sekitar ambang itu membuat dorongan penuh menyala-mati
+# berulang kali: limit cycle klasik, wahana naik-turun melewati setpoint tanpa
+# pernah tenang.
+#
+# Karena itu ambang MENYALA dibuat lebih besar dari ambang MATI:
+#   - diam sampai error benar-benar berarti (>= ENGAGE), lalu
+#   - dorong sampai error benar-benar kecil (< RELEASE), baru lepas.
+# Selisih 0.03 m di antaranya adalah zona tenang tempat noise baro tidak bisa
+# lagi memicu apa pun.
+#
+# RELEASE 0.02 m kira-kira sebesar noise pembacaan baro di kolam dangkal — di
+# bawahnya "error" yang terlihat bukan error sungguhan, dan ALT_HOLD sudah
+# menahan kedalaman dengan PID-nya sendiri. ENGAGE 0.05 m adalah toleransi
+# akhir depth-set yang dijanjikan ke operator: tekan SET lalu OFF/ON akan
+# kembali ke kedalaman yang sama dalam +-nilai itu, bukan lebih presisi.
+#
+# ENGAGE harus > RELEASE. Menyamakannya = kembali ke perilaku satu-ambang.
+DEPTH_BIAS_ENGAGE = 0.05
+DEPTH_BIAS_RELEASE = 0.02
 
 
+def depth_bias_active(error, was_active):
+    """Apakah bias boleh mengalir untuk `error` ini, mengingat keadaan sebelumnya.
 
-def depth_hold_bias(error):
+    Fungsi murni supaya histeresisnya bisa diuji tanpa state global; pemanggil
+    (apply_depth_hold_bias di rov_agent.py) yang menyimpan `was_active` antar
+    tick dan meresetnya saat depth-set dimatikan.
+    """
+    magnitude = abs(error)
+    if was_active:
+        return magnitude > DEPTH_BIAS_RELEASE
+    return magnitude >= DEPTH_BIAS_ENGAGE
+
+
+def depth_hold_bias(error, was_active=False):
     """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
 
     Dipisah dari apply_depth_hold_bias() (rov_agent.py) supaya bisa diuji
@@ -184,16 +210,40 @@ def depth_hold_bias(error):
     Bentuknya BUKAN proporsional murni: ALT_HOLD ArduSub mengabaikan input di
     dalam deadzone THR_DZ, jadi bias proporsional dari nol berarti semua error
     kecil hilang tanpa jejak (dan error besar pun hilang kalau limit-nya lebih
-    kecil dari deadzone — persis bug trial 2026-08-08). Maka: di bawah
-    DEPTH_BIAS_EPSILON bias nol persis, di atasnya langsung melompat ke
+    kecil dari deadzone — persis bug trial 2026-08-08). Maka: selama tidak
+    aktif bias nol persis, dan begitu aktif ia langsung melompat ke
     DEPTH_BIAS_DEADZONE lalu bertambah proporsional.
+
+    `was_active` adalah keluaran depth_bias_active() dari tick sebelumnya —
+    lihat catatan histeresis di atas.
     """
-    if abs(error) < DEPTH_BIAS_EPSILON:
+    if not depth_bias_active(error, was_active):
         return 0.0
 
     magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN
     magnitude = min(magnitude, DEPTH_BIAS_LIMIT)
     return magnitude if error > 0 else -magnitude
+
+
+def smooth_depth(samples, alpha=0.5):
+    """Rata-rata berbobot exponential dari daftar sampel kedalaman.
+
+    Dipakai saat tombol SET: sampel baro bergetar ±0.02–0.05 m, dan kedalaman
+    yang direkam bisa meleset dari yang sebenarnya oleh seluruh toleransi
+    DEPTH_BIAS_RELEASE. Rata-rata 1 detik membersihkan noise itu.
+
+    alpha=0.5: setengah dari nilai terbaru, setengah dari rata-rata historis.
+    alpha=1.0: ambil nilai terbaru tanpa smoothing.
+    """
+    if not samples or len(samples) == 0:
+        return 0.0
+    if len(samples) == 1:
+        return float(samples[0])
+
+    smoothed = float(samples[0])
+    for s in samples[1:]:
+        smoothed = alpha * float(s) + (1.0 - alpha) * smoothed
+    return smoothed
 
 
 def clamp_depth_target(value, pool_depth=None):

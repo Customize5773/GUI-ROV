@@ -26,9 +26,13 @@ from rov_params import (
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from rov_pid import (
+    DEPTH_BIAS_ENGAGE,
+    DEPTH_BIAS_RELEASE,
     clamp_depth_target,
+    depth_bias_active,
     depth_hold_bias,
     resolve_pid_writes,
+    smooth_depth,
     valid_pool_depth,
 )
 
@@ -146,6 +150,20 @@ _raw_depth = 0.0
 
 depth_lock = threading.Lock()
 
+# Buffer sampel kedalaman untuk smoothing saat SET. Baro bergetar ±0.02–0.05 m,
+# dan SET yang merekam satu sampel bisa meleset. Rata-rata 1 detik membersihkan
+# noise itu. Diisi setiap kali AHRS2 datang, dibaca + direset saat SET ditekan.
+# Ringkas: sampel di sini hanya 10 poin terakhir (0.1 s @ 10 Hz), cukup untuk
+# smoothing. Buffer penuh 1 detik tidak perlu — depth hold bisa mulai bekerja
+# segera sesudah SET.
+_depth_samples = []
+_DEPTH_SAMPLE_BUFFER_SIZE = 10  # 0.1 s @ 10 Hz
+
+# State histeresis untuk depth_hold_bias(). Diperbarui tiap kali bias dihitung.
+# Perlu memisahkan "bias sedang mengalir?" dari "bias boleh mengalir untuk error
+# ini?" supaya histeresis bekerja.
+_bias_active = False
+
 # Tombol SET (dan toggle ON/OFF) sifatnya sekali-pencet, tapi backend tidak
 # boleh percaya penuh pada klien: gamepad yang ter-bounce atau klien nakal bisa
 # mengirim puluhan `depth_set` per detik dan membanjiri log + event GUI. 2 Hz
@@ -254,10 +272,21 @@ def apply_depth_hold_bias(mc, axes):
         axes.get("heave", 0),
         HEAVE_MANUAL_EPSILON,
     ):
+        global _bias_active
+        _bias_active = False
         return mc
 
     # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
-    bias = depth_hold_bias(target - state["depth"])
+    # HISTERESIS untuk menghindari limit cycle (naik-turun terus di sekitar
+    # setpoint). depth_bias_active() memakai _bias_active yang diperbarui di
+    # sini: begitu error kecil (< RELEASE) bias berhenti, dan bias-nya hanya
+    # menyala kembali saat error membesar (>= ENGAGE). Selisih antara keduanya
+    # adalah zona tenang tempat noise baro tidak lagi bisa trigger osilasi.
+    _bias_active = depth_bias_active(
+        target - state["depth"],
+        _bias_active
+    )
+    bias = depth_hold_bias(target - state["depth"], _bias_active)
     if bias == 0.0:
         return mc
 
@@ -644,6 +673,33 @@ def command_listener():
                             f"[DEPTH] Hold target dipertahankan = "
                             f"{depth_target:.2f} m"
                         )
+                # Pindah ke depth-hold dengan error BESAR + depth-set ON =
+                # penyelaman mendadak. Peringatkan ke operator dan matikan saklar.
+                # Ini mencegah kejutan: operator pindah balik dari Manual ke Alt
+                # Hold saat wahana di permukaan, saklar masih ON dari kedalaman
+                # kerja sebelumnya (0.5 m) → bias langsung dorong penuh tanpa
+                # orang menekan apa pun.
+                if (
+                    depth_hold_mode_ok() and
+                    depth_hold_enabled and
+                    depth_target is not None and
+                    abs(depth_target - state["depth"]) > 0.3
+                ):
+                    with depth_lock:
+                        depth_hold_enabled = False
+                    send_to_gui({
+                        "type": "event",
+                        "text": (
+                            f"Depth-set OFF — error {abs(depth_target - state['depth']):.2f} m "
+                            f"terlalu besar, tahan dulu dengan stik"
+                        ),
+                        "level": "warn",
+                    })
+                    print(
+                        f"[DEPTH] Depth-set OFF — error besar saat pindah "
+                        f"ke depth-hold"
+                    )
+
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if poshold_active:
@@ -705,12 +761,20 @@ def command_listener():
                 if not _depth_cmd_rate.allow("depth_set", time.time()):
                     continue
 
+                # Smoothing: sampel baro bergetar ±0.02–0.05 m. Rata-rata
+                # menghilangkan noise tanpa lag berarti (buffer 0.1 s). Operator
+                # akan melihat angka yang stabil di GUI sebelum tekan SET.
+                global _depth_samples
+                smoothed = smooth_depth(_depth_samples, alpha=0.7)
+
                 with depth_lock:
                     # Dijepit ke [0, pool_depth]: pembacaan baro bisa meleset di
                     # dekat dasar, dan setpoint di luar kolam membuat bias
                     # menekan wahana ke dasar tanpa henti.
-                    depth_target = clamp_depth_target(state["depth"], pool_depth)
+                    depth_target = clamp_depth_target(smoothed, pool_depth)
                     shown = depth_target
+                    global _bias_active
+                    _bias_active = False  # Reset histeresis saat SET
                 print(f"[DEPTH] Set = {shown:.2f} m")
                 send_to_gui({
                     "type": "event",
@@ -722,15 +786,15 @@ def command_listener():
 
                 # Saklar ON/OFF depth-set. value bool eksplisit dari tombol GUI,
                 # atau None dari tombol gamepad (= toggle).
-                if not _depth_cmd_rate.allow("depth_hold", time.time()):
-                    continue
-
+                #
+                # OFF adalah operasi yang WAJIB berhasil — mematikan sesuatu tidak
+                # boleh pernah tertahan rate limiter. Rate limit hanya untuk ON,
+                # yang memicu aksi penting. OFF hanya membaca dan matikan state.
                 with depth_lock:
                     want = (not depth_hold_enabled) if value is None else bool(value)
                     target_now = depth_target
 
-                # OFF selalu diterima tanpa syarat: mematikan sesuatu tidak
-                # boleh pernah gagal.
+                # OFF selalu diterima tanpa syarat.
                 if not want:
                     with depth_lock:
                         depth_hold_enabled = False
@@ -740,6 +804,10 @@ def command_listener():
                         "text": "Depth-set OFF",
                         "level": "ok",
                     })
+                    continue
+
+                # ON saja yang dikontrol rate limiter.
+                if not _depth_cmd_rate.allow("depth_hold", time.time()):
                     continue
 
                 if target_now is None:
@@ -1543,6 +1611,12 @@ def main():
                 # bukan origin baro/EKF mentah yang bisa drift atau tidak pas
                 # 0 saat ROV di-arm.
                 state["depth"] = max(0.0, _raw_depth - depth_offset)
+
+                # Isi buffer sampel untuk SET smoothing (lihat depth_set handler).
+                global _depth_samples
+                _depth_samples.append(state["depth"])
+                if len(_depth_samples) > _DEPTH_SAMPLE_BUFFER_SIZE:
+                    _depth_samples.pop(0)
 
         # --------------------------------
         # SERVO_OUTPUT_RAW: PWM thruster vertikal (T3/T4/T5 = heave)
