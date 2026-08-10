@@ -33,8 +33,14 @@
    digeser: disarm pindah dari B ke LB (button 4), mode_manual pindah dari X
    ke B (button 1), emergency_stop menempati X (button 2, slot lama
    mode_manual). Versi dinaikkan supaya default binding baru diterapkan ke
-   profil tersimpan operator, bukan diam-diam menahan binding lama. */
-export const SCHEMA_VERSION = 5;
+   profil tersimpan operator, bukan diam-diam menahan binding lama.
+
+   v6: trim setpoint kedalaman ±0.05 m (gain_inc/gain_dec, mode "repeat")
+   dihapus. Penggantinya "depth_set" (rekam kedalaman saat ini) dan
+   "depth_hold_toggle" (nyalakan/matikan depth-set), keduanya sekali-pencet di
+   posisi D-pad yang sama. Versi dinaikkan supaya profil tersimpan ikut
+   dibetulkan mode-nya, bukan hanya nama aksinya. */
+export const SCHEMA_VERSION = 6;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -66,17 +72,17 @@ export const BUTTON_ACTIONS = [
   "grip_close",
   "lights_brighter",
   "lights_dimmer",
-  "gain_inc",
-  "gain_dec",
+  "depth_set",
+  "depth_hold_toggle",
 ];
 
 /* Cara sebuah tombol memicu aksinya:
      toggle — sekali saat ditekan.
      hold   — sekali saat ditekan + sekali saat dilepas (aksi punya "lawan",
               mis. gripper yang harus berhenti).
-     repeat — sekali saat ditekan, lalu berulang selama ditahan. Dipakai untuk
-              geser setpoint kedalaman: tap = satu langkah 0.05 m, tahan =
-              menempuh jarak besar tanpa menekan belasan kali.
+     repeat — sekali saat ditekan, lalu berulang selama ditahan. Tidak dipakai
+              aksi bawaan mana pun sejak trim kedalaman dihapus, tapi tetap
+              tersedia untuk binding kustom operator.
    Ditaruh di sini (bukan di halaman Joystick) karena normalizeProfile() ikut
    memvalidasinya. */
 export const BUTTON_MODES = ["toggle", "hold", "repeat"];
@@ -99,6 +105,16 @@ export const AXIS_OPTIONS = [
 const ACTION_MIGRATION = {
   actuator1_inc: "grip_close",
   actuator1_dec: "grip_open",
+
+  /* Trim kedalaman ±0.05 m per penekanan dihapus: depth-set sekarang bekerja
+     dengan merekam kedalaman saat ini (SET) lalu menyalakannya (ON/OFF), jadi
+     tidak ada lagi setpoint yang perlu dihitung selangkah demi selangkah.
+     Dipetakan ke pasangan penggantinya di posisi yang sama (D-pad ↑ = SET,
+     D-pad ↓ = ON/OFF) supaya profil tersimpan tidak kehilangan kontrol
+     kedalaman diam-diam. `mode` ikut dibetulkan di migrasi v6 di bawah —
+     "repeat" tidak masuk akal untuk tombol sekali-pencet. */
+  gain_dec: "depth_set",
+  gain_inc: "depth_hold_toggle",
 };
 
 export function migrateButtonAction(action) {
@@ -163,10 +179,10 @@ function defaultButtonLayer() {
     { action: "grip_open", button: 7, mode: "hold" },          // RT (analog)
     { action: "input_hold_set", button: 8, mode: "toggle" },   // Back
     { action: "mount_center", button: 9, mode: "toggle" },     // Start
-    // depth: naik = target BERKURANG (gain_dec), turun = target BERTAMBAH.
-    // `depth` positif ke bawah, jadi arahnya memang terbalik dari nama command.
-    { action: "gain_dec", button: 12, mode: "repeat" },        // D-pad ↑ (naik)
-    { action: "gain_inc", button: 13, mode: "repeat" },        // D-pad ↓ (turun)
+    // Depth-set: SET merekam kedalaman saat ini, toggle menyalakan/mematikan.
+    // Keduanya sekali-pencet — tidak ada lagi setpoint yang digeser bertahap.
+    { action: "depth_set", button: 12, mode: "toggle" },          // D-pad ↑ : SET
+    { action: "depth_hold_toggle", button: 13, mode: "toggle" },  // D-pad ↓ : ON/OFF
     { action: "cam_prev", button: 14, mode: "toggle" },        // D-pad ← : CAM sebelumnya
     { action: "cam_next", button: 15, mode: "toggle" },        // D-pad → : CAM berikutnya
     { action: "lights_dimmer", button: 10, mode: "hold" },     // L3
@@ -437,8 +453,8 @@ export function migrateProfile(data, warnings = []) {
        diam yang justru paling berbahaya. Aksi yang tergusur dilaporkan di
        `warnings` supaya operator bisa memasang ulang di halaman Joystick. */
     const DPAD_V3 = {
-      12: { action: "gain_dec", mode: "repeat" },        // ↑ naik ke permukaan
-      13: { action: "gain_inc", mode: "repeat" },        // ↓ makin dalam
+      12: { action: "depth_set", mode: "toggle" },          // ↑ SET kedalaman
+      13: { action: "depth_hold_toggle", mode: "toggle" },  // ↓ depth-set ON/OFF
       14: { action: "mount_tilt_up", mode: "hold" },     // ←
       15: { action: "mount_tilt_down", mode: "hold" },   // →
     };
@@ -458,12 +474,33 @@ export function migrateProfile(data, warnings = []) {
       });
     }
 
-    warnings.push("D-pad ditata ulang: ↑/↓ mengatur kedalaman, ←/→ mount tilt");
+    warnings.push("D-pad ditata ulang: ↑/↓ untuk depth-set, ←/→ mount tilt");
     if (displaced.size) {
       warnings.push(`Aksi berikut lepas dari D-pad, pasang ulang bila perlu: ${[...displaced].join(", ")}`);
     }
 
     cfg.version = 3;
+  }
+
+  if (from < 6) {
+    /* ACTION_MIGRATION sudah memetakan gain_dec/gain_inc ke depth_set /
+       depth_hold_toggle di posisi mana pun, tapi TIDAK menyentuh `mode`:
+       keduanya dulu "repeat" (tahan = geser terus), sedangkan tombol SET dan
+       ON/OFF sekali-pencet. Kalau mode lama dibiarkan, menahan tombol akan
+       mengirim puluhan perintah — backend membatasinya ke 2 Hz, tapi toggle
+       ON/OFF yang berulang tetap berarti saklar berkedip-kedip. */
+    for (const layer of ["regular", "shift"]) {
+      const rows = cfg.buttonConfig?.[layer];
+      if (!Array.isArray(rows)) continue;
+      cfg.buttonConfig[layer] = rows.map((row) => {
+        const action = migrateButtonAction(row?.action);
+        if (action !== "depth_set" && action !== "depth_hold_toggle") return row;
+        return { ...row, action, mode: "toggle" };
+      });
+    }
+
+    warnings.push("Depth: trim ±0.05 m diganti tombol SET (D-pad ↑) dan ON/OFF (D-pad ↓)");
+    cfg.version = 6;
   }
 
   // sanitizeProfile menjalankan migrateButtonAction dan seluruh clamping.

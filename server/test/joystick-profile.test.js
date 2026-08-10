@@ -77,7 +77,7 @@ function test(name, fn) {
     assert.ok(warnings.some((w) => /v1/.test(w)));
   });
 
-  test("profil v2 dimigrasikan ke tata letak D-pad depth (v3)", () => {
+  test("profil v2 dimigrasikan ke tata letak D-pad depth-set", () => {
     const v2 = S.defaultProfile();
     v2.version = 2;
     v2.buttonConfig.regular = [
@@ -97,17 +97,48 @@ function test(name, fn) {
     assert.deepStrictEqual(
       rows.slice(0, 4).map((r) => [r.action, r.button, r.mode]),
       [
-        ["gain_dec", 12, "repeat"],        // ↑ = naik ke permukaan
-        ["gain_inc", 13, "repeat"],        // ↓ = makin dalam
+        ["depth_set", 12, "toggle"],          // ↑ = rekam kedalaman
+        ["depth_hold_toggle", 13, "toggle"],  // ↓ = depth-set ON/OFF
         ["mount_tilt_up", 14, "hold"],     // ←
         ["mount_tilt_down", 15, "hold"],   // →
       ],
-      "kontrol kedalaman harus ADA, bukan hilang diam-diam"
+      "kontrol depth-set harus ADA, bukan hilang diam-diam"
     );
     assert.deepStrictEqual([rows[4].action, rows[4].button], ["arm", 0],
       "tombol di luar D-pad tidak disentuh");
     assert.ok(warnings.some((w) => /input_hold_set/.test(w)),
       "aksi yang tergusur harus dilaporkan, bukan hilang tanpa jejak");
+  });
+
+  test("profil v5 dengan trim kedalaman lama dimigrasikan ke depth-set", () => {
+    const v5 = S.defaultProfile();
+    v5.version = 5;
+    v5.buttonConfig.regular = [
+      { action: "gain_dec", button: 12, mode: "repeat" },
+      { action: "gain_inc", button: 13, mode: "repeat" },
+      { action: "arm", button: 0, mode: "toggle" },
+    ];
+
+    const out = S.migrateProfile(v5, []);
+    const rows = out.buttonConfig.regular;
+
+    assert.deepStrictEqual(
+      rows.slice(0, 2).map((r) => [r.action, r.button, r.mode]),
+      [
+        ["depth_set", 12, "toggle"],
+        ["depth_hold_toggle", 13, "toggle"],
+      ],
+      'mode "repeat" harus ikut dibetulkan — SET dan ON/OFF sekali-pencet'
+    );
+    assert.deepStrictEqual([rows[2].action, rows[2].mode], ["arm", "toggle"],
+      "tombol lain tidak disentuh");
+  });
+
+  test("aksi kedalaman lama tidak lagi ada di daftar aksi", () => {
+    assert.ok(!S.BUTTON_ACTIONS.includes("gain_inc"));
+    assert.ok(!S.BUTTON_ACTIONS.includes("gain_dec"));
+    assert.ok(S.BUTTON_ACTIONS.includes("depth_set"));
+    assert.ok(S.BUTTON_ACTIONS.includes("depth_hold_toggle"));
   });
 
   /* ===================== VALIDASI ===================== */

@@ -8,6 +8,7 @@ from pymavlink import mavutil
 
 from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
 from rov_modes import (
+    depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
     is_risky_mode,
@@ -25,10 +26,9 @@ from rov_params import (
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from rov_pid import (
-    DEFAULT_DEPTH_TARGET,
     clamp_depth_target,
+    depth_hold_bias,
     resolve_pid_writes,
-    valid_depth_target,
     valid_pool_depth,
 )
 
@@ -116,7 +116,19 @@ joystick = {
     "yaw": 0,
 }
 
-depth_target = 0.0
+# Setpoint kedalaman, meter, positif ke bawah. None = BELUM PERNAH DI-SET.
+#
+# None sengaja dibedakan dari 0.0: 0.0 adalah setpoint yang sah ("tahan di
+# permukaan"), jadi memakai 0.0 sebagai "belum ada" membuat depth-set tidak
+# bisa membedakan operator yang menekan SET tepat di permukaan dari operator
+# yang belum menekan SET sama sekali — yang pertama harus menahan, yang kedua
+# tidak boleh mengirim bias apa pun.
+depth_target = None
+
+# Saklar depth-set dari operator (tombol ON/OFF di GUI atau gamepad). Depth-set
+# TIDAK pernah menyala sendiri: masuk ALT_HOLD/POSHOLD tidak menyentuhnya.
+# Lihat apply_depth_hold_bias() untuk gerbang lengkapnya.
+depth_hold_enabled = False
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
@@ -132,24 +144,14 @@ depth_offset = 0.0
 # mentah SAAT ITU, bukan state["depth"] yang sudah ditare sebelumnya.
 _raw_depth = 0.0
 
-# Setpoint yang dipasang otomatis setiap kali masuk mode depth hold. Nilai awal
-# dari rov_pid.DEFAULT_DEPTH_TARGET, bisa diubah operator lewat command
-# `depth_default` (halaman Setup) tanpa mengubah kode.
-default_depth_target = DEFAULT_DEPTH_TARGET
-
-# Langkah geser setpoint per penekanan D-pad ↑/↓ (atau Arrow ↑/↓ di keyboard).
-# 0.05 m dipilih terhadap kolam uji ~0.9 m: cukup halus untuk membidik, dan
-# penekanan beruntun (auto-repeat sisi GUI) menutup jarak besar dengan cepat.
-DEPTH_STEP = 0.05
 depth_lock = threading.Lock()
 
-# Defense-in-depth: GUI sudah membatasi auto-repeat gain_inc/gain_dec ke
-# REPEAT_INTERVAL_MS=150 (app.js), tapi backend tidak boleh percaya penuh
-# pada klien. Batas di sini sama, ~6.7 Hz, supaya klien rusak/nakal yang
-# mengirim command lebih cepat tidak bisa menggeser depth_target lebih
-# cepat dari yang GUI sendiri izinkan.
-_GAIN_RATE_HZ = 1.0 / 0.15
-_gain_rate = RateLimiter(_GAIN_RATE_HZ)
+# Tombol SET (dan toggle ON/OFF) sifatnya sekali-pencet, tapi backend tidak
+# boleh percaya penuh pada klien: gamepad yang ter-bounce atau klien nakal bisa
+# mengirim puluhan `depth_set` per detik dan membanjiri log + event GUI. 2 Hz
+# jauh di atas kecepatan jempol manusia, jadi tidak pernah terasa oleh operator.
+_DEPTH_CMD_RATE_HZ = 2.0
+_depth_cmd_rate = RateLimiter(_DEPTH_CMD_RATE_HZ)
 
 # manual_control_send() gagal di 20 Hz -> tanpa throttle satu link serial
 # yang goyah bisa membanjiri GUI dengan event beruntun. 1 Hz cukup untuk
@@ -159,56 +161,24 @@ _joy_send_err_rate = RateLimiter(1.0)
 # Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
 # None = belum diberi tahu -> depth_target hanya dibatasi di permukaan, persis
 # perilaku sebelumnya. Begitu diisi, jadi batas bawah depth_target (lihat
-# rov_pid.clamp_depth_target): di kolam 0.9 m, menahan gain_inc tanpa batas ini
-# menyetel target belasan meter dan menekan ROV ke dasar tanpa henti.
+# rov_pid.clamp_depth_target): menekan SET di dekat dasar kolam yang keruh bisa
+# merekam pembacaan baro yang meleset dan menekan ROV ke dasar tanpa henti.
 pool_depth = None
 
 # Mode yang TERAKHIR DIMINTA lewat set_mode. state["mode"] hanya ter-update saat
-# HEARTBEAT datang, jadi tanpa ini gain_inc/gain_dec yang ditekan tepat setelah
-# ganti mode akan diabaikan diam-diam.
+# HEARTBEAT datang, jadi tanpa ini depth-set yang di-ON-kan tepat setelah ganti
+# mode akan diam saja selama satu-dua tick pertama.
 requested_mode = None
 
 # Kapan requested_mode di-set (time.time()). Kalau FC MENOLAK perpindahan mode
 # (pre-arm check gagal, EKF belum siap, dsb.) HEARTBEAT tidak pernah membawa
 # state["mode"] == requested_mode, jadi tanpa batas waktu requested_mode akan
-# dipercaya SELAMANYA dan gain_inc/gain_dec terus "berhasil" walau wahana
+# dipercaya SELAMANYA dan depth-set terus mengirim bias walau wahana
 # sebenarnya masih di mode lama. REQUESTED_MODE_TIMEOUT membatasi jendela
-# percaya-optimistis ini; sesudahnya depth_hold_active() jatuh balik ke
+# percaya-optimistis ini; sesudahnya depth_hold_mode_ok() jatuh balik ke
 # state["mode"] yang benar-benar terkonfirmasi.
 requested_mode_ts = 0.0
 REQUESTED_MODE_TIMEOUT = 3.0
-
-# Depth hold didelegasikan ke ALT_HOLD ArduSub; depth_target hanya menggeser
-# setpoint lewat bias pada throttle. Dibatasi supaya tidak pernah bisa melawan
-# operator atau menyelam tak terkendali di kolam dangkal.
-#
-# ALT_HOLD ArduSub punya DEADZONE throttle (param THR_DZ, saat ini 100 PWM):
-# input dalam +-THR_DZ dari netral diartikan "tahan kedalaman sekarang", BUKAN
-# perintah naik/turun. MANUAL_CONTROL.z 0..1000 dipetakan ke 1100..1900 PWM,
-# jadi 1 unit z = 0.8 PWM dan deadzone 100 PWM = 125 unit z.
-#
-# Trial kolam 2026-08-08 membuktikan konsekuensinya: dengan LIMIT lama = 80
-# (setara HANYA 64 PWM), bias maksimum pun masih tenggelam di dalam deadzone,
-# sehingga perintah kedalaman TIDAK PERNAH sampai ke controller ALT_HOLD.
-# Di CSV terlihat error -1.74 m (4x titik saturasi) selama >1 detik dengan
-# depth rata sempurna di 1.89 m — wahana tidak bergerak sama sekali.
-#
-# Karena itu bias TIDAK naik proporsional dari nol, melainkan langsung
-# di-offset melewati deadzone begitu error melewati DEPTH_BIAS_EPSILON (lihat
-# apply_depth_hold_bias). Error nol tetap menghasilkan netral persis.
-DEPTH_BIAS_GAIN = 200.0   # unit z per meter error, DI ATAS offset deadzone
-DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
-
-# Offset minimum supaya perintah benar-benar keluar dari deadzone ALT_HOLD.
-# 130 > 125 (THR_DZ=100 PWM) dengan margin kecil terhadap pembulatan.
-# NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
-DEPTH_BIAS_DEADZONE = 130
-
-# Di bawah error ini bias dimatikan total (netral persis = ALT_HOLD menahan
-# kedalaman dengan PID-nya sendiri). Tanpa ambang ini, offset deadzone yang
-# besar akan membuat wahana terus bolak-balik melewati setpoint. Setengah
-# DEPTH_STEP: operator tidak akan pernah membidik lebih halus dari itu.
-DEPTH_BIAS_EPSILON = DEPTH_STEP / 2.0
 
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
 
@@ -227,55 +197,48 @@ def _effective_requested_mode():
     return requested_mode
 
 
-def depth_hold_active():
+def depth_hold_mode_ok():
     """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
+
+    HANYA soal mode — bukan "depth-set sedang aktif". Saklar operator ada di
+    depth_hold_enabled, dan keduanya sengaja terpisah: mode tidak pernah
+    menyalakan depth-set, depth-set tidak pernah memindahkan mode.
 
     requested_mode ikut dipakai (selama belum kedaluwarsa, lihat
     _effective_requested_mode) karena state["mode"] baru ter-update saat
-    HEARTBEAT berikutnya datang. Tanpa itu, penekanan gain_inc/gain_dec tepat
-    setelah ganti mode akan diabaikan diam-diam.
+    HEARTBEAT berikutnya datang. Tanpa itu, depth-set yang di-ON-kan tepat
+    setelah ganti mode akan diam selama satu-dua tick pertama.
 
     ACRO sengaja TIDAK termasuk: di sana throttle netral bukan berarti tahan
-    kedalaman, jadi bias depth-hold hanya akan mendorong wahana tanpa umpan
+    kedalaman, jadi bias depth-set hanya akan mendorong wahana tanpa umpan
     balik apa pun yang menstabilkannya.
     """
     return depth_hold_allowed(_effective_requested_mode() or state["mode"])
 
 
-def depth_hold_bias(error):
-    """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
-
-    Dipisah dari apply_depth_hold_bias() supaya bisa diuji tanpa state global.
-
-    Bentuknya BUKAN proporsional murni: ALT_HOLD ArduSub mengabaikan input di
-    dalam deadzone THR_DZ, jadi bias proporsional dari nol berarti semua error
-    kecil hilang tanpa jejak (dan error besar pun hilang kalau limit-nya lebih
-    kecil dari deadzone — persis bug trial 2026-08-08). Maka: di bawah
-    DEPTH_BIAS_EPSILON bias nol persis, di atasnya langsung melompat ke
-    DEPTH_BIAS_DEADZONE lalu bertambah proporsional.
-    """
-    if abs(error) < DEPTH_BIAS_EPSILON:
-        return 0.0
-
-    magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN
-    magnitude = min(magnitude, DEPTH_BIAS_LIMIT)
-    return magnitude if error > 0 else -magnitude
-
-
 def apply_depth_hold_bias(mc, axes):
-    """Geser MANUAL_CONTROL.z ke arah depth_target saat ALT_HOLD.
+    """Geser MANUAL_CONTROL.z ke arah depth_target saat depth-set aktif.
 
-    Hanya berlaku kalau stik heave benar-benar netral — begitu operator
-    menyentuh stik, input manual menang mutlak. Di MANUAL/ACRO fungsi ini
-    selalu mengembalikan `mc` apa adanya.
+    Empat gerbang, semuanya harus terbuka (lihat depth_bias_engaged di
+    rov_modes.py untuk aturannya dalam bentuk yang bisa diuji):
+      1. operator sudah menekan SET  -> depth_target bukan None
+      2. operator sudah meng-ON-kan  -> depth_hold_enabled
+      3. mode ArduSub = ALT_HOLD     -> ada cascade PID kedalaman yang dikoreksi
+      4. stik heave netral           -> begitu operator menyentuh stik, input
+                                        manual menang mutlak
     """
-    if not depth_hold_active():
-        return mc
-    if abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON:
-        return mc
-
     with depth_lock:
         target = depth_target
+        enabled = depth_hold_enabled
+
+    if not depth_bias_engaged(
+        enabled,
+        target,
+        _effective_requested_mode() or state["mode"],
+        axes.get("heave", 0),
+        HEAVE_MANUAL_EPSILON,
+    ):
+        return mc
 
     # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
     bias = depth_hold_bias(target - state["depth"])
@@ -457,7 +420,10 @@ def send_telemetry():
     global _last_telem_log
 
     with depth_lock:
+        # null = operator belum menekan SET. GUI menampilkannya sebagai "—",
+        # bukan 0.00 m, supaya tidak terbaca seolah setpoint permukaan aktif.
         state["depth_target"] = depth_target
+        state["depth_hold"] = depth_hold_enabled
 
     # POSHOLD tidak terlihat di HEARTBEAT (ia berjalan di ALT_HOLD), jadi
     # INILAH satu-satunya cara GUI tahu overlay sedang hidup dan tab mana yang
@@ -470,10 +436,6 @@ def send_telemetry():
     # Dipantulkan supaya operator bisa memastikan wahana benar-benar TAHU
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
-
-    # Ikut dipantulkan supaya halaman Setup menampilkan nilai yang benar-benar
-    # aktif di wahana, bukan sekadar isi localStorage browser.
-    state["depth_default"] = default_depth_target
 
     send_to_gui(state)
 
@@ -529,7 +491,7 @@ def command_listener():
     global mavlink_stream_requested_at
     global pool_depth
     global depth_offset
-    global default_depth_target
+    global depth_hold_enabled
     global poshold_active
     global heading_target
 
@@ -629,23 +591,13 @@ def command_listener():
                 with heading_lock:
                     heading_target = None
 
-                # Hanya mode yang benar-benar menahan kedalaman yang perlu
-                # setpoint awal. Di MANUAL/ACRO depth_target tidak dipakai.
-                #
-                # Setpoint-nya nilai TETAP (default_depth_target), bukan
-                # kedalaman saat ini: menekan tombol mode = "turun ke kedalaman
-                # kerja", perilaku yang sama tiap kali. Konsekuensinya kalau
-                # ditekan saat mengapung di permukaan wahana langsung menyelam —
-                # itu memang yang diinginkan, tapi berarti tombol ini tidak
-                # boleh ditekan di darat.
-                if depth_hold_allowed(pixhawk_mode):
-                    with depth_lock:
-                        # Dijepit: default bisa lebih dalam dari dasar kolam
-                        # kalau pool_depth diperkecil belakangan, dan target di
-                        # luar batas membuat bias throttle menekan ke bawah
-                        # tanpa henti.
-                        depth_target = clamp_depth_target(default_depth_target, pool_depth)
-                    print(f"[DEPTH] Target initialized = {depth_target:.2f} m")
+                # CATATAN: perpindahan mode sengaja TIDAK menyentuh depth_target
+                # maupun depth_hold_enabled. Dulu masuk ALT_HOLD memasang
+                # setpoint tetap 0.30 m, sehingga menekan tombol mode berarti
+                # "menyelam ke kedalaman kerja" — padahal esensi ALT_HOLD adalah
+                # menahan kedalaman TEMPAT WAHANA BERADA SEKARANG lewat cascade
+                # PID ArduSub. Menuju setpoint tersimpan kini fitur terpisah
+                # (command depth_set / depth_hold) yang di-arm operator sendiri.
 
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
@@ -668,6 +620,13 @@ def command_listener():
                 poshold_active = False
                 with heading_lock:
                     heading_target = None
+                # Depth-set juga dimatikan: E-Stop berarti operator ingin semua
+                # yang menulis ke thruster berhenti, dan setelah re-arm wahana
+                # tidak boleh langsung berenang sendiri ke setpoint lama.
+                # depth_target sengaja DIPERTAHANKAN — kedalaman kerja yang
+                # sudah direkam masih berguna, operator tinggal menekan ON lagi.
+                with depth_lock:
+                    depth_hold_enabled = False
                 send_arm_disarm(False)
 
             elif name == "light":
@@ -690,42 +649,95 @@ def command_listener():
                     "level": "ok",
                 })
 
-            elif name in ("gain_inc", "gain_dec"):
+            elif name == "depth_set":
+
+                # Tombol SET: rekam kedalaman SAAT INI sebagai setpoint.
+                #
+                # Sengaja tidak menuntut armed maupun mode tertentu — merekam
+                # sebuah angka tidak menggerakkan apa pun, dan operator memang
+                # sering ingin mengunci kedalaman kerja dulu (mis. saat masih
+                # meluncur di MANUAL) baru menyalakannya belakangan.
+                if not _depth_cmd_rate.allow("depth_set", time.time()):
+                    continue
+
+                with depth_lock:
+                    # Dijepit ke [0, pool_depth]: pembacaan baro bisa meleset di
+                    # dekat dasar, dan setpoint di luar kolam membuat bias
+                    # menekan wahana ke dasar tanpa henti.
+                    depth_target = clamp_depth_target(state["depth"], pool_depth)
+                    shown = depth_target
+                print(f"[DEPTH] Set = {shown:.2f} m")
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Depth di-set = {shown:.2f} m",
+                    "level": "ok",
+                })
+
+            elif name == "depth_hold":
+
+                # Saklar ON/OFF depth-set. value bool eksplisit dari tombol GUI,
+                # atau None dari tombol gamepad (= toggle).
+                if not _depth_cmd_rate.allow("depth_hold", time.time()):
+                    continue
+
+                with depth_lock:
+                    want = (not depth_hold_enabled) if value is None else bool(value)
+                    target_now = depth_target
+
+                # OFF selalu diterima tanpa syarat: mematikan sesuatu tidak
+                # boleh pernah gagal.
+                if not want:
+                    with depth_lock:
+                        depth_hold_enabled = False
+                    print("[DEPTH] Depth-set OFF")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth-set OFF",
+                        "level": "ok",
+                    })
+                    continue
+
+                if target_now is None:
+                    print("[DEPTH] ON diabaikan — belum ada setpoint")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth-set belum di-set — tekan SET dulu",
+                        "level": "warn",
+                    })
+                    continue
 
                 # Disarmed -> ArduSub mengabaikan MANUAL_CONTROL sepenuhnya,
-                # jadi menggeser depth_target di sini hanya membuat GUI
-                # terlihat "aman" padahal wahana tidak akan bergerak sama
-                # sekali. Dicek terpisah dari depth_hold_active() supaya
-                # pesannya jelas: masalahnya arming, bukan mode.
+                # jadi menyalakan depth-set di sini hanya membuat GUI terlihat
+                # "menahan" padahal wahana tidak menerima apa pun.
                 if not state.get("armed"):
-                    print(f"[DEPTH] {name} diabaikan — vehicle belum armed")
+                    print("[DEPTH] ON diabaikan — vehicle belum armed")
                     send_to_gui({
                         "type": "event",
-                        "text": "Depth set diabaikan — vehicle belum armed",
+                        "text": "Depth-set diabaikan — vehicle belum armed",
                         "level": "warn",
                     })
                     continue
 
-                # Pakai requested_mode juga: state["mode"] baru ter-update saat
-                # HEARTBEAT berikutnya, jadi kalau hanya mengandalkan itu maka
-                # penekanan tepat setelah ganti mode hilang tanpa jejak.
-                if not depth_hold_active():
-                    print(f"[DEPTH] {name} diabaikan — mode bukan depth hold")
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth set diabaikan — vehicle tidak dalam mode depth hold",
-                        "level": "warn",
-                    })
-                    continue
-
-                if not _gain_rate.allow("depth_target", time.time()):
-                    continue
-
-                step = DEPTH_STEP if name == "gain_inc" else -DEPTH_STEP
                 with depth_lock:
-                    depth_target = clamp_depth_target(depth_target + step, pool_depth)
-                    shown = depth_target
-                print(f"[DEPTH] Target = {shown:.2f} m")
+                    depth_hold_enabled = True
+                print(f"[DEPTH] Depth-set ON -> {target_now:.2f} m")
+
+                # Mode yang salah TIDAK menolak permintaan, hanya memperingatkan:
+                # inilah yang membuat depth-set benar-benar lepas dari mode.
+                # Saklarnya tetap menyala, dan begitu operator pindah ke Alt Hold
+                # bias langsung bekerja tanpa perlu menekan ON lagi.
+                if depth_hold_mode_ok():
+                    send_to_gui({
+                        "type": "event",
+                        "text": f"Depth-set ON — menahan {target_now:.2f} m",
+                        "level": "ok",
+                    })
+                else:
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth-set ON tapi mode bukan Alt Hold — belum akan menahan",
+                        "level": "warn",
+                    })
 
             elif name == "pool_depth":
 
@@ -740,29 +752,16 @@ def command_listener():
 
                 # Jepit ULANG target yang sedang berjalan. Kalau operator
                 # memperkecil pool depth saat target sudah lebih dalam, target
-                # harus ikut turun sekarang — bukan menunggu penekanan
-                # gain_inc/gain_dec berikutnya.
+                # harus ikut turun sekarang — bukan menunggu penekanan SET
+                # berikutnya. None dibiarkan None: "belum di-set" tidak boleh
+                # berubah jadi setpoint 0 m gara-gara halaman Setup disimpan.
                 with depth_lock:
-                    depth_target = clamp_depth_target(depth_target, pool_depth)
+                    if depth_target is not None:
+                        depth_target = clamp_depth_target(depth_target, pool_depth)
                     shown = depth_target
+                shown_txt = "belum di-set" if shown is None else f"{shown:.2f} m"
                 print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
-                      f"(target dijepit ke {shown:.2f} m)")
-
-            elif name == "depth_default":
-
-                # Setpoint yang dipasang otomatis saat MASUK depth hold.
-                # Sengaja TIDAK menggeser depth_target yang sedang berjalan:
-                # mengubah angka di halaman Setup tidak boleh memindahkan
-                # wahana yang sedang menyelam. Berlaku pada perpindahan mode
-                # berikutnya.
-                depth_m = valid_depth_target(value)
-                if depth_m is None:
-                    print(f"[DEPTH] nilai depth_default tidak valid: {value!r}")
-                    continue
-
-                default_depth_target = depth_m
-                print(f"[DEPTH] Target default = {default_depth_target:.2f} m "
-                      f"(berlaku saat masuk depth hold berikutnya)")
+                      f"(target: {shown_txt})")
 
             elif name == "pid":
 

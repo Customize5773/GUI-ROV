@@ -218,6 +218,15 @@
                   <label class="axis"><span class="axis__k">Vertical</span><input class="axis__v" id="axHeave" type="number" value="0" step="1" /></label>
                 </div>
                 <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
+
+                <!-- Depth-set: SET merekam kedalaman saat ini, ON/OFF menyalakannya.
+                     Sengaja TERPISAH dari tab mode di atas — Alt Hold/Pos Hold
+                     menahan kedalaman tempat wahana berada, depth-set menuju
+                     kedalaman yang direkam operator. -->
+                <div class="depthset">
+                  <button class="btn-wide btn-wide--half" id="btnDepthSet">SET DEPTH</button>
+                  <button class="btn-wide btn-wide--half" id="btnDepthHold" aria-pressed="false">DEPTH-SET OFF</button>
+                </div>
               </div>
             </section>
 

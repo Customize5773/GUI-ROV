@@ -6,15 +6,18 @@
 import unittest
 
 from rov_pid import (
-    DEFAULT_DEPTH_TARGET,
+    DEPTH_BIAS_DEADZONE,
+    DEPTH_BIAS_EPSILON,
+    DEPTH_BIAS_GAIN,
+    DEPTH_BIAS_LIMIT,
     PARAM_TO_PID,
     PID_PARAM_MAP,
     PID_WRITE_ORDER,
     REAL32,
     clamp_depth_target,
+    depth_hold_bias,
     pid_param_names,
     resolve_pid_writes,
-    valid_depth_target,
     valid_pool_depth,
 )
 
@@ -160,12 +163,10 @@ class TestClampDepthTarget(unittest.TestCase):
     def test_batas_permukaan_tetap_berlaku(self):
         self.assertEqual(clamp_depth_target(-5.0, 0.9), 0.0)
 
-    def test_menahan_gain_inc_di_kolam_dangkal(self):
-        # Skenario nyata: kolam KKI 0.9 m, DEPTH_STEP 0.10, tombol ditahan 30x.
-        target = 0.0
-        for _ in range(30):
-            target = clamp_depth_target(target + 0.10, 0.9)
-        self.assertAlmostEqual(target, 0.9)
+    def test_set_di_bawah_dasar_kolam_dijepit(self):
+        # Tombol SET merekam state["depth"]. Pembacaan baro yang meleset di
+        # dekat dasar tidak boleh jadi setpoint di luar kolam.
+        self.assertAlmostEqual(clamp_depth_target(1.4, 0.9), 0.9)
 
     def test_pool_depth_tidak_valid_diabaikan(self):
         for bad in ("abc", None, 0, -1, float("nan")):
@@ -187,35 +188,48 @@ class TestValidPoolDepth(unittest.TestCase):
             self.assertIsNone(valid_pool_depth(bad), msg=repr(bad))
 
 
-class TestValidDepthTarget(unittest.TestCase):
-    def test_nilai_sah(self):
-        self.assertEqual(valid_depth_target(0.3), 0.3)
-        self.assertEqual(valid_depth_target("0.05"), 0.05)
-        self.assertEqual(valid_depth_target(1), 1.0)
+class TestDepthHoldBias(unittest.TestCase):
+    """Bentuk bias throttle depth-set: nol -> lompat deadzone -> ramp -> saturasi."""
 
-    def test_nol_diterima(self):
-        # Beda dari valid_pool_depth: 0 m = "tahan di permukaan", setpoint yang
-        # sah. Menolaknya membuat operator tidak bisa menyetel target itu.
-        self.assertEqual(valid_depth_target(0), 0.0)
+    def test_error_nol_bias_nol_persis(self):
+        # Netral persis = ALT_HOLD menahan kedalaman dengan PID-nya sendiri.
+        self.assertEqual(depth_hold_bias(0.0), 0.0)
 
-    def test_nilai_ditolak(self):
-        for bad in (-0.1, "abc", None, True, False, [1], float("nan"), float("inf")):
-            self.assertIsNone(valid_depth_target(bad), msg=repr(bad))
+    def test_di_bawah_epsilon_diam(self):
+        # Sebesar noise baro. Tanpa ambang ini, error sekecil apa pun langsung
+        # memicu dorongan penuh DEPTH_BIAS_DEADZONE dan wahana berosilasi.
+        self.assertEqual(depth_hold_bias(DEPTH_BIAS_EPSILON * 0.99), 0.0)
+        self.assertEqual(depth_hold_bias(-DEPTH_BIAS_EPSILON * 0.99), 0.0)
 
-    def test_tidak_dijepit_ke_pool_depth(self):
-        # Penjepitan sengaja ditunda ke clamp_depth_target() saat nilainya
-        # dipakai, supaya mengubah pool_depth belakangan tidak meninggalkan
-        # default yang basi.
-        self.assertEqual(valid_depth_target(50), 50.0)
-        self.assertEqual(clamp_depth_target(valid_depth_target(50), 0.9), 0.9)
+    def test_tepat_di_atas_epsilon_langsung_lewat_deadzone(self):
+        # INTI perbaikan trial 2026-08-08: bias sekecil apa pun yang masih di
+        # dalam deadzone THR_DZ (125 unit z) tidak pernah sampai ke controller.
+        bias = depth_hold_bias(DEPTH_BIAS_EPSILON)
+        self.assertGreater(abs(bias), 125)
+        self.assertAlmostEqual(bias, DEPTH_BIAS_DEADZONE + DEPTH_BIAS_EPSILON * DEPTH_BIAS_GAIN)
 
+    def test_arah_error(self):
+        # error positif = target lebih dalam dari posisi = perlu TURUN.
+        self.assertGreater(depth_hold_bias(0.2), 0)
+        self.assertLess(depth_hold_bias(-0.2), 0)
+        self.assertEqual(depth_hold_bias(0.2), -depth_hold_bias(-0.2))
 
-class TestDefaultDepthTarget(unittest.TestCase):
-    def test_masuk_akal_untuk_kolam_dangkal(self):
-        # Dipasang otomatis tiap masuk ALT_HOLD; kalau nilainya melebihi kolam
-        # uji (~0.9 m) wahana langsung ditekan ke dasar.
-        self.assertTrue(0 < DEFAULT_DEPTH_TARGET < 0.9)
-        self.assertEqual(valid_depth_target(DEFAULT_DEPTH_TARGET), DEFAULT_DEPTH_TARGET)
+    def test_naik_monoton_lalu_saturasi(self):
+        self.assertGreater(depth_hold_bias(0.3), depth_hold_bias(0.1))
+        for error in (0.5, 2.0, 50.0):
+            self.assertEqual(depth_hold_bias(error), DEPTH_BIAS_LIMIT, msg=error)
+            self.assertEqual(depth_hold_bias(-error), -DEPTH_BIAS_LIMIT, msg=error)
+
+    def test_limit_lebih_besar_dari_deadzone(self):
+        # Regresi bug LIMIT=80: kalau limit <= deadzone THR_DZ, bias maksimum
+        # pun tenggelam dan perintah kedalaman TIDAK PERNAH sampai ke FC.
+        self.assertGreater(DEPTH_BIAS_LIMIT, DEPTH_BIAS_DEADZONE)
+        self.assertGreater(DEPTH_BIAS_DEADZONE, 125)
+
+    def test_tidak_pernah_melawan_operator_penuh(self):
+        # Bias digeser dari Z_NEUTRAL=500 pada rentang 0..1000, jadi limit harus
+        # menyisakan ruang: operator selalu bisa menang dengan stik heave.
+        self.assertLess(DEPTH_BIAS_LIMIT, 500)
 
 
 if __name__ == "__main__":

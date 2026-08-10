@@ -40,6 +40,15 @@ export const ARDUSUB_MODE_TO_TAB = {
   ACRO: "acro",
 };
 
+/* Mode yang benar-benar menjalankan cascade PID kedalaman ArduSub, sehingga
+ * bias depth-set punya sesuatu untuk dikoreksi. Padanan
+ * rov_modes.DEPTH_HOLD_MODES.
+ *
+ * BUKAN saklar depth-set: berada di ALT_HOLD tidak menyalakan depth-set. GUI
+ * memakainya hanya untuk membedakan label ARMED (saklar hidup, mode belum
+ * benar) dari HOLDING (bias benar-benar mengalir). */
+export const DEPTH_HOLD_MODES = new Set(["ALT_HOLD"]);
+
 // Mode yang perlu konfirmasi sebelum diminta (padanan rov_modes.RISKY_MODES).
 export const RISKY_ARDUSUB_MODES = new Set(["ACRO"]);
 
@@ -54,4 +63,4 @@ export const ACRO_CONFIRM =
   "Masuk mode ACRO?\n\n" +
   "• Tidak ada stabilisasi attitude — stik memerintahkan RATE, bukan sudut.\n" +
   "• Throttle netral TIDAK menahan kedalaman.\n" +
-  "• Depth hold (gain +/-) dinonaktifkan selama ACRO.";
+  "• Depth-set tidak akan menahan kedalaman selama ACRO.";

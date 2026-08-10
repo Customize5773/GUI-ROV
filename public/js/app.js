@@ -16,6 +16,7 @@ import {
   ACRO_CONFIRM,
   ACTUAL_MODE_WARNINGS,
   ARDUSUB_MODE_TO_TAB,
+  DEPTH_HOLD_MODES,
   RISKY_ARDUSUB_MODES,
 } from "/shared/rov-modes.js";
 
@@ -48,6 +49,7 @@ const els = {
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   depthTarget: $("vDepthTarget"),
+  btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
   modeActual: $("modeActual"), modeWarn: $("modeWarn"),
   acroModal: $("acroModal"), acroModalBody: $("acroModalBody"),
   acroModalConfirm: $("acroModalConfirm"), acroModalCancel: $("acroModalCancel"),
@@ -309,6 +311,24 @@ function applyTelemetry(d) {
   }
 
   els.depthTarget.textContent = num(d.depth_target, 2);
+  applyDepthHold(d);
+}
+
+/* Saklar depth-set. Tiga keadaan yang sengaja dibedakan di label tombol:
+     OFF      — saklar mati (atau belum ada setpoint sama sekali)
+     ARMED    — saklar hidup, tapi mode bukan Alt Hold jadi BELUM ada bias yang
+                dikirim. Tanpa keadaan ini operator melihat "ON" dan mengira
+                wahana sedang menahan padahal tidak.
+     HOLDING  — saklar hidup DAN mode Alt Hold: bias benar-benar mengalir. */
+function applyDepthHold(d) {
+  if (!els.btnDepthHold) return;
+
+  const on = d.depth_hold === true;
+  const holding = on && DEPTH_HOLD_MODES.has(d.mode);
+
+  els.btnDepthHold.textContent = on ? (holding ? "DEPTH-SET HOLDING" : "DEPTH-SET ARMED") : "DEPTH-SET OFF";
+  els.btnDepthHold.setAttribute("aria-pressed", on ? "true" : "false");
+  els.btnDepthHold.classList.toggle("btn-wide--on", on);
 }
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
@@ -405,7 +425,7 @@ function connect() {
     setLink("on"); log("Terhubung ke server", "ok"); stopDemo();
     sendPing();
     /* Beri tahu wahana kedalaman kolamnya. Di sisi ROV nilai ini membatasi
-       depth_target supaya menahan gain_inc tidak bisa menyetel setpoint jauh
+       depth_target supaya tombol SET tidak bisa merekam setpoint jauh
        melewati dasar. Dikirim di onopen (bukan sekali saat load) supaya ikut
        terkirim ulang setelah reconnect — rov_agent.py kehilangan nilainya
        kalau prosesnya sempat restart. */
@@ -982,12 +1002,12 @@ const KEY_AXIS = {
   KeyE: ["yaw", 50], KeyQ: ["yaw", -50],
   KeyR: ["heave", 50], KeyF: ["heave", -50],
 };
-/* Arrow ↑/↓ menggeser SETPOINT kedalaman (bukan axis heave, yang tetap di R/F).
+/* Arrow ↑/↓ mengoperasikan DEPTH-SET (bukan axis heave, yang tetap di R/F).
    Peta terpisah dari KEY_AXIS supaya semantiknya tidak tercampur: ini event
    sekali-jalan, bukan nilai axis yang harus dinolkan saat tombol dilepas.
 
-   Arah: `depth` positif ke bawah, jadi ↑ (naik ke permukaan) = gain_dec. */
-const KEY_DEPTH = { ArrowUp: "gain_dec", ArrowDown: "gain_inc" };
+   ↑ = SET (rekam kedalaman saat ini), ↓ = ON/OFF. Sama seperti D-pad. */
+const KEY_DEPTH = { ArrowUp: "depth_set", ArrowDown: "depth_hold" };
 
 const heldKeys = new Set();
 function pilotKeyActive(e) {
@@ -1000,10 +1020,12 @@ window.addEventListener("keydown", (e) => {
   if (depthKeyActive(e)) {
     // Tanpa ini halaman ikut ter-scroll setiap kali operator mengatur kedalaman.
     e.preventDefault();
-    // heldKeys sengaja TIDAK dipakai di sini: auto-repeat keydown dari OS
-    // adalah persis perilaku "tahan untuk terus menggeser" yang diinginkan,
-    // sama seperti mode "repeat" di D-pad gamepad.
-    sendCmd(KEY_DEPTH[e.code], true);
+    // Auto-repeat OS DIABAIKAN (e.repeat): dulu menahan tombol memang berarti
+    // "terus geser setpoint", tapi SET dan ON/OFF sekali-pencet — menahannya
+    // hanya akan membuat saklar depth-set berkedip.
+    if (e.repeat) return;
+    // value null di depth_hold = toggle (lihat handler di rov_agent.py).
+    sendCmd(KEY_DEPTH[e.code], null);
     return;
   }
   if (!pilotKeyActive(e) || heldKeys.has(e.code)) return;
@@ -1283,14 +1305,16 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    /* ================= GAIN ================= */
-    case "gain_inc": {
-      sendCmd("gain_inc", true);
+    /* ================= DEPTH-SET ================= */
+    case "depth_set": {
+      sendCmd("depth_set", true);
       return;
     }
 
-    case "gain_dec": {
-      sendCmd("gain_dec", true);
+    // Tanpa nilai = toggle di sisi agent. Tombol gamepad tidak tahu keadaan
+    // saklar sekarang, dan menebaknya dari telemetry bisa meleset satu tick.
+    case "depth_hold_toggle": {
+      sendCmd("depth_hold", null);
       return;
     }
   }
@@ -1552,6 +1576,19 @@ requestAnimationFrame(pollGamepad);
    log di sini tidak optimis di sisi klien lagi. */
 $("btnSetSurface").onclick = () => {
   sendCmd("set_surface", true);
+};
+
+/* depth-set — SET merekam kedalaman saat ini, tombol kedua menyalakan/mematikan.
+   Keduanya tidak optimis di sisi klien: label tombol baru berubah saat telemetri
+   berikutnya membawa depth_target/depth_hold dari wahana, dan alasan penolakan
+   (belum di-set / belum armed) datang sebagai event dari rov_agent.py. */
+$("btnDepthSet").onclick = () => {
+  sendCmd("depth_set", true);
+};
+
+$("btnDepthHold").onclick = () => {
+  // null = toggle di sisi agent, sumber kebenarannya tetap wahana.
+  sendCmd("depth_hold", null);
 };
 
 /* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */

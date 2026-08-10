@@ -63,8 +63,8 @@ negatif saat didorong ke atas, jadi `heave` dan `surge` memang dibalik.
 | 9 | Start | `mount_center` | toggle |
 | 10 | L3 | `lights_dimmer` | hold |
 | 11 | R3 | `lights_brighter` | hold |
-| 12 | D-pad ↑ | `gain_dec` (depth up) | repeat |
-| 13 | D-pad ↓ | `gain_inc` (depth down) | repeat |
+| 12 | D-pad ↑ | `depth_set` (rekam kedalaman) | toggle |
+| 13 | D-pad ↓ | `depth_hold_toggle` (depth-set ON/OFF) | toggle |
 | 14 | D-pad ← | `mount_tilt_up` | hold |
 | 15 | D-pad → | `mount_tilt_down` | hold |
 | 16 | Guide | `no_function` | toggle |
@@ -85,7 +85,7 @@ Tombol shift adalah **LB** (button 4), bukan LS-click (button 10).
 `mode_depth_hold`, `mode_acro`, `input_hold_set`, `mount_tilt_up`,
 `mount_tilt_down`, `mount_center`, `actuator1_inc`, `actuator1_dec`,
 `grip_open`, `grip_close`, `lights_brighter`, `lights_dimmer`,
-`gain_inc`, `gain_dec`.
+`depth_set`, `depth_hold_toggle`.
 
 `mode_acro` sengaja **tidak** punya binding default: ke-16 tombol pad sudah
 terpakai, dan menggeser binding yang sudah dihafal operator demi mode paling
@@ -120,7 +120,7 @@ deadzone → expo → min/max scale.
 |---|---|---|
 | **Deadzone** | `0.12` | Drift stik di sekitar tengah jadi **tepat 0**. Memakai *rescale*, jadi keluaran mulai dari 0 di tepi zona — tidak melompat. |
 | **Expo** | `1.6` | Melandaikan bagian tengah untuk koreksi halus. Defleksi penuh **tetap** ±1000. Fungsi power (`sign(v) * |scaled|^expo`), bukan cubic blend. |
-| **Gain** | 6 langkah `25%…100%`, mulai di `40%` | Membatasi thrust maksimum. Diubah saat operasi lewat **LB/RB**, tampil di HUD. **Bukan** pengali thrust — `gain_inc`/`gain_dec` menggeser `depth_target` ±0.05m (DEPTH_STEP di `rov_agent.py`). `GAIN_STEPS` di `config.js` didefinisikan tapi tidak dipakai di runtime. Elemen `hudGain` ada di DOM tapi tidak pernah diperbarui. |
+| **Gain** | 6 langkah `25%…100%`, mulai di `40%` | Membatasi thrust maksimum. Diubah saat operasi lewat **LB/RB**, tampil di HUD. **Bukan** pengali thrust — aksi bernama "gain" sudah tidak ada; D-pad ↑/↓ sekarang `depth_set`/`depth_hold_toggle`. `GAIN_STEPS` di `config.js` didefinisikan tapi tidak dipakai di runtime. Elemen `hudGain` ada di DOM tapi tidak pernah diperbarui. |
 
 Preview di halaman Joystick memanggil **fungsi yang sama persis** dengan jalur
 kirim (`mapAxisValue`), jadi angka di layar dijamin identik dengan yang diterima ROV.
@@ -136,16 +136,16 @@ Hanya aktif saat tab controller = **Keyboard**.
 | `W` / `S` | surge maju / mundur | | `H` | Gripper OPEN |
 | `A` / `D` | sway kiri / kanan | | `G` | Gripper CLOSE |
 | `Q` / `E` | yaw CCW / CW | | `Space` | **E-Stop** |
-| `R` / `F` | heave naik / turun | | `Arrow ↑` | `gain_dec` (naik ke permukaan) |
-| | | | `Arrow ↓` | `gain_inc` (makin dalam) |
+| `R` / `F` | heave naik / turun | | `Arrow ↑` | `depth_set` (rekam kedalaman) |
+| | | | `Arrow ↓` | `depth_hold` (ON/OFF) |
 
 Besar langkah axis = **50** (hardcoded di `KEY_AXIS` di `app.js`),
 **bukan** `CONFIG.CONTROL.KEY_AXIS_STEP` (400 di `config.js` tapi tidak dipakai).
 Keyboard **tidak** dikalikan gain — mengirim nilai raw 50.
 
-`Arrow ↑`/`Arrow ↓` menggeser setpoint kedalaman (`gain_dec`/`gain_inc`),
-bukan menggerakkan axis heave. Arah: `depth` positif ke bawah, jadi
-↑ (naik ke permukaan) = `gain_dec`.
+`Arrow ↑`/`Arrow ↓` mengoperasikan **depth-set**, bukan menggerakkan axis heave:
+↑ merekam kedalaman saat ini sebagai setpoint, ↓ menyalakan/mematikannya.
+Auto-repeat OS diabaikan (`e.repeat`) — keduanya sekali-pencet.
 
 Tombol `H`/`G` memicu `btnGripOpen.click()` / `btnGripClose.click()`
 di DOM (pointer-events), yang mengirim Manipulator protocol packets
@@ -230,10 +230,10 @@ dangkal KKI (≈0.9 m) ini mode yang paling mudah membuat ROV terguling.
 
 Tiga pengaman yang dipasang:
 
-1. **Depth hold dinonaktifkan.** `ACRO` tidak masuk
-   [`rov_modes.DEPTH_HOLD_MODES`](rov_modes.py), sehingga `depth_hold_active()`
-   bernilai false: `gain_inc`/`gain_dec` ditolak dengan log, dan
-   `apply_depth_hold_bias()` mengembalikan paket apa adanya. Tanpa ini, bias
+1. **Depth-set tidak menahan.** `ACRO` tidak masuk
+   [`rov_modes.DEPTH_HOLD_MODES`](rov_modes.py), sehingga `depth_bias_engaged()`
+   bernilai false dan `apply_depth_hold_bias()` mengembalikan paket apa adanya —
+   saklar depth-set boleh tetap ON, tapi tidak ada bias yang dikirim. Tanpa ini, bias
    throttle akan mendorong wahana tanpa satu pun umpan balik yang menstabilkan.
 2. **Konfirmasi di GUI, seragam di semua jalur input.** Klik tab **Acro**
    maupun tombol gamepad `mode_acro` sama-sama lewat `requestPilotMode()`
