@@ -7,9 +7,17 @@ from pymavlink import mavutil
 GRIPPER_SERVO_CH = 7
 ROTATE_SERVO_CH = 8
 
-GRIPPER_PWM_OPEN = 1550
+GRIPPER_PWM_OPEN = 1560
 GRIPPER_PWM_NEUTRAL = 1500
-GRIPPER_PWM_CLOSE = 1450
+GRIPPER_PWM_CLOSE = 1410
+
+# Servo rotate/mount-tilt (CH8) punya rentang gerak lebih sempit dari gripper
+# (CH7) secara mekanik — memakai clamp_pwm() (rentang gripper) di sini akan
+# membiarkan perintah rotate melewati batas fisiknya. Dikalibrasi terpisah
+# hasil trial kolam.
+ROTATE_PWM_FORWARD = 1520  # mount tilt down
+ROTATE_PWM_STOP = 1500
+ROTATE_PWM_REVERSE = 1410  # mount tilt up
 
 # Axis gamepad dikirim di rentang kira-kira -1000..1000 (lihat joystick-state.js).
 GRIPPER_AXIS_DEADZONE = 100
@@ -33,6 +41,20 @@ def clamp_pwm(value):
 
     lo = min(GRIPPER_PWM_OPEN, GRIPPER_PWM_CLOSE)
     hi = max(GRIPPER_PWM_OPEN, GRIPPER_PWM_CLOSE)
+    return max(lo, min(hi, value))
+
+
+def clamp_rotate_pwm(value):
+    """Klem nilai PWM ke rentang aman servo rotate. Nilai tak valid -> stop."""
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return float(ROTATE_PWM_STOP)
+    if math.isnan(value):
+        return float(ROTATE_PWM_STOP)
+
+    lo = min(ROTATE_PWM_FORWARD, ROTATE_PWM_REVERSE)
+    hi = max(ROTATE_PWM_FORWARD, ROTATE_PWM_REVERSE)
     return max(lo, min(hi, value))
 
 
@@ -90,9 +112,9 @@ class GripperController:
     GRIP_CHANNEL = GRIPPER_SERVO_CH
     ROTATE_CHANNEL = ROTATE_SERVO_CH
 
-    PWM_FORWARD = GRIPPER_PWM_OPEN
-    PWM_STOP = GRIPPER_PWM_NEUTRAL
-    PWM_REVERSE = GRIPPER_PWM_CLOSE
+    PWM_FORWARD = ROTATE_PWM_FORWARD
+    PWM_STOP = ROTATE_PWM_STOP
+    PWM_REVERSE = ROTATE_PWM_REVERSE
 
     def __init__(
         self,
@@ -195,7 +217,7 @@ class GripperController:
 
     def _set_rotate_target(self, pwm):
         with self._lock:
-            self._rotate_target = clamp_pwm(pwm)
+            self._rotate_target = clamp_rotate_pwm(pwm)
 
     def rotate_left(self):
         print("[ROTATE] LEFT")
