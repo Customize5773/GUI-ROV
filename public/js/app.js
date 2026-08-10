@@ -1235,6 +1235,12 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
+    /* ================= ON OFF CAMERA STREAM FOR SCAN QR ================= */
+    case "camera_stream": {
+      toggleCameraStreamFromJoystick();
+      return;
+    }
+
     /* ================= ACTUATOR ================= */
     case "actuator1_inc": {
       sendPacket(Manipulator.openGrip(), true);
@@ -1352,6 +1358,35 @@ function isGripAction(action) {
     action === "mount_tilt_up" ||
     action === "mount_tilt_down"
   );
+}
+
+function toggleCameraStreamFromJoystick() {
+  // Button 16 = Start/Stop stream kamera
+
+  if (!initedModules.has("camera")) {
+    showPage("camera");
+  }
+
+  if (!cameraPage || typeof cameraPage._toggleStream !== "function") {
+    log("Kontrol stream kamera tidak tersedia", "err");
+    return;
+  }
+
+  const wasStreaming = !!cameraPage.streaming;
+
+  // Gunakan fungsi Start/Stop Stream yang sudah ada di camera.js
+  cameraPage._toggleStream();
+
+  if (cameraPage.streaming && !wasStreaming) {
+    // Stream ON → pindah ke Camera
+    showPage("camera");
+    log("CAM 1 + CAM 2 STREAM ON — pindah ke Camera", "ok");
+  } 
+  else if (!cameraPage.streaming && wasStreaming) {
+    // Stream OFF → kembali ke Control
+    showPage("control");
+    log("CAM 1 + CAM 2 STREAM OFF — kembali ke Control", "ok");
+  }
 }
 
 /* Proses tombol gamepad yang aksinya lolos `accept`.
@@ -1491,10 +1526,9 @@ function pollGamepad() {
   }
 
   /* ================= AUX: GRIPPER =================
-     Tidak digerbangi activeController, jadi gripper tetap bisa dioperasikan
-     dari gamepad walau tab controller sedang di Keyboard (dan sebaliknya —
-     lihat handler keyboard H/G). Otoritas manual/E-Stop tetap ditegakkan di
-     dalam sendGripper(). */
+    Tidak digerbangi activeController, jadi gripper tetap bisa dioperasikan
+    dari gamepad walau tab controller sedang di Keyboard.
+  */
   processMappedGamepadButtons(isGripAction);
 
   // thruster control hanya aktif kalau dashboard controller = Gamepad

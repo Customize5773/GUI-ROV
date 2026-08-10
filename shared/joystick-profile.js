@@ -40,7 +40,7 @@
    "depth_hold_toggle" (nyalakan/matikan depth-set), keduanya sekali-pencet di
    posisi D-pad yang sama. Versi dinaikkan supaya profil tersimpan ikut
    dibetulkan mode-nya, bukan hanya nama aksinya. */
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -65,6 +65,7 @@ export const BUTTON_ACTIONS = [
   "mount_tilt_down",
   "cam_prev",
   "cam_next",
+  "camera_stream",
   "mount_center",
   "actuator1_inc",
   "actuator1_dec",
@@ -187,7 +188,7 @@ function defaultButtonLayer() {
     { action: "cam_next", button: 15, mode: "toggle" },        // D-pad → : CAM berikutnya
     { action: "lights_dimmer", button: 10, mode: "hold" },     // L3
     { action: "lights_brighter", button: 11, mode: "hold" },   // R3
-    { action: "no_function", button: 16, mode: "toggle" },     // Logitech
+    { action: "camera_stream", button: 16, mode: "toggle" },     // Logitech
   ];
 }
 
@@ -501,6 +502,32 @@ export function migrateProfile(data, warnings = []) {
 
     warnings.push("Depth: trim ±0.05 m diganti tombol SET (D-pad ↑) dan ON/OFF (D-pad ↓)");
     cfg.version = 6;
+  }
+
+  if (from < 7) {
+    for (const layer of ["regular", "shift"]) {
+      const rows = cfg.buttonConfig?.[layer];
+
+      if (!Array.isArray(rows)) continue;
+
+      cfg.buttonConfig[layer] = rows.map((row) => {
+        if (
+          Number(row?.button) === 16 &&
+          (!row.action || row.action === "no_function")
+        ) {
+          return {
+            ...row,
+            action: "camera_stream",
+            mode: "toggle",
+          };
+        }
+
+        return row;
+      });
+    }
+
+    warnings.push("Button 16 ditambahkan sebagai Camera Stream");
+    cfg.version = 7;
   }
 
   // sanitizeProfile menjalankan migrateButtonAction dan seluruh clamping.

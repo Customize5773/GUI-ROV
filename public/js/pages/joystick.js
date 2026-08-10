@@ -128,6 +128,7 @@ const ACTION_LABELS = {
   grip_close: "Gripper close",
   lights_brighter: "Lights brighter",
   lights_dimmer: "Lights dimmer",
+  camera_stream: "Camera Stream",
   // Depth-set: SET merekam kedalaman saat ini sebagai setpoint, toggle
   // menyalakan/mematikannya. Menahan kedalaman baru benar-benar terjadi kalau
   // wahana juga ada di mode Alt Hold — lihat rov_modes.py.
