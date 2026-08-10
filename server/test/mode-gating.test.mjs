@@ -80,10 +80,10 @@ test("hanya ACRO yang ditandai risky", () => {
   }
 });
 
-test("ACRO_CONFIRM menyebutkan tidak ada stabilisasi dan depth hold nonaktif", () => {
+test("ACRO_CONFIRM menyebutkan tidak ada stabilisasi dan depth-set tidak menahan", () => {
   assert.match(ACRO_CONFIRM, /ACRO/);
   assert.match(ACRO_CONFIRM, /stabilisasi/i);
-  assert.match(ACRO_CONFIRM, /[Dd]epth hold/);
+  assert.match(ACRO_CONFIRM, /[Dd]epth[- ](hold|set)/);
 });
 
 let failed = 0;

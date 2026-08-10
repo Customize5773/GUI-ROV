@@ -23,6 +23,21 @@ Kenapa "stabilize" sekarang alias ALT_HOLD
     dashboard. Aliasnya dipertahankan (bukan dihapus) supaya profil joystick
     tersimpan dengan aksi `mode_stabilize` tetap bekerja.
 
+Mode vs depth-set (sengaja TERPISAH)
+    ALT_HOLD = "tahan kedalaman tempat wahana berada sekarang", dikerjakan
+    sepenuhnya oleh cascade PID ArduSub. POSHOLD = ALT_HOLD + overlay heading
+    hold sisi Python. Itu saja esensi keduanya.
+
+    "Depth-set" (menuju sebuah setpoint yang DIREKAM operator lewat tombol SET,
+    lalu dinyalakan lewat tombol ON/OFF) adalah fitur TERSENDIRI. Masuk
+    ALT_HOLD/POSHOLD tidak menyalakannya, dan menyalakannya tidak memindahkan
+    mode. Dulu keduanya menempel: menekan tab Alt Hold langsung memasang
+    setpoint tetap 0.30 m, jadi memilih mode = perintah menyelam.
+
+    Yang TETAP menjadi syarat: bias depth-set hanya dikirim saat mode ArduSub
+    ada di DEPTH_HOLD_MODES. Itu syarat fisik (bias mengasumsikan ada cascade
+    PID kedalaman yang menerimanya), bukan coupling arah sebaliknya.
+
 Tentang ACRO
     Di ACRO tidak ada stabilisasi attitude sama sekali: stik memerintahkan RATE
     (kecepatan sudut), bukan sudut, dan throttle netral juga tidak menahan
@@ -71,6 +86,9 @@ POSHOLD_MODE = "poshold"
 # Mode yang menjalankan cascade PID kedalaman dari autopilot, sehingga
 # menggeser setpoint kedalaman lewat bias throttle masuk akal.
 #
+# INI BUKAN saklar depth-set. Berada di ALT_HOLD tidak menyalakan depth-set,
+# dan menyalakan depth-set tidak memindahkan mode — lihat depth_bias_engaged().
+#
 # MANUAL tidak masuk: tidak ada yang menahan kedalaman, bias hanya akan
 # mendorong wahana tanpa umpan balik.
 # STABILIZE tidak masuk: attitude distabilkan, tapi kedalaman tidak — lihat
@@ -86,13 +104,13 @@ RISKY_MODES = frozenset({"ACRO"})
 
 ACRO_WARNING = (
     "ACRO: tanpa stabilisasi attitude. Stik = rate, dan throttle netral "
-    "TIDAK menahan kedalaman. Depth hold dinonaktifkan."
+    "TIDAK menahan kedalaman. Depth-set tidak akan menahan di mode ini."
 )
 
 STABILIZE_WARNING = (
     "STABILIZE: attitude distabilkan, tapi kedalaman TIDAK. Throttle netral "
-    "berarti dorongan vertikal nol, bukan tahan kedalaman. Depth hold "
-    "dinonaktifkan — tahan stick throttle secara manual."
+    "berarti dorongan vertikal nol, bukan tahan kedalaman. Depth-set tidak "
+    "akan menahan di mode ini — tahan stick throttle secara manual."
 )
 
 # Peta mode -> pesan peringatan operator, dipakai oleh warning_for_mode().
@@ -129,11 +147,43 @@ def is_poshold_request(name):
 
 
 def depth_hold_allowed(mode):
-    """True kalau bias depth-hold + gain_inc/gain_dec boleh aktif di `mode`.
+    """True kalau bias depth-set boleh aktif di `mode`.
+
+    Syarat MODE saja — saklar operator diperiksa depth_bias_engaged().
 
     `mode` adalah nama ArduSub (mis. dari HEARTBEAT atau requested_mode).
     """
     return mode in DEPTH_HOLD_MODES
+
+
+def depth_bias_engaged(enabled, target, mode, heave, heave_epsilon):
+    """True kalau bias throttle depth-set boleh benar-benar dikirim sekarang.
+
+    Semua gerbang depth-set dikumpulkan di satu fungsi murni supaya bisa diuji
+    tanpa pymavlink/socket — pemanggilnya (apply_depth_hold_bias di
+    rov_agent.py) tinggal membaca state global lalu menyerahkannya ke sini.
+
+    Urutan gerbang sengaja begini:
+      - `target is None` (operator belum menekan SET) DIBEDAKAN dari target
+        0.0 yang sah. Tanpa itu, "belum di-set" akan berarti "tahan di
+        permukaan" dan wahana naik sendiri begitu depth-set di-ON-kan.
+      - `enabled` adalah saklar operator. Masuk ALT_HOLD/POSHOLD TIDAK
+        menyalakannya: menahan kedalaman firmware adalah esensi mode itu,
+        sedangkan menuju setpoint tersimpan adalah fitur terpisah yang
+        di-arm sendiri oleh operator.
+      - `mode` tetap harus mode depth hold (lihat DEPTH_HOLD_MODES). Ini
+        bukan coupling arah sebaliknya, melainkan syarat fisik: kompensasi
+        deadzone yang dipakai bias mengasumsikan ada cascade PID kedalaman
+        yang menerimanya. Di MANUAL/ACRO bias jadi dorongan open-loop.
+      - stik heave yang dipegang selalu menang atas setpoint mana pun.
+    """
+    if target is None:
+        return False
+    if not enabled:
+        return False
+    if not depth_hold_allowed(mode):
+        return False
+    return abs(heave) <= heave_epsilon
 
 
 def is_risky_mode(mode):

@@ -128,11 +128,11 @@ const ACTION_LABELS = {
   grip_close: "Gripper close",
   lights_brighter: "Lights brighter",
   lights_dimmer: "Lights dimmer",
-  // Nama wire-nya tetap gain_inc/gain_dec (kompatibilitas agent), tapi yang
-  // digeser adalah setpoint kedalaman. `depth` positif ke bawah, jadi
-  // gain_dec = naik ke permukaan.
-  gain_inc: "Depth +0.05 m (turun)",
-  gain_dec: "Depth −0.05 m (naik)",
+  // Depth-set: SET merekam kedalaman saat ini sebagai setpoint, toggle
+  // menyalakan/mematikannya. Menahan kedalaman baru benar-benar terjadi kalau
+  // wahana juga ada di mode Alt Hold — lihat rov_modes.py.
+  depth_set: "Depth SET (rekam kedalaman)",
+  depth_hold_toggle: "Depth-set ON/OFF",
 };
 
 const COCKPIT_LAYOUT = {
@@ -140,10 +140,10 @@ const COCKPIT_LAYOUT = {
     left: [
       { action: "disarm", anchor: "l1" },
       { action: "mount_tilt_down", anchor: "l2" },
-      { action: "gain_dec", anchor: "dpad_up" },
+      { action: "depth_set", anchor: "dpad_up" },
       { action: "cam_prev", anchor: "dpad_left" },
       { action: "cam_next", anchor: "dpad_right" },
-      { action: "gain_inc", anchor: "dpad_down" },
+      { action: "depth_hold_toggle", anchor: "dpad_down" },
       { action: "lights_dimmer", anchor: "left_stick" },
       { action: "mount_center", anchor: "left_bottom" },
     ],
@@ -164,10 +164,10 @@ const COCKPIT_LAYOUT = {
     left: [
       { action: "disarm", anchor: "l1" },
       { action: "mount_tilt_down", anchor: "l2" },
-      { action: "gain_dec", anchor: "dpad_up" },
+      { action: "depth_set", anchor: "dpad_up" },
       { action: "cam_prev", anchor: "dpad_left" },
       { action: "cam_next", anchor: "dpad_right" },
-      { action: "gain_inc", anchor: "dpad_down" },
+      { action: "depth_hold_toggle", anchor: "dpad_down" },
       { action: "lights_dimmer", anchor: "left_stick" },
       { action: "mount_center", anchor: "left_bottom" },
     ],

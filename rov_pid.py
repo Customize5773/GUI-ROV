@@ -136,11 +136,64 @@ def resolve_pid_writes(payload):
     return writes, rejects
 
 
-# Setpoint kedalaman yang dipakai setiap kali wahana MASUK mode depth hold.
-# Sengaja nilai tetap, bukan "kedalaman saat ini": operator ingin menekan satu
-# tombol dan langsung berada di kedalaman kerja yang sama tiap kali. Bisa
-# ditimpa dari halaman Setup lewat command `depth_default`.
-DEFAULT_DEPTH_TARGET = 0.3
+# Depth hold didelegasikan ke ALT_HOLD ArduSub; depth_target hanya menggeser
+# setpoint lewat bias pada throttle. Dibatasi supaya tidak pernah bisa melawan
+# operator atau menyelam tak terkendali di kolam dangkal.
+#
+# ALT_HOLD ArduSub punya DEADZONE throttle (param THR_DZ, saat ini 100 PWM):
+# input dalam +-THR_DZ dari netral diartikan "tahan kedalaman sekarang", BUKAN
+# perintah naik/turun. MANUAL_CONTROL.z 0..1000 dipetakan ke 1100..1900 PWM,
+# jadi 1 unit z = 0.8 PWM dan deadzone 100 PWM = 125 unit z.
+#
+# Trial kolam 2026-08-08 membuktikan konsekuensinya: dengan LIMIT lama = 80
+# (setara HANYA 64 PWM), bias maksimum pun masih tenggelam di dalam deadzone,
+# sehingga perintah kedalaman TIDAK PERNAH sampai ke controller ALT_HOLD.
+# Di CSV terlihat error -1.74 m (4x titik saturasi) selama >1 detik dengan
+# depth rata sempurna di 1.89 m — wahana tidak bergerak sama sekali.
+#
+# Karena itu bias TIDAK naik proporsional dari nol, melainkan langsung
+# di-offset melewati deadzone begitu error melewati DEPTH_BIAS_EPSILON (lihat
+# apply_depth_hold_bias). Error nol tetap menghasilkan netral persis.
+DEPTH_BIAS_GAIN = 200.0   # unit z per meter error, DI ATAS offset deadzone
+DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
+
+# Offset minimum supaya perintah benar-benar keluar dari deadzone ALT_HOLD.
+# 130 > 125 (THR_DZ=100 PWM) dengan margin kecil terhadap pembulatan.
+# NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
+DEPTH_BIAS_DEADZONE = 130
+
+# Di bawah error ini bias dimatikan total (netral persis = ALT_HOLD menahan
+# kedalaman dengan PID-nya sendiri). Tanpa ambang ini, offset deadzone yang
+# besar (DEPTH_BIAS_DEADZONE) akan membuat wahana terus bolak-balik melewati
+# setpoint: error sekecil apa pun langsung memicu dorongan penuh 130 unit z.
+#
+# 0.025 m kira-kira sebesar noise pembacaan baro di kolam dangkal, jadi di
+# bawahnya "error" yang terlihat bukan error sungguhan. Ini juga toleransi
+# akhir depth-set: tekan SET lalu OFF/ON akan kembali ke kedalaman yang sama
+# dalam +-nilai ini, bukan lebih presisi.
+DEPTH_BIAS_EPSILON = 0.025
+
+
+
+def depth_hold_bias(error):
+    """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
+
+    Dipisah dari apply_depth_hold_bias() (rov_agent.py) supaya bisa diuji
+    tanpa state global — modul ini tidak bind socket apa pun.
+
+    Bentuknya BUKAN proporsional murni: ALT_HOLD ArduSub mengabaikan input di
+    dalam deadzone THR_DZ, jadi bias proporsional dari nol berarti semua error
+    kecil hilang tanpa jejak (dan error besar pun hilang kalau limit-nya lebih
+    kecil dari deadzone — persis bug trial 2026-08-08). Maka: di bawah
+    DEPTH_BIAS_EPSILON bias nol persis, di atasnya langsung melompat ke
+    DEPTH_BIAS_DEADZONE lalu bertambah proporsional.
+    """
+    if abs(error) < DEPTH_BIAS_EPSILON:
+        return 0.0
+
+    magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN
+    magnitude = min(magnitude, DEPTH_BIAS_LIMIT)
+    return magnitude if error > 0 else -magnitude
 
 
 def clamp_depth_target(value, pool_depth=None):
@@ -150,10 +203,10 @@ def clamp_depth_target(value, pool_depth=None):
     operator mengirim `pool_depth` — tanpa itu perilakunya persis seperti
     sebelumnya, jadi lupa mengirimnya tidak pernah membuat keadaan lebih buruk.
 
-    Tanpa batas bawah, menahan gain_inc di kolam 0.9 m bisa menyetel target
-    belasan meter: bias throttle memang dibatasi DEPTH_BIAS_LIMIT sehingga
-    bukan runaway, tapi ROV tetap ditekan ke dasar tanpa henti dan target butuh
-    puluhan penekanan gain_dec untuk kembali masuk akal.
+    Tanpa batas bawah, satu pembacaan baro yang meleset saat operator menekan
+    SET di dekat dasar bisa merekam setpoint jauh di bawah kolam: bias throttle
+    memang dibatasi DEPTH_BIAS_LIMIT sehingga bukan runaway, tapi ROV tetap
+    ditekan ke dasar tanpa henti sampai depth-set dimatikan.
     """
     try:
         v = float(value)
@@ -173,27 +226,6 @@ def clamp_depth_target(value, pool_depth=None):
         if limit == limit and limit > 0:
             v = min(v, limit)
 
-    return v
-
-
-def valid_depth_target(value):
-    """Kembalikan setpoint kedalaman default yang sah (meter, >= 0), atau None.
-
-    Beda dari valid_pool_depth: 0 m DITERIMA (artinya "tahan di permukaan").
-    Penjepitan terhadap pool_depth tidak dilakukan di sini — itu tugas
-    clamp_depth_target() saat nilainya benar-benar dipakai, supaya mengubah
-    pool_depth belakangan tidak meninggalkan default yang basi.
-    """
-    if isinstance(value, bool):
-        return None
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return None
-    if v != v or v in (float("inf"), float("-inf")):
-        return None
-    if v < 0:
-        return None
     return v
 
 

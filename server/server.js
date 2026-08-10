@@ -466,7 +466,6 @@ const PILOT_MODE_MAP = {
 };
 
 const DEPTH_HOLD_MODES = new Set(["ALT_HOLD"]);   // rov_modes.DEPTH_HOLD_MODES
-const SIM_DEPTH_STEP = 0.05;                      // rov_agent.DEPTH_STEP
 
 const simState = {
   armed: false,
@@ -489,12 +488,21 @@ let simParamStreamCancel = null;
 // state["pool_depth"] di rov_agent.py).
 let simPoolDepth = null;
 
-/* Setpoint kedalaman palsu + default-nya (padanan depth_target /
-   default_depth_target di rov_agent.py). Ada di SIM supaya alur "tekan Alt Hold
-   -> target langsung 0.30 m -> D-pad menggesernya 0.05 m" bisa diuji penuh dari
-   browser tanpa Pixhawk. */
-let simDepthDefault = 0.3;     // rov_pid.DEFAULT_DEPTH_TARGET
-let simDepthTarget = 0;
+/* Depth-set palsu (padanan depth_target + depth_hold_enabled di rov_agent.py).
+   null = operator belum menekan SET, dibedakan dari 0 yang setpoint sah. Ada di
+   SIM supaya alur "SET -> ON -> OFF" dan janji bahwa masuk Alt Hold TIDAK
+   memasang setpoint apa pun bisa diuji penuh dari browser tanpa Pixhawk. */
+let simDepthTarget = null;
+let simDepthHoldEnabled = false;
+
+/* Kedalaman "sekarang" wahana palsu. Dipakai DUA tempat — paket telemetri dan
+   tombol SET — jadi rumusnya harus satu: kalau SET memakai rumus lain, setpoint
+   yang direkam tidak akan pernah cocok dengan angka yang dilihat operator.
+   Kolam KKI 2026 dangkal (~0.9 m) → depth ~0.1-0.8 m agar ALT & alarm realistis. */
+let simClock = 0;
+function simDepthNow() {
+  return 0.45 + 0.35 * Math.sin(simClock * 0.13);
+}
 
 // Padanan rov_pid.clamp_depth_target().
 function clampSimDepthTarget(value) {
@@ -656,22 +664,10 @@ function applySimParamCommand(name, value) {
       return true;
     }
     simPoolDepth = depth;
-    // Jepit ULANG target berjalan, sama seperti rov_agent.py.
-    simDepthTarget = clampSimDepthTarget(simDepthTarget);
+    // Jepit ULANG target berjalan, sama seperti rov_agent.py. null dibiarkan
+    // null: "belum di-set" tidak boleh berubah jadi setpoint 0 m.
+    if (simDepthTarget != null) simDepthTarget = clampSimDepthTarget(simDepthTarget);
     console.log(`[SIM] kedalaman kolam = ${depth.toFixed(2)} m`);
-    return true;
-  }
-
-  if (name === "depth_default") {
-    const depth = Number(value);
-    if (!Number.isFinite(depth) || depth < 0) {
-      console.warn(`[SIM] depth_default tidak valid: ${value}`);
-      return true;
-    }
-    // Tidak menggeser target berjalan — berlaku saat masuk depth hold
-    // berikutnya, persis seperti rov_agent.py.
-    simDepthDefault = depth;
-    console.log(`[SIM] target kedalaman default = ${depth.toFixed(2)} m`);
     return true;
   }
 
@@ -701,6 +697,9 @@ function applySimCommand(name, value, msg) {
       break;
     case "stop":
       simState.armed = false;
+      // E-Stop mematikan depth-set tapi MEMPERTAHANKAN setpoint, sama seperti
+      // handler stop di rov_agent.py.
+      simDepthHoldEnabled = false;
       break; // failsafe: netralkan
     case "control_mode":
       simState.controlMode = value;
@@ -717,22 +716,32 @@ function applySimCommand(name, value, msg) {
       // Setiap permintaan mode mematikan overlay lebih dulu, persis seperti
       // handler pilot_mode di rov_agent.py.
       simState.poshold = String(value).toLowerCase() === "poshold";
-      // Masuk depth hold = pasang setpoint default, bukan kedalaman saat ini.
-      if (DEPTH_HOLD_MODES.has(mapped)) {
-        simDepthTarget = clampSimDepthTarget(simDepthDefault);
-        console.log(`[SIM] depth target = ${simDepthTarget.toFixed(2)} m`);
-      }
+      // Sengaja TIDAK menyentuh depth-set: masuk Alt Hold berarti "tahan
+      // kedalaman sekarang" (kerjaan cascade PID ArduSub), bukan "menyelam ke
+      // setpoint". Sama seperti handler pilot_mode di rov_agent.py.
       break;
     }
-    case "gain_inc":
-    case "gain_dec": {
-      if (!DEPTH_HOLD_MODES.has(simState.pilotMode)) {
-        console.log(`[SIM] ${name} diabaikan — mode bukan depth hold`);
+    // Tombol SET: rekam kedalaman "sekarang". Tidak menuntut armed maupun mode
+    // tertentu — merekam angka tidak menggerakkan apa pun (lihat rov_agent.py).
+    case "depth_set": {
+      simDepthTarget = clampSimDepthTarget(simDepthNow());
+      console.log(`[SIM] depth set = ${simDepthTarget.toFixed(2)} m`);
+      break;
+    }
+
+    // Saklar ON/OFF. value null (dari tombol gamepad) = toggle.
+    case "depth_hold": {
+      const want = value == null ? !simDepthHoldEnabled : !!value;
+      if (want && simDepthTarget == null) {
+        console.log("[SIM] depth_hold ON diabaikan — belum ada setpoint");
         break;
       }
-      const step = name === "gain_inc" ? SIM_DEPTH_STEP : -SIM_DEPTH_STEP;
-      simDepthTarget = clampSimDepthTarget(simDepthTarget + step);
-      console.log(`[SIM] depth target = ${simDepthTarget.toFixed(2)} m`);
+      if (want && !simState.armed) {
+        console.log("[SIM] depth_hold ON diabaikan — belum armed");
+        break;
+      }
+      simDepthHoldEnabled = want;
+      console.log(`[SIM] depth-set ${want ? "ON" : "OFF"}`);
       break;
     }
   }
@@ -744,13 +753,13 @@ if (SIM) {
 
   setInterval(() => {
     t += 0.1;
+    simClock = t;
 
     broadcast({
       type: "telemetry",
       data: {
         heading: (90 + 45 * Math.sin(t * 0.2) + 360) % 360,
-        // Kolam KKI 2026 dangkal (~0.9 m) → depth ~0.1–0.8 m agar ALT & alarm realistis.
-        depth: 0.45 + 0.35 * Math.sin(t * 0.13),
+        depth: simDepthNow(),
         roll: 10 * Math.sin(t * 0.6),
         pitch: 7 * Math.sin(t * 0.4 + 1),
         temp: 26.5 + Math.sin(t * 0.05),
@@ -767,7 +776,7 @@ if (SIM) {
         control_mode: simState.controlMode,
         pool_depth: simPoolDepth,
         depth_target: simDepthTarget,
-        depth_default: simDepthDefault,
+        depth_hold: simDepthHoldEnabled,
       },
       recv: Date.now(),
     });

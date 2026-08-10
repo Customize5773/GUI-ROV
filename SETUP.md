@@ -247,15 +247,16 @@ echo '{"name":"light","value":true}' | nc -u -w1 192.168.2.2 14550
 # Set pilot mode (MANUAL / STABILIZE / ALT_HOLD / ACRO)
 echo '{"name":"pilot_mode","value":"ALT_HOLD"}' | nc -u -w1 192.168.2.2 14550
 
-# Set pool depth (meter) — wajib sebelum depth hold
+# Set pool depth (meter) — batas atas setpoint depth-set
 echo '{"name":"pool_depth","value":0.9}' | nc -u -w1 192.168.2.2 14550
 
-# Set default depth target untuk depth hold (meter)
-echo '{"name":"depth_default","value":0.3}' | nc -u -w1 192.168.2.2 14550
+# Depth-set: rekam kedalaman SEKARANG jadi setpoint (setara tombol SET / D-pad ↑)
+echo '{"name":"depth_set","value":true}' | nc -u -w1 192.168.2.2 14550
 
-# Adjust depth target +/-0.05m (setara D-pad)
-echo '{"name":"gain_inc","value":true}' | nc -u -w1 192.168.2.2 14550   # naikkan target
-echo '{"name":"gain_dec","value":true}' | nc -u -w1 192.168.2.2 14550   # turunkan target
+# Depth-set ON/OFF (value null = toggle). Butuh setpoint + armed;
+# bias baru benar-benar dikirim saat mode ALT_HOLD.
+echo '{"name":"depth_hold","value":true}'  | nc -u -w1 192.168.2.2 14550
+echo '{"name":"depth_hold","value":false}' | nc -u -w1 192.168.2.2 14550
 
 # Kontrol gripper
 echo '{"name":"gripper","value":"open"}' | nc -u -w1 192.168.2.2 14550

@@ -12,6 +12,7 @@ from rov_modes import (
     PILOT_MODE_MAP,
     RISKY_MODES,
     STABILIZE_WARNING,
+    depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
     is_risky_mode,
@@ -144,6 +145,49 @@ class TestWarningForMode(unittest.TestCase):
         # tanpa pesan apa pun untuk ditampilkan.
         for mode in RISKY_MODES:
             self.assertIsNotNone(warning_for_mode(mode), msg=mode)
+
+
+class TestDepthBiasEngaged(unittest.TestCase):
+    """Gerbang depth-set: tombol SET + tombol ON/OFF + mode + stik heave."""
+
+    # Nilai default yang "semuanya benar"; tiap test menjatuhkan satu syarat.
+    OK = dict(enabled=True, target=0.5, mode="ALT_HOLD", heave=0, heave_epsilon=20)
+
+    def engaged(self, **override):
+        kw = dict(self.OK, **override)
+        return depth_bias_engaged(
+            kw["enabled"], kw["target"], kw["mode"], kw["heave"], kw["heave_epsilon"]
+        )
+
+    def test_semua_syarat_terpenuhi(self):
+        self.assertTrue(self.engaged())
+
+    def test_belum_pernah_di_set(self):
+        # target None = operator belum menekan SET. Ini yang membuat masuk
+        # ALT_HOLD tidak lagi menyeret wahana ke setpoint apa pun.
+        self.assertFalse(self.engaged(target=None))
+
+    def test_target_nol_tetap_setpoint_yang_sah(self):
+        # Kalau None dan 0.0 tercampur, menekan SET tepat di permukaan akan
+        # dianggap "belum di-set" dan depth-set diam-diam tidak bekerja.
+        self.assertTrue(self.engaged(target=0.0))
+
+    def test_saklar_operator_mati(self):
+        self.assertFalse(self.engaged(enabled=False))
+
+    def test_mode_bukan_depth_hold(self):
+        # Sudah SET dan sudah ON, tapi wahana di MANUAL/ACRO: tidak ada cascade
+        # PID kedalaman yang menerima bias, jadi bias jadi dorongan open-loop.
+        for mode in ("MANUAL", "ACRO", "STABILIZE", None):
+            self.assertFalse(self.engaged(mode=mode), msg=repr(mode))
+
+    def test_operator_memegang_stik_heave_menang(self):
+        self.assertFalse(self.engaged(heave=21))
+        self.assertFalse(self.engaged(heave=-500))
+
+    def test_heave_dalam_deadzone_masih_dianggap_netral(self):
+        self.assertTrue(self.engaged(heave=20))
+        self.assertTrue(self.engaged(heave=-19))
 
 
 if __name__ == "__main__":
