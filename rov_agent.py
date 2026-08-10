@@ -1574,7 +1574,25 @@ def main():
                 pass
 
             base_mode = msg.base_mode
+            was_armed = state["armed"]
             state["armed"] = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+            # Disarm dari JALUR MANA PUN mematikan depth-set: tombol DISARM,
+            # failsafe FC, saklar RC, atau GCS lain. Handler `stop` sudah
+            # menanganinya untuk E-Stop, tapi tanpa cek transisi di sini
+            # depth_hold_enabled tetap True selama wahana disarm — dan begitu
+            # di-arm ulang wahana langsung berenang sendiri ke setpoint lama
+            # tanpa operator menekan apa pun. Itu persis kejutan yang hendak
+            # dihilangkan oleh tombol ON/OFF ini.
+            #
+            # depth_target sengaja DIPERTAHANKAN (sama seperti handler `stop`):
+            # kedalaman kerja yang sudah direkam masih berguna, operator tinggal
+            # menekan ON lagi setelah re-arm.
+            if was_armed and not state["armed"]:
+                with depth_lock:
+                    if depth_hold_enabled:
+                        globals()["depth_hold_enabled"] = False
+                        print("[DEPTH] Depth-set OFF — vehicle disarm")
 
             # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
             if requested_mode is not None and state["mode"] == requested_mode:

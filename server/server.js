@@ -691,6 +691,11 @@ function applySimCommand(name, value, msg) {
     }
     case "arm":
       simState.armed = !!value;
+      // Disarm dari jalur mana pun mematikan depth-set (setpoint dipertahankan),
+      // sama seperti cek transisi armed->disarmed di handler HEARTBEAT
+      // rov_agent.py. Tanpa ini wahana berenang sendiri ke setpoint lama begitu
+      // di-arm ulang.
+      if (!simState.armed) simDepthHoldEnabled = false;
       break;
     case "light":
       simState.light = !!value;
