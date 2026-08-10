@@ -33,3 +33,6 @@ dataset.zip
 
 # Model 3D besar
 public/models/rov.obj
+
+# Planning
+Planning/ANALISIS-PID-ROLL-PITCH.md
