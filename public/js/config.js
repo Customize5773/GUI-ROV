@@ -26,11 +26,6 @@ export const CONFIG = {
   // Kolam dangkal 0.9 m: alarm hanya saat sangat dekat dasar (margin ~0.05 m).
   DANGER_DEPTH: 0.85,
 
-  // setpoint kedalaman yang dipasang otomatis saat masuk mode ALT_HOLD.
-  // Padanan rov_pid.DEFAULT_DEPTH_TARGET — dikirim ke wahana lewat command
-  // `depth_default` dari halaman Setup.
-  DEPTH_DEFAULT: 0.0,
-
   /* konfigurasi thruster (ArduSub mixer) — KKI 2026 maksimal 6 thruster.
      Wahana ini memakai frame BlueROV1 (6 thruster, 6-DoF):
        T1-T4 = vertikal di empat sudut  -> heave, roll, pitch
@@ -52,7 +47,7 @@ export const CONFIG = {
   // rasa kendali pilot (berlaku untuk gamepad DAN keyboard)
   CONTROL: {
     /* Gain pilot: pengali output axis sebelum dikirim. Dinaikkan/diturunkan
-       lewat tombol gamepad (gain_inc/gain_dec) dan tampil di HUD. Default
+       lewat tombol gamepad dan tampil di HUD. Default
        sengaja konservatif untuk trial pertama — naikkan setelah pilot hafal
        responsnya. Deadzone/expo/slew nilai awalnya di joystick-defaults.json
        dan ikut tersimpan per profil joystick. */

@@ -59,7 +59,6 @@ function saveSetup() {
       TEAM_NAME: CONFIG.TEAM_NAME, UNIVERSITY: CONFIG.UNIVERSITY,
       CAMERAS: CONFIG.CAMERAS, THRUSTER: CONFIG.THRUSTER,
       POOL_DEPTH: CONFIG.POOL_DEPTH, DANGER_DEPTH: CONFIG.DANGER_DEPTH,
-      DEPTH_DEFAULT: CONFIG.DEPTH_DEFAULT,
     }));
     /* PID SENGAJA TIDAK ikut disimpan: sumber kebenarannya sekarang flight
        controller, dibaca ulang tiap kali halaman ini dibuka. Menyimpannya
@@ -80,7 +79,9 @@ export function loadSetup() {
     // masih ada di localStorage operator lama ikut terbuang di sini.
     if (Number.isFinite(s.POOL_DEPTH)) CONFIG.POOL_DEPTH = s.POOL_DEPTH;
     if (Number.isFinite(s.DANGER_DEPTH)) CONFIG.DANGER_DEPTH = s.DANGER_DEPTH;
-    if (Number.isFinite(s.DEPTH_DEFAULT) && s.DEPTH_DEFAULT >= 0) CONFIG.DEPTH_DEFAULT = s.DEPTH_DEFAULT;
+    // s.DEPTH_DEFAULT sengaja DIABAIKAN: setpoint depth-set tidak lagi berasal
+    // dari angka yang diketik, melainkan dari tombol SET. Entri lama di
+    // localStorage operator ikut terbuang di sini.
   } catch (_) {}
 }
 
@@ -207,16 +208,16 @@ export const setupPage = {
           <!-- TEST POOL -->
           <div class="card">
             <span class="panel__eyebrow">TEST POOL</span>
-            <h3 class="card__title">Pool, Danger &amp; Depth Target</h3>
-            <p class="card__desc">Kedalaman kolam (kalibrasi altitude), ambang alarm, &amp;
-              setpoint yang dipasang otomatis saat masuk mode Alt Hold.</p>
+            <h3 class="card__title">Pool &amp; Danger Depth</h3>
+            <p class="card__desc">Kedalaman kolam (kalibrasi altitude + batas atas depth-set)
+              &amp; ambang alarm. Setpoint depth-set sendiri direkam dari tombol SET di
+              dashboard, bukan diisi di sini.</p>
             <div class="card__row card__row--wrap">
               ${numField("suPool", "Pool depth", CONFIG.POOL_DEPTH, "0.1", "m")}
               ${numField("suDanger", "Danger depth", CONFIG.DANGER_DEPTH, "0.1", "m")}
-              ${numField("suDepthDefault", "Depth target awal", CONFIG.DEPTH_DEFAULT, "0.05", "m")}
             </div>
             <button class="btn-wide" id="suApplyPool">Apply</button>
-            <span class="card__info" id="suPoolInfo">Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m · Target awal ${CONFIG.DEPTH_DEFAULT.toFixed(2)} m</span>
+            <span class="card__info" id="suPoolInfo">Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m</span>
           </div>
 
           <!-- MOBILE COMPANION -->
@@ -517,24 +518,15 @@ export const setupPage = {
     root.querySelector("#suApplyPool").onclick = () => {
       const pool = parseFloat(root.querySelector("#suPool").value);
       const danger = parseFloat(root.querySelector("#suDanger").value);
-      const target = parseFloat(root.querySelector("#suDepthDefault").value);
       if (!Number.isFinite(pool) || pool < 0) { log("Pool depth tidak valid", "warn"); return; }
-      // Target di luar kolam berarti wahana ditekan ke dasar tanpa henti begitu
-      // mode Alt Hold ditekan — tolak di sini, bukan setelah menyelam.
-      if (!Number.isFinite(target) || target < 0 || target > pool) {
-        log(`Depth target awal harus 0..${pool.toFixed(2)} m`, "warn");
-        return;
-      }
       CONFIG.POOL_DEPTH = pool;
-      CONFIG.DEPTH_DEFAULT = target;
       if (Number.isFinite(danger) && danger > 0) CONFIG.DANGER_DEPTH = danger;
-      this.els.poolInfo.textContent = `Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m · Target awal ${CONFIG.DEPTH_DEFAULT.toFixed(2)} m`;
+      this.els.poolInfo.textContent = `Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m`;
       saveSetup();
       // beri tahu Control agar depth-tape di-skala ulang mengikuti pool depth baru
       window.dispatchEvent(new Event("hydroship:pool-depth"));
       sendCmd("pool_depth", CONFIG.POOL_DEPTH);
-      sendCmd("depth_default", CONFIG.DEPTH_DEFAULT);
-      log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m, target awal ${CONFIG.DEPTH_DEFAULT.toFixed(2)} m`, "ok");
+      log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m`, "ok");
     };
 
     /* MOBILE COMPANION */
