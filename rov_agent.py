@@ -200,23 +200,6 @@ REQUESTED_MODE_TIMEOUT = 3.0
 
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
 
-def update_depth_target_from_manual_heave(axes):
-    """Saat operator menggerakkan heave di depth-hold,
-    target depth mengikuti depth aktual sampai joystick dilepas.
-    """
-    global depth_target
-
-    if not depth_hold_active():
-        return
-
-    if abs(axes.get("heave", 0)) <= HEAVE_MANUAL_EPSILON:
-        return
-
-    current_depth = state["depth"]
-
-    with depth_lock:
-        depth_target = clamp_depth_target(current_depth, pool_depth)
-
 def _effective_requested_mode():
     """requested_mode kalau masih dalam jendela REQUESTED_MODE_TIMEOUT, else None.
 
@@ -1039,14 +1022,6 @@ def command_listener():
                     joystick[name] = new_value
                     last_joystick_update = time.time()
 
-                # Saat operator menggerakkan heave di ALT_HOLD/POSHOLD,
-                # target mengikuti depth aktual ROV.
-                if name == "heave":
-                    with joystick_lock:
-                        current_axes = dict(joystick)
-
-                    update_depth_target_from_manual_heave(current_axes)
-                    
             elif name in GUI_ONLY_COMMANDS:
                 # Murni urusan dashboard, tidak ada padanannya di wahana.
                 pass
