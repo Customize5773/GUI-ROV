@@ -724,6 +724,23 @@ function applySimCommand(name, value, msg) {
       // Sengaja TIDAK menyentuh depth-set: masuk Alt Hold berarti "tahan
       // kedalaman sekarang" (kerjaan cascade PID ArduSub), bukan "menyelam ke
       // setpoint". Sama seperti handler pilot_mode di rov_agent.py.
+      //
+      // TAPI: kalau depth-set sudah ON dari sesi sebelumnya dan errornya besar
+      // (operator pindah mode sambil wahana jauh dari setpoint lama), matikan
+      // saklarnya. Tanpa ini, pindah balik ke Alt Hold memicu bias throttle
+      // penuh tanpa operator menekan apa pun — kejutan yang sama seperti
+      // "masuk Alt Hold langsung menyelam" yang sedang diperbaiki.
+      if (
+        DEPTH_HOLD_MODES.has(mapped) &&
+        simDepthHoldEnabled &&
+        simDepthTarget != null &&
+        Math.abs(simDepthTarget - simDepthNow()) > 0.3
+      ) {
+        simDepthHoldEnabled = false;
+        console.log(
+          `[SIM] depth-set OFF — error ${Math.abs(simDepthTarget - simDepthNow()).toFixed(2)} m terlalu besar saat pindah mode`
+        );
+      }
       break;
     }
     // Tombol SET: rekam kedalaman "sekarang". Tidak menuntut armed maupun mode
