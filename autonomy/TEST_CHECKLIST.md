@@ -14,6 +14,10 @@ cd /home/rasya/GUI-ROV
 pip install pymavlink opencv-python pyzbar numpy
 ```
 
+**Field laptop pre-flight (pool day):** pastikan `opencv-python`, `pyzbar`, dan
+system lib `libzbar0` (`sudo apt install libzbar0` di Linux) sudah terpasang —
+tanpa `libzbar0`, `pyzbar` gagal import saat startup, bukan saat decode QR.
+
 ### Quick Integration Check
 ```bash
 python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state DIVE --no-wait-autonomous
@@ -241,6 +245,27 @@ If SITL reveals critical logic bugs:
 3. **mission5.py logic** — fix directly (unchanged from pre-existing)
 
 No data loss; git history preserved.
+
+---
+
+## Pool Trial Launch
+
+Satu perintah menggantikan 3-4 terminal manual (vehicle/rov_link/GUI/FSM):
+
+```bash
+cp autonomy/config/mission5.example.yaml autonomy/config/mission5.local.yaml
+# isi gain per fase kedalaman (bench/shallow/deep) di mission5.local.yaml
+# (sudah gitignored, aman diisi nilai hasil tuning lokal)
+
+python autonomy/tools/launch_sitl.py --vehicle none --mavlink /dev/ttyACM0 \
+    --fsm --vision usb --calib vision/calibration/dwe.npz \
+    --config autonomy/config/mission5.local.yaml \
+    --log-file /tmp/pool_run1.log --no-gui
+```
+
+Setup pool saat ini **single-cam (legacy)** — cukup `--calib dwe.npz`, TIDAK
+perlu kalibrasi dual-cam (`bottom.npz`/`wall.npz`). `--log-file` mengarsipkan
+log run ke disk untuk perbandingan gain pasca-trial (run 1 vs run 2).
 
 ---
 

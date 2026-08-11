@@ -738,13 +738,27 @@ class Mission5FSM:
             self.pose_servo.reset()
             self._transition(State.M5_DOCK)
         elif not near:
-            # Turun ke level hook; sapu pelan bila QR belum terlihat
-            yaw = 0 if qr is not None else int(YAW_SPEED * 0.6)
+            # Turun ke level hook; sambil arahkan heading balik ke dinding target (WALL_HEADING),
+            # bukan sapu buta — dinding sudah diketahui dari QR misi 1, tak perlu "ingat" posisi.
+            yaw = 0 if qr is not None else self._heading_toward_wall(telem)
             self.cmd.send(vert=-DIVE_SPEED, yaw=yaw)
             log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=%s", depth, HOOK_DEPTH, bool(qr))
         else:
-            self.cmd.send(yaw=YAW_SPEED)   # sudah di level hook tapi QR belum terlihat → sapu
+            yaw = YAW_SPEED if self._target_wall is None else self._heading_toward_wall(telem)
+            self.cmd.send(yaw=yaw)   # sudah di level hook, QR belum terlihat → arah dinding target
             log.debug("[FSM] M5_REDIVE sapu cari QR @depth=%.2f", depth)
+
+    def _heading_toward_wall(self, telem) -> int:
+        """Yaw menuju heading dinding target (sama dgn NAV_WALL) — dipakai M5_REDIVE
+        agar sapu cari QR terarah, bukan sapu buta satu arah."""
+        if self._target_wall is None:
+            return int(YAW_SPEED * 0.6)
+        heading    = telem.get('heading', 0.0)
+        target_hdg = WALL_HEADING.get(self._target_wall, heading)
+        err = self._heading_error(heading, target_hdg)
+        if abs(err) < 10:
+            return 0
+        return YAW_SPEED if err > 0 else -YAW_SPEED
 
     def _state_m5_dock(self, telem):
         """Misi 5b: docking closed-loop ke QR payload ("nembak x & y"). PBVS bila terkalibrasi.
@@ -1018,6 +1032,8 @@ def main():
     ap.add_argument('--no-wait-autonomous', action='store_true',
                     help='langsung jalan tanpa menunggu toggle GUI mode=autonomous (uji SITL/mock)')
     ap.add_argument('--loglevel', default='INFO')
+    ap.add_argument('--log-file', default=None,
+                    help='arsipkan log run ke file (mis. utk analisis pasca-trial)')
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -1026,6 +1042,10 @@ def main():
         datefmt='%H:%M:%S',
         force=True,   # timpa basicConfig sementara di atas (dipakai saat load --config)
     )
+    if args.log_file:
+        fh = logging.FileHandler(args.log_file)
+        fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s %(message)s', datefmt='%H:%M:%S'))
+        logging.getLogger().addHandler(fh)
 
     log.info("[main] Inisialisasi komponen...")
 

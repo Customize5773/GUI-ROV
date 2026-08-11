@@ -17,6 +17,7 @@ Pakai:
     python tools/launch_sitl.py --fsm --start-state M5_REDIVE --vision mock
     python tools/launch_sitl.py --no-gui                  # tanpa server.js (mis. GUI sudah jalan)
     python tools/launch_sitl.py --vehicle none --mavlink /dev/ttyACM0 --no-gui  # Pixhawk asli via USB
+    python tools/launch_sitl.py --vehicle none --mavlink /dev/ttyACM0 --fsm --vision usb --calib vision/calibration/dwe.npz --no-gui  # pool trial
 
 Keluaran tiap proses anak diberi label warna [VEHICLE]/[ROV_LINK]/[GUI]/[FSM] di satu
 terminal. Tekan Ctrl+C SEKALI untuk menghentikan SEMUA proses dengan rapi. Bila salah
@@ -70,6 +71,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="dipakai bila --fsm")
     ap.add_argument("--config", default=None,
                     help="dipakai bila --fsm: path config tuning .yaml/.yml/.json")
+    ap.add_argument("--calib", default=None,
+                    help="dipakai bila --fsm: path kalibrasi kamera .npz utk mode PBVS (solvePnP)")
     ap.add_argument("--no-wait-autonomous", action="store_true",
                     help="dipakai bila --fsm: langsung jalan tanpa menunggu toggle GUI")
     ap.add_argument("--delay", type=float, default=1.5,
@@ -115,6 +118,8 @@ def build_plan(args):
                   "--start-state", args.start_state]
         if args.config:
             fsm_cmd += ["--config", args.config]
+        if args.calib:
+            fsm_cmd += ["--calib", args.calib]
         if args.no_wait_autonomous:
             fsm_cmd += ["--no-wait-autonomous"]
         plan.append(("FSM", fsm_cmd, AUTONOMY, None))
