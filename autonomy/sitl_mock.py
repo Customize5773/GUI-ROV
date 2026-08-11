@@ -4,15 +4,22 @@ sitl_mock.py — MOCK vehicle MAVLink ringan untuk menguji rov_link.py TANPA WSL
 
 Berperan seolah-olah ArduSub: mengirim HEARTBEAT/ATTITUDE/SCALED_PRESSURE2/SYS_STATUS,
 dan MENG-INTEGRASIKAN MANUAL_CONTROL yang diterima menjadi gerak palsu (heading & depth
-berubah), sehingga 3D di GUI ikut bergerak saat kamu menekan kontrol. Cukup `pip install pymavlink`.
+berubah), sehingga 3D di GUI ikut bergerak saat kamu menekan kontrol.
 
-Jalankan:
+Mode mission5: bila --telem-extra diberikan, kirim state ke mission5 FSM di port terpisah.
+
+Jalankan (standalone):
     python sitl_mock.py --mavlink udpout:127.0.0.1:14555
-(rov_link.py harus `--mavlink udpin:0.0.0.0:14555`)
+
+Jalankan (dengan mission5 FSM):
+    python sitl_mock.py --mavlink udpout:127.0.0.1:14555 --telem-extra 127.0.0.1:14552
 """
 
 import argparse
+import json
 import math
+import socket
+import threading
 import time
 
 from pymavlink import mavutil
@@ -22,13 +29,44 @@ G = 9.80665
 SURFACE_HPA = 1013.25
 
 
+class TelemetryFanout:
+    """Kirim telemetri ke multiple destinations (GUI + FSM autonomous)."""
+    def __init__(self, extra_dests=None):
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.dests = extra_dests or []
+
+    def send(self, telem_dict):
+        if not self.dests:
+            return
+        payload = json.dumps(telem_dict).encode()
+        for host, port in self.dests:
+            try:
+                self.sock.sendto(payload, (host, port))
+            except OSError:
+                pass
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--mavlink", default="udpout:127.0.0.1:14555")
+    ap.add_argument("--telem-extra", default="",
+                    help="host:port tambahan untuk telemetri mission5 FSM (mis. 127.0.0.1:14552)")
     args = ap.parse_args()
 
     m = mavutil.mavlink_connection(args.mavlink, source_system=1, source_component=1)
     print(f"[MOCK] mengirim sebagai vehicle ke {args.mavlink}")
+
+    # Parse extra telemetry destination
+    extra_dests = []
+    if args.telem_extra:
+        for item in args.telem_extra.split(","):
+            item = item.strip()
+            if item:
+                host, port = item.rsplit(":", 1)
+                extra_dests.append((host, int(port)))
+                print(f"[MOCK] telemetri extra ke {host}:{port}")
+    fanout = TelemetryFanout(extra_dests)
 
     # Windows: socket udpout baru bisa recv setelah paket pertama dikirim.
     # Kirim heartbeat awal agar socket tersambung (hindari WinError 10022).
@@ -43,7 +81,7 @@ def main():
     depth = 0.0              # m
     roll = pitch = 0.0       # deg
     t0 = time.time()
-    last = {"hb": 0, "att": 0, "press": 0, "sys": 0}
+    last = {"hb": 0, "att": 0, "press": 0, "sys": 0, "telem": 0}
 
     while True:
         now = time.time()
@@ -73,7 +111,23 @@ def main():
             elif t in ("SET_MODE", "COMMAND_INT"):
                 pass
 
-        # ── kirim telemetri ──
+        # ── kirim telemetri ke mission5 FSM (dari rov_link.py via fan-out) ──
+        if now - last["telem"] >= 0.1:
+            telem = {
+                'heading': heading,
+                'roll': roll,
+                'pitch': pitch,
+                'depth': depth,
+                'temp': 26.5,
+                'voltage': 15.6,
+                'armed': armed,
+                'light': False,
+                'mode': 'manual',  # akan di-override oleh rov_link saat toggle autonomous
+            }
+            fanout.send(telem)
+            last["telem"] = now
+
+        # ── kirim telemetri MAVLink ──
         if now - last["hb"] >= 1.0:
             base = mavutil.mavlink.MAV_MODE_FLAG_CUSTOM_MODE_ENABLED
             if armed:

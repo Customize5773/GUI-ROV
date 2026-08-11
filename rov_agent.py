@@ -78,7 +78,7 @@ state = {
     "voltage": 0.0,
     "armed": False,
     "light": False,
-    "mode": "unknown",
+    "mode": "manual",
     # "ok" selama axis dari GUI masih mengalir, "stale" saat fail-safe idle
     # aktif dan Pi mengirim netral sendiri. Sengaja BUKAN "link": sisi browser
     # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
@@ -464,6 +464,9 @@ def send_telemetry():
     # Dipantulkan supaya operator bisa memastikan wahana benar-benar TAHU
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
+
+    # Update control mode untuk mission5 FSM (saat toggle autonomous/manual di GUI)
+    state["mode"] = current_control_mode
 
     send_to_gui(state)
 

@@ -84,9 +84,10 @@ def build_plan(args):
     plan = []
 
     if args.vehicle == "mock":
-        plan.append(("VEHICLE",
-                     [py, "sitl_mock.py", "--mavlink", "udpout:127.0.0.1:14555"],
-                     AUTONOMY, None))
+        mock_cmd = [py, "sitl_mock.py", "--mavlink", "udpout:127.0.0.1:14555"]
+        if args.fsm:
+            mock_cmd += ["--telem-extra", f"127.0.0.1:{args.fsm_telem_port}"]
+        plan.append(("VEHICLE", mock_cmd, AUTONOMY, None))
     elif args.vehicle == "sitl":
         pass  # ArduSub SITL diasumsikan sudah jalan terpisah (tools/run_sitl.sh)
 
