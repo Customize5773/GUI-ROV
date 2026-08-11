@@ -45,15 +45,24 @@ PID_PARAM_MAP = {
     ("yaw", "p"): ("ATC_RAT_YAW_P", REAL32, 0.0, 1.0),
     ("yaw", "i"): ("ATC_RAT_YAW_I", REAL32, 0.0, 1.0),
     ("yaw", "d"): ("ATC_RAT_YAW_D", REAL32, 0.0, 0.05),
+    ("roll", "p"): ("ATC_RAT_RLL_P", REAL32, 0.0, 1.0),
+    ("roll", "i"): ("ATC_RAT_RLL_I", REAL32, 0.0, 1.0),
+    ("roll", "d"): ("ATC_RAT_RLL_D", REAL32, 0.0, 0.05),
+    ("pitch", "p"): ("ATC_RAT_PIT_P", REAL32, 0.0, 1.0),
+    ("pitch", "i"): ("ATC_RAT_PIT_I", REAL32, 0.0, 1.0),
+    ("pitch", "d"): ("ATC_RAT_PIT_D", REAL32, 0.0, 0.05),
     ("depth", "p"): ("PSC_ACCZ_P", REAL32, 0.2, 1.5),
     ("depth", "i"): ("PSC_ACCZ_I", REAL32, 0.0, 3.0),
     ("depth", "d"): ("PSC_ACCZ_D", REAL32, 0.0, 0.4),
 }
 
-# Urutan tulis yang stabil: P lalu I lalu D, yaw sebelum depth. Bukan sekadar
-# rapi — urutan yang tetap membuat log agent bisa dibandingkan antar percobaan.
+# Urutan tulis yang stabil: P lalu I lalu D, yaw -> roll -> pitch -> depth. Bukan
+# sekadar rapi — urutan yang tetap membuat log agent bisa dibandingkan antar
+# percobaan.
 PID_WRITE_ORDER = (
     ("yaw", "p"), ("yaw", "i"), ("yaw", "d"),
+    ("roll", "p"), ("roll", "i"), ("roll", "d"),
+    ("pitch", "p"), ("pitch", "i"), ("pitch", "d"),
     ("depth", "p"), ("depth", "i"), ("depth", "d"),
 )
 

@@ -162,6 +162,8 @@ test("streamAll kedua membatalkan yang pertama lewat nilai kembaliannya", (done)
 // Nilai gain yang benar-benar ada di Pixhawk wahana.
 const FC_NYATA = {
   yaw: { p: 0.18, i: 0.018, d: 0.0 },
+  roll: { p: 0.135, i: 0.09, d: 0.0036 },
+  pitch: { p: 0.135, i: 0.09, d: 0.0036 },
   depth: { p: 0.5, i: 0.1, d: 0.0 },
 };
 // Default LAMA di public/js/config.js — bukan satuan ArduSub.
@@ -170,10 +172,12 @@ const GUI_DEFAULT_LAMA = {
   depth: { p: 10.0, i: 0.5, d: 2.0 },
 };
 
-test("keenam gain terpetakan ke param ArduSub yang benar", () => {
-  assert.strictEqual(PID_PARAM_MAP.length, 6);
+test("kedua belas gain terpetakan ke param ArduSub yang benar", () => {
+  assert.strictEqual(PID_PARAM_MAP.length, 12);
   assert.deepStrictEqual(PID_PARAM_MAP.map((e) => e[2]), [
     "ATC_RAT_YAW_P", "ATC_RAT_YAW_I", "ATC_RAT_YAW_D",
+    "ATC_RAT_RLL_P", "ATC_RAT_RLL_I", "ATC_RAT_RLL_D",
+    "ATC_RAT_PIT_P", "ATC_RAT_PIT_I", "ATC_RAT_PIT_D",
     "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_ACCZ_D",
   ]);
 });
@@ -192,7 +196,7 @@ test("nilai FC nyata lolos validasi", () => {
   // BERJALAN di wahana, rentangnya yang salah.
   const { writes, rejects } = resolvePidWrites(FC_NYATA);
   assert.deepStrictEqual(rejects, []);
-  assert.strictEqual(writes.length, 6);
+  assert.strictEqual(writes.length, 12);
 });
 
 test("default GUI lama ditolak, tidak ikut ditulis", () => {
