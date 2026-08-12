@@ -50,6 +50,72 @@ Yaw dari 1 QR planar ambigu (dua solusi IPPE). Squaring tegak-lurus dinding saat
 mengandalkan heading-hold ArduSub. **Backlog**: bila perlu squaring aktif, verifikasi
 stabilitas tanda yaw di kolam dulu (`VERIFIKASI_ARDUSUB.md` M7), baru naikkan `SERVO_KP_YAW`.
 
+### OPEN-FASE1 — Rantai SITL (MAVLink → rov_link.py → FSM) tak pernah keluar dari DIVE (2026-08-12)
+**Status: Fase 1 BELUM VERIFIED — jangan dicentang, jangan lanjut ke Fase 2.**
+
+**Gejala**: `python tools/launch_sitl.py --fsm --vision mock --no-wait-autonomous` start
+bersih (VEHICLE/ROV_LINK/FSM semua up, heartbeat & telemetri UDP mengalir), tapi FSM tak
+pernah turun dari `DIVE` — timeout 15 dtk tiap kali, `DIVE → ABORT`, skor **0/100**.
+Direproduksi **3/3 run** dengan hasil identik (lihat `/tmp/phase1_fsm_run{1,2,3}.log`).
+
+**Environment**: repo lokal, `--vehicle mock` (`sitl_mock.py`, bukan ArduSub SITL WSL2),
+server GUI dijalankan via `npm run sim` (server/), 121 pytest hijau (1 skip) sebelum run.
+
+**Repro**:
+```
+cd server && npm run sim &
+cd autonomy && python3 tools/launch_sitl.py --fsm --vision mock --no-wait-autonomous --no-gui
+```
+
+**Expected**: FSM `DIVE` selesai begitu depth mendekati `DEPTH_TARGET_BOTTOM` (0.70 m),
+lanjut ke `SCAN_QR` dst. sampai `DONE`, 4 siklus hook, skor rubrik > 0.
+
+**Actual**: log `ROV_LINK` menampilkan `[CMD] (diabaikan di link) vert = -30` berulang
+sepanjang state `DIVE` — setpoint vertikal FSM **tidak pernah diterapkan**, sehingga depth
+diam dan timer timeout 15 dtk selalu tercapai.
+
+**Root cause (layer: protokol command FSM↔rov_link, BUKAN MAVLink/vehicle)**: field-name
+mismatch. `fsm/mission5.py` mengirim command JSON dengan key **`"vert"`**
+(`Mission5FSM.send()`, sekitar baris 207–210 & docstring header). `rov_link.py`
+(`handle_command`, sekitar baris 190–191, 98) hanya mengenali
+`self.sp = {"surge","sway","yaw","heave"}` — `"vert"` tidak ada di set itu, jatuh ke
+cabang `else` generik (`print(f"[CMD] (diabaikan di link) {name} = {value}")`) yang
+dimaksudkan utk command GUI-only (`mode`/`controller`/`pid`/dst), bukan utk axis gerak.
+Akibatnya thruster vertikal tak pernah bergerak lewat jalur SITL nyata — meski
+`sim_plant.py` in-process (yang dipakai 121 pytest) tidak mengalami ini karena tak lewat
+`rov_link.py` sama sekali.
+
+**Lapisan MAVLink/telemetri TIDAK bermasalah**: `rov_link.py` → `server.js` UDP telemetry
+terverifikasi jalan (log `server.js`: 199 baris `[TELEM] from 127.0.0.1:... heading=...
+armed=true mode=STABILIZE` selama window pengujian) — heartbeat & pembacaan sensor sampai
+ke GUI. Bug murni di pemetaan nama field axis command.
+
+**Kandidat perbaikan (list saja, TIDAK diimplementasikan sesuai instruksi tugas ini)**:
+- Samakan nama key: ubah `mission5.py` mengirim `"heave"` alih-alih `"vert"` (paling
+  minimal, ikut konvensi `rov_link.py`/`self.sp` yang sudah dipakai jalur manual joystick).
+- ATAU tambah alias `"vert"` di `rov_link.py.handle_command` (map ke `self.sp["heave"]`)
+  agar dua konvensi penamaan (`vert` dokumentasi FSM vs `heave` internal rov_link) sama-sama
+  didukung tanpa mengubah `mission5.py`.
+- Tambah test integrasi kecil (mis. di `tests/test_launch_sitl.py` atau baru) yang menegaskan
+  tiap key command yang dikirim `Mission5FSM.send()`/`_emit()` ada di dalam
+  `RovLink.sp.keys()` — supaya regresi field-name seperti ini tertangkap oleh CI, bukan cuma
+  ketahuan saat SITL run manual.
+
+**Catatan tambahan (di luar cakupan verifikasi, tak dieksekusi)**:
+- Task brief menyebut `autonomy/README_SETUP_C.md` — file itu **tidak ada** di repo (dirujuk
+  dari `ROADMAP_MISI5.md` & docstring `launch_sitl.py`, tapi belum pernah dibuat).
+- `npm run sim` (server `--sim`) menghasilkan telemetri **palsu miliknya sendiri** tiap 100 ms
+  (lihat `server.js` baris ~772) yang di-broadcast bersamaan dgn telemetri UDP nyata dari
+  `rov_link.py` — GUI akan menampilkan campuran/flicker data asli & sintetis. Untuk verifikasi
+  Fase 1 yang bersih, GUI semestinya dijalankan via `npm start` (bukan `npm run sim`) dengan
+  `RPI_ADDR=127.0.0.1` sesuai `ROADMAP_MISI5.md`, bukan `--sim`. Listener UDP `:14551` sendiri
+  tetap aktif & mencatat `[TELEM] from ...` di kedua mode, jadi verifikasi command-layer di
+  atas tidak terpengaruh, tapi verifikasi visual GUI (3D movement) akan salah kalau memakai
+  `--sim`.
+- Verifikasi sisi GUI (toggle Manual↔Autonomous di dashboard nyata, tombol STOP, F12 console,
+  ROV 3D bergerak sinkron) **tidak tercakup** — memerlukan browser interaktif, di luar
+  kapasitas headless observasi ini. Juga tak relevan dieksekusi selama DIVE tak pernah lulus.
+
 ### HOOK-01 — Deteksi hook PVC untuk docking misi 3b (HANG) & misi 4 (DOCK)
 **Konteks**: hook = pipa PVC ¾" (25 mm) ujung-U di dinding, **tanpa QR/marker sendiri**;
 posisi sisi (A/B/C/D) diacak tiap run. `_state_hang` & `_state_dock` dulu **murni timed**
@@ -92,7 +158,7 @@ Referensi: `vision/hook_detect.py`, `fsm/mission5.py` (`_state_hang`/`_state_doc
 | Fase | Status | Sudah ada | Yang kurang / TODO | Blocker |
 |------|--------|-----------|--------------------|---------|
 | **0** Visi di meja | ✅ hampir | servo+pose webcam test jalan; kalibrasi papan catur OK; deteksi QR JSON | Rekam nilai `invert_*` hasil uji ke config; formalkan pass/fail; **QR-01** (ditangani PR ini) | — |
-| **1** SITL | ⏳ belum jalan | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE | Jalankan rantai penuh; verifikasi handoff manual↔autonomous & STOP saat FSM jalan | Perlu jalankan (bukan hardware) — bisa segera |
+| **1** SITL | ❌ dijalankan, GAGAL (lihat **OPEN-FASE1**) | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE | Fix bug field-name `vert`/`heave` (OPEN-FASE1), ulangi 3× run sampai `DONE` konsisten, baru verifikasi handoff manual↔autonomous & STOP | Bug software (bukan hardware) — **blocker utk lanjut Fase 2** |
 | **2** Bring-up bench | 🔒 blocked | `VERIFIKASI_ARDUSUB.md` #1–7; `PERSIAPAN_FASE2-4.md` (run-book, PR ini) | Eksekusi cek arah 6–8 thruster, servo gripper/lampu (channel/PWM), depth, arming | **Hardware** (Pixhawk/ROV) |
 | **3** Uji kolam & tuning | 🔒 blocked | `VERIFIKASI_ARDUSUB.md` M1–M8; config tunable (`--config`); CSV logging (PR ini) | Kalibrasi kamera DI AIR; verif ulang `invert_*`; tuning jarak/depth/timing/`WALL_HEADING`; uji unhook | **Kolam + hardware** |
 | **4** Latihan & lomba | 🔒 blocked | `PERSIAPAN_FASE2-4.md` run-book hari-H + scoresheet (PR ini) | Rehearsal 3× run; drill fallback; checklist boot & pra-dive dieksekusi | **Setup penuh + kolam** |

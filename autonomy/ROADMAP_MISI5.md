@@ -59,6 +59,19 @@ dgn latency & timing nyata.
 GUI menampilkan gerak 3D sinkron, handoff manual/autonomous & STOP terverifikasi.
 
 **Catatan:**
+- **2026-08-12 — BELUM VERIFIED, ada blocker.** `launch_sitl.py --fsm --vision mock
+  --no-wait-autonomous` dijalankan 3× berturut-turut: **3/3 gagal identik**, FSM tak
+  pernah lolos state `DIVE` (timeout 15 dtk → `ABORT`, skor 0/100 tiap run). Root cause:
+  mismatch nama field command — `mission5.py` kirim `"vert"`, `rov_link.py` hanya kenal
+  `"heave"` di antara axis (`self.sp`), jadi setpoint vertikal selalu diabaikan
+  (`[CMD] (diabaikan di link) vert = ...`). Lapisan MAVLink/UDP telemetry sendiri OK
+  (heartbeat & `[TELEM]` masuk ke `server.js` normal) — bug murni di command layer
+  FSM↔rov_link, bukan di koneksi SITL. Detail lengkap + kandidat perbaikan (tak
+  diimplementasikan): lihat `PR-AUTONOMY.md` §1 **OPEN-FASE1**. Jangan lanjut ke Fase 2
+  sampai ini beres & 3× run ulang sukses ke `DONE`.
+  Tak tercakup dlm verifikasi ini (butuh browser interaktif): toggle GUI
+  Manual↔Autonomous, tombol STOP dari dashboard, F12 console, gerak 3D visual —
+  juga tak relevan diuji selama DIVE belum lulus.
 
 ---
 
