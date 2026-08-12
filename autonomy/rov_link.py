@@ -94,8 +94,8 @@ def clamp(v, lo, hi):
 class RovLink:
     def __init__(self, args):
         self.args = args
-        # setpoint manual dari GUI (-100..100)
-        self.sp = {"surge": 0.0, "sway": 0.0, "yaw": 0.0, "vert": 0.0}
+        # setpoint manual dari GUI (-1000..1000, sama seperti clampAxis di server.js)
+        self.sp = {"surge": 0.0, "sway": 0.0, "yaw": 0.0, "heave": 0.0}
         self.light_on = False
         self.control_mode = "manual"
         self.surface_hpa = SURFACE_HPA_DEFAULT
@@ -174,10 +174,12 @@ class RovLink:
     def send_manual_control(self):
         with self.lock:
             s = dict(self.sp)
-        x = int(clamp(s["surge"] * 10, -1000, 1000))   # maju/mundur
-        y = int(clamp(s["sway"] * 10, -1000, 1000))    # samping
-        r = int(clamp(s["yaw"] * 10, -1000, 1000))     # putar (yaw)
-        z = int(clamp(Z_NEUTRAL + s["vert"] * 5, 0, 1000))  # vertikal, 500 netral
+        # s sudah dalam konvensi GUI -1000..1000 (lihat clampAxis di server.js) —
+        # x/y/r dikirim apa adanya, z digeser+dibagi 2 ke rentang 0..1000 ArduSub.
+        x = int(clamp(s["surge"], -1000, 1000))
+        y = int(clamp(s["sway"], -1000, 1000))
+        r = int(clamp(s["yaw"], -1000, 1000))
+        z = int(clamp(Z_NEUTRAL + s["heave"] / 2.0, 0, 1000))
         self.master.mav.manual_control_send(self.master.target_system, x, y, z, r, 0)
 
     def send_gcs_heartbeat(self):
@@ -186,7 +188,7 @@ class RovLink:
 
     # ───────────────────────── Command dari GUI ─────────────────────────
     def handle_command(self, name, value, addr=None):
-        if name in self.sp:                      # surge/sway/yaw/vert
+        if name in self.sp:                      # surge/sway/yaw/heave
             # Kill-switch: axis nyata dari operator (bukan loopback CommandSender milik
             # FSM sendiri) di atas deadzone, saat autonomous berjalan → override manual.
             is_loopback = addr is not None and addr[0] in ("127.0.0.1", "::1")
