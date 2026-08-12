@@ -76,8 +76,10 @@ export const CONFIG = {
      jadi gain seperti itu sekarang gagal terang-terangan — tapi lebih baik
      tidak pernah muncul di layar sejak awal. */
   PID: {
-    yaw:   { p: 0.18, i: 0.018, d: 0.0 },
-    depth: { p: 0.5,  i: 0.1,   d: 0.0 },
+    yaw:   { p: 0.18,  i: 0.018, d: 0.0 },
+    roll:  { p: 0.135, i: 0.09,  d: 0.0036 },
+    pitch: { p: 0.135, i: 0.09,  d: 0.0036 },
+    depth: { p: 0.5,   i: 0.1,   d: 0.0 },
   },
 
   DEMO_ON_START: false,

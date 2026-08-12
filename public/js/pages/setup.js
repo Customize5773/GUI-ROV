@@ -13,6 +13,12 @@ const PID_FIELD_BY_PARAM = {
   ATC_RAT_YAW_P: { id: "suYawP", path: ["yaw", "p"] },
   ATC_RAT_YAW_I: { id: "suYawI", path: ["yaw", "i"] },
   ATC_RAT_YAW_D: { id: "suYawD", path: ["yaw", "d"] },
+  ATC_RAT_RLL_P: { id: "suRollP", path: ["roll", "p"] },
+  ATC_RAT_RLL_I: { id: "suRollI", path: ["roll", "i"] },
+  ATC_RAT_RLL_D: { id: "suRollD", path: ["roll", "d"] },
+  ATC_RAT_PIT_P: { id: "suPitchP", path: ["pitch", "p"] },
+  ATC_RAT_PIT_I: { id: "suPitchI", path: ["pitch", "i"] },
+  ATC_RAT_PIT_D: { id: "suPitchD", path: ["pitch", "d"] },
   PSC_ACCZ_P: { id: "suDepP", path: ["depth", "p"] },
   PSC_ACCZ_I: { id: "suDepI", path: ["depth", "i"] },
   PSC_ACCZ_D: { id: "suDepD", path: ["depth", "d"] },
@@ -186,14 +192,23 @@ export const setupPage = {
             <span class="panel__eyebrow">PID SETUP</span>
             <h3 class="card__title">Hold Control Gains</h3>
             <p class="card__desc">
-              Gain kontrol hold Yaw &amp; Depth. Nilainya dibaca langsung dari flight
-              controller — Yaw = <code>ATC_RAT_YAW_*</code>, Depth = <code>PSC_ACCZ_*</code>.
+              Gain kontrol hold Yaw, Roll, Pitch &amp; Depth. Nilainya dibaca langsung dari
+              flight controller — Yaw = <code>ATC_RAT_YAW_*</code>, Roll = <code>ATC_RAT_RLL_*</code>,
+              Pitch = <code>ATC_RAT_PIT_*</code>, Depth = <code>PSC_ACCZ_*</code>.
               Untuk param lain pakai halaman <b>Vehicle</b>.
             </p>
             <span class="badge" id="suPidSrc">Belum dibaca dari FC</span>
             <label class="card__label">Yaw <small>ATC_RAT_YAW</small></label>
             <div class="card__row card__row--wrap">
               ${numField("suYawP", "P", P.yaw.p, "0.01")} ${numField("suYawI", "I", P.yaw.i, "0.001")} ${numField("suYawD", "D", P.yaw.d, "0.001")}
+            </div>
+            <label class="card__label">Roll <small>ATC_RAT_RLL</small></label>
+            <div class="card__row card__row--wrap">
+              ${numField("suRollP", "P", P.roll.p, "0.01")} ${numField("suRollI", "I", P.roll.i, "0.001")} ${numField("suRollD", "D", P.roll.d, "0.001")}
+            </div>
+            <label class="card__label">Pitch <small>ATC_RAT_PIT</small></label>
+            <div class="card__row card__row--wrap">
+              ${numField("suPitchP", "P", P.pitch.p, "0.01")} ${numField("suPitchI", "I", P.pitch.i, "0.001")} ${numField("suPitchD", "D", P.pitch.d, "0.001")}
             </div>
             <label class="card__label">Depth <small>PSC_ACCZ</small></label>
             <div class="card__row card__row--wrap">
@@ -500,6 +515,8 @@ export const setupPage = {
       };
       const next = {
         yaw: { p: g("#suYawP", "Yaw P"), i: g("#suYawI", "Yaw I"), d: g("#suYawD", "Yaw D") },
+        roll: { p: g("#suRollP", "Roll P"), i: g("#suRollI", "Roll I"), d: g("#suRollD", "Roll D") },
+        pitch: { p: g("#suPitchP", "Pitch P"), i: g("#suPitchI", "Pitch I"), d: g("#suPitchD", "Pitch D") },
         depth: { p: g("#suDepP", "Depth P"), i: g("#suDepI", "Depth I"), d: g("#suDepD", "Depth D") },
       };
       if (kosong.length) { log(`PID tidak dikirim — kolom kosong/tidak valid: ${kosong.join(", ")}`, "warn"); return; }
