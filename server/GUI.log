@@ -190447,3 +190447,365 @@ TYPE = cmd
 NAME = heave
 MASUK IF CMD
 [CMD] heave = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"ping","t":703975}
+TYPE = ping
+NAME = undefined
+[TELEM] from 192.168.2.2:54639 | heading=295.89493281017775 roll=-1.091897157645362 pitch=-4.391903525573739 volt=0.728 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.7332132380727 roll=-1.1678228688700125 pitch=-4.377501150371351 volt=0.726 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.59836884758494 roll=-1.194524655017001 pitch=-4.355567635677717 volt=0.728 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.487419339594 roll=-1.168435767008414 pitch=-4.329697211326899 volt=0.727 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.40168026186063 roll=-1.1045421929858583 pitch=-4.287698902045927 volt=0.727 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.3375557121925 roll=-1.0158694299167663 pitch=-4.2281724434817685 volt=0.726 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.2863309866008 roll=-0.930346606453544 pitch=-4.169342325262587 volt=0.729 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.23146967586365 roll=-0.8641429391027641 pitch=-4.152387460247473 volt=0.726 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.1912228489318 roll=-0.8388976552992252 pitch=-4.1450508642837365 volt=0.731 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.1648583286227 roll=-0.8618754371104586 pitch=-4.123581324885648 volt=0.728 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"ping","t":704980}
+TYPE = ping
+NAME = undefined
+[TELEM] from 192.168.2.2:54639 | heading=295.16690782926935 roll=-0.9295039193924242 pitch=-4.115852879383369 volt=0.727 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.1914030767714 roll=-1.0154427266358783 pitch=-4.126553770003518 volt=0.726 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.2257444022752 roll=-1.1291601769683242 pitch=-4.139523614411215 volt=0.729 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.2595586047914 roll=-1.2532114593561314 pitch=-4.1791611420764045 volt=0.729 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.2878831636271 roll=-1.3480085486930717 pitch=-4.264202641108244 volt=0.729 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
+[TELEM] from 192.168.2.2:54639 | heading=295.3238494737383 roll=-1.3932756489688805 pitch=-4.345301705176944 volt=0.729 armed=true mode=ALT_HOLD
+WS RAW = {"type":"cmd","name":"surge","value":0}
+TYPE = cmd
+NAME = surge
+MASUK IF CMD
+[CMD] surge = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"sway","value":0}
+TYPE = cmd
+NAME = sway
+MASUK IF CMD
+[CMD] sway = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"yaw","value":0}
+TYPE = cmd
+NAME = yaw
+MASUK IF CMD
+[CMD] yaw = 0 -> 192.168.2.2:14550
+WS RAW = {"type":"cmd","name":"heave","value":0}
+TYPE = cmd
+NAME = heave
+MASUK IF CMD
+[CMD] heave = 0 -> 192.168.2.2:14550
