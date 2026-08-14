@@ -6,7 +6,15 @@ import threading
 import math
 from pymavlink import mavutil
 
-from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
+from rov_axes import (
+    AXIS_NEUTRAL,
+    AXIS_RANGE,
+    AXIS_SHAPE,
+    apply_shape_updates,
+    clamp_axis,
+    resolve_manual_packet,
+    shape_axes,
+)
 from rov_modes import (
     depth_bias_engaged,
     depth_hold_allowed,
@@ -27,6 +35,7 @@ from rov_params import (
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from rov_pid import (
     DEPTH_BIAS_ENGAGE,
+    DEPTH_BIAS_LIMIT,
     DEPTH_BIAS_RELEASE,
     clamp_depth_target,
     depth_bias_active,
@@ -96,6 +105,14 @@ state = {
     "pid_p_out": 0.0,
     "pid_i_out": 0.0,
     "pid_d_out": 0.0,
+    # Sama seperti di atas tapi axis ROLL/PITCH — lihat handler PID_TUNING.
+    # Butuh GCS_PID_MASK menyalakan bit roll/pitch di FC (bukan cuma ACCZ).
+    "pid_roll_p_out": 0.0,
+    "pid_roll_i_out": 0.0,
+    "pid_roll_d_out": 0.0,
+    "pid_pitch_p_out": 0.0,
+    "pid_pitch_i_out": 0.0,
+    "pid_pitch_d_out": 0.0,
 }
 
 master = None
@@ -111,6 +128,12 @@ master_lock = threading.Lock()
 # mode ArduSub di bawah — yang ini menentukan siapa yang boleh memerintah,
 # bukan hukum kendali apa yang dipakai wahana.
 current_control_mode = "manual"
+
+# Diset E-Stop, dikonsumsi joystick_sender: buang state ramp axis SEKETIKA
+# alih-alih membiarkannya meluncur turun. Boolean biasa sudah cukup — hanya
+# satu penulis (command listener) dan satu pembaca (joystick_sender), dan
+# kehilangan satu edge tidak mungkin karena penulisnya selalu True.
+shape_reset_requested = False
 
 # Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
@@ -167,6 +190,14 @@ _DEPTH_SAMPLE_BUFFER_SIZE = 10  # 0.1 s @ 10 Hz
 # Perlu memisahkan "bias sedang mengalir?" dari "bias boleh mengalir untuk error
 # ini?" supaya histeresis bekerja.
 _bias_active = False
+
+# Throttle log diagnostik depth-hold ke 1 Hz — sama seperti _last_telem_log.
+# Ditambahkan setelah trial 15 Agu 2026 menunjukkan bias TERHITUNG besar
+# (z~660) tapi PWM thruster vertikal nyaris tidak bergerak saat surge/yaw
+# aktif bersamaan. Log ini menjawab langsung: apakah z yang dihitung memang
+# yang dikirim, dan apakah sempat mentok DEPTH_BIAS_LIMIT — tanpa itu,
+# "depth-hold tidak respons" cuma bisa direkonstruksi manual dari state SEND.
+_last_depth_diag = 0.0
 
 # Tombol SET (dan toggle ON/OFF) sifatnya sekali-pencet, tapi backend tidak
 # boleh percaya penuh pada klien: gamepad yang ter-bounce atau klien nakal bisa
@@ -279,6 +310,15 @@ def apply_depth_hold_bias(mc, axes):
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
+
+    global _last_depth_diag
+    now = time.time()
+    if now - _last_depth_diag >= 1.0:
+        _last_depth_diag = now
+        mentok = " MENTOK LIMIT" if abs(bias) >= DEPTH_BIAS_LIMIT - 0.5 else ""
+        print(f"[DEPTH] diag target={target:.2f} depth={state['depth']:.2f} "
+              f"err={target - state['depth']:+.3f} bias={bias:+.1f} z={out['z']}{mentok}")
+
     return out
 
 
@@ -535,6 +575,7 @@ def command_listener():
     global depth_hold_enabled
     global poshold_active
     global heading_target
+    global shape_reset_requested
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -711,6 +752,10 @@ def command_listener():
                 print("[MAV] STOP -> DISARM")
                 with joystick_lock:
                     joystick.update(AXIS_NEUTRAL)
+                # Axis mentah sudah netral, tapi joystick_sender menyimpan
+                # nilai TER-SHAPE sendiri yang masih akan melandai turun.
+                # E-Stop harus memotongnya, bukan menunggu ramp selesai.
+                shape_reset_requested = True
                 # E-Stop tidak boleh meninggalkan overlay yang masih menulis ke
                 # r: axis dinetralkan di sini, dan koreksi heading akan
                 # mengisinya kembali pada tick berikutnya.
@@ -871,6 +916,28 @@ def command_listener():
                 shown_txt = "belum di-set" if shown is None else f"{shown:.2f} m"
                 print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
                       f"(target: {shown_txt})")
+
+            elif name == "axis_shape":
+
+                # Tuning live skala/laju axis tanpa SSH + restart. Tidak ada UI
+                # untuk ini; dipakai dari terminal laptop saat trial kolam,
+                # memakai pola nc yang sudah didokumentasikan di SETUP.md:
+                #
+                #   echo '{"name":"axis_shape","value":{"sway":{"scale":0.5}}}' \
+                #     | nc -u -w1 192.168.2.2 14550
+                #
+                # Update PARSIAL: field yang tidak disebut dibiarkan apa adanya.
+                applied, rejects = apply_shape_updates(value)
+
+                for field, reason in rejects:
+                    print(f"[SHAPE] DITOLAK {field}: {reason}")
+
+                for axis, (rise, fall, scale) in applied.items():
+                    print(f"[SHAPE] {axis}: rise={rise:.0f}/s fall={fall:.0f}/s "
+                          f"scale={scale:.2f}")
+
+                if not applied and not rejects:
+                    print(f"[SHAPE] tidak ada yang diubah: {value!r}")
 
             elif name == "pid":
 
@@ -1292,7 +1359,15 @@ def joystick_sender():
     axis, sedangkan ArduSub mengharapkan z pada 0..1000 dengan 500 = netral.
     Mengirim heave mentah sebagai z membuat "diam" berarti MENYELAM PENUH —
     termasuk saat E-Stop dan saat link GUI putus.
+
+    Loop ini juga pemegang STATE shaping (lihat shape_axes di rov_axes.py):
+    modul itu sengaja murni, jadi nilai axis ter-shape sebelumnya disimpan di
+    sini — sejajar dengan last_joystick_update yang sudah ada.
     """
+    global shape_reset_requested
+
+    shaped = dict(AXIS_NEUTRAL)
+
     while True:
         # Link Pixhawk sedang putus/menyambung ulang — tidak ada tujuan kirim.
         if master is None:
@@ -1303,17 +1378,37 @@ def joystick_sender():
             axes = dict(joystick)
             last_update = last_joystick_update
 
+        # Ramp TIDAK BOLEH menunda perintah berhenti. E-Stop menetralkan axis
+        # lalu disarm; tanpa reset di sini, nilai ter-shape masih meluncur
+        # turun selama ~0,2 detik sesudahnya. Disarm memang sudah mematikan
+        # thruster, tapi keselamatan tidak boleh bergantung pada satu lapis.
+        if shape_reset_requested:
+            shape_reset_requested = False
+            shaped = dict(AXIS_NEUTRAL)
+
+        shaped = shape_axes(shaped, axes, JOYSTICK_SEND_INTERVAL)
+
         # Fail-safe: GUI diam terlalu lama (crash / joystick dicabut / link
         # putus) -> tahan posisi netral, jangan ulangi input terakhir.
-        mc, stale = resolve_manual_packet(axes, last_update, time.time())
+        mc, stale = resolve_manual_packet(shaped, last_update, time.time())
 
         # Beri tahu dashboard bahwa yang mengalir sekarang adalah netral buatan
         # Pi, bukan perintah operator.
         state["cmd_link"] = "stale" if stale else "ok"
 
+        # Alasan yang sama seperti E-Stop: saat fail-safe, netral harus SEKETIKA.
+        # resolve_manual_packet sudah mengirim netral ke FC, reset di sini
+        # menjaga agar tick berikutnya juga tidak melanjutkan ramp dari nilai
+        # lama begitu link kembali.
+        if stale:
+            shaped = dict(AXIS_NEUTRAL)
+
         # Saat stale, axes yang dipakai juga harus netral supaya bias
-        # depth-hold tidak dihitung dari input basi.
-        eff_axes = AXIS_NEUTRAL if stale else axes
+        # depth-hold tidak dihitung dari input basi. Saat tidak stale yang
+        # dipakai nilai TER-SHAPE, bukan mentah: gerbang "operator sedang
+        # memegang stik" (HEAVE/YAW_MANUAL_EPSILON) harus menilai apa yang
+        # benar-benar diperintahkan ke thruster, bukan niat mentahnya.
+        eff_axes = AXIS_NEUTRAL if stale else shaped
         mc = apply_depth_hold_bias(mc, eff_axes)
 
         # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
@@ -1616,15 +1711,32 @@ def main():
                 state["thruster_vertical_pwm"] = int(sum(vals) / len(vals))
 
         # --------------------------------
-        # PID_TUNING: P/I/D depth-hold (axis ACCZ = PSC_ACCZ, controller
-        # vertikal ArduSub) untuk CSV tuning. Diam kalau PID_TUNING_MASK
-        # belum menyalakan bit ACCZ di FC — bukan error, state tetap 0.0.
+        # PID_TUNING: P/I/D per axis untuk CSV tuning + diagnosa offline.
+        # Diam per axis kalau bit-nya di GCS_PID_MASK belum menyala di FC —
+        # bukan error, field itu tetap 0.0.
+        #
+        # ROLL/PITCH ditambahkan setelah trial 15 Agu 2026 (GCS_PID_MASK
+        # dinaikkan dari 8 ke 15): sebelumnya attitude loop cuma terlihat
+        # LIVE di halaman Analyze (maybe_stream_mavlink), tidak pernah masuk
+        # hydroships*.log — jadi tidak bisa dianalisis offline setelah trial
+        # selesai. ACCZ tetap dipetakan ke pid_p_out/i/d_out (nama lama,
+        # dipakai CSV tuning depth-hold yang sudah ada); ROLL/PITCH dapat
+        # field terpisah supaya tidak menimpa itu.
         # --------------------------------
         elif mtype == "PID_TUNING":
-            if getattr(msg, "axis", None) == mavutil.mavlink.PID_TUNING_ACCZ:
+            axis = getattr(msg, "axis", None)
+            if axis == mavutil.mavlink.PID_TUNING_ACCZ:
                 state["pid_p_out"] = float(msg.P)
                 state["pid_i_out"] = float(msg.I)
                 state["pid_d_out"] = float(msg.D)
+            elif axis == mavutil.mavlink.PID_TUNING_ROLL:
+                state["pid_roll_p_out"] = float(msg.P)
+                state["pid_roll_i_out"] = float(msg.I)
+                state["pid_roll_d_out"] = float(msg.D)
+            elif axis == mavutil.mavlink.PID_TUNING_PITCH:
+                state["pid_pitch_p_out"] = float(msg.P)
+                state["pid_pitch_i_out"] = float(msg.I)
+                state["pid_pitch_d_out"] = float(msg.D)
 
         # --------------------------------
         # HEARTBEAT: mode dan armed

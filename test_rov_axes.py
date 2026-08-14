@@ -6,12 +6,16 @@
 import unittest
 
 from rov_axes import (
+    AXIS_NEUTRAL,
+    AXIS_SHAPE,
     IDLE_TIMEOUT,
     NEUTRAL,
     Z_NEUTRAL,
     axes_to_manual_control,
     clamp_axis,
     resolve_manual_packet,
+    resolve_shape_updates,
+    shape_axes,
     to_mavlink_z,
 )
 
@@ -129,6 +133,144 @@ class TestResolveManualPacket(unittest.TestCase):
         self.assertEqual(packet["y"], 0)
         self.assertEqual(packet["r"], 0)
         self.assertEqual(packet["z"], Z_NEUTRAL)
+
+
+class TestShapeAxes(unittest.TestCase):
+    """Rate-limit + skala otoritas axis (lihat docstring rov_axes)."""
+
+    DT = 0.05  # JOYSTICK_SEND_INTERVAL, 20 Hz
+    # Shape eksplisit supaya test tidak ikut berubah saat AXIS_SHAPE di-tuning.
+    SHAPE = {
+        "surge": (1000.0, 2000.0, 1.0),
+        "sway": (1000.0, 2000.0, 0.5),
+        "yaw": (1000.0, 2000.0, 1.0),
+        "heave": (1000.0, 2000.0, 1.0),
+    }
+
+    _DEFAULT = object()  # sentinel: dt=None adalah kasus uji yang sah
+
+    def shape(self, current, target, dt=_DEFAULT):
+        if dt is self._DEFAULT:
+            dt = self.DT
+        return shape_axes(current, target, dt, self.SHAPE)
+
+    def test_tidak_melompat_ke_penuh_dalam_satu_tick(self):
+        out = self.shape(dict(AXIS_NEUTRAL), {"surge": 1000})
+        self.assertEqual(out["surge"], 50)  # 1000/s * 0.05 s
+
+    def test_butuh_banyak_tick_untuk_mencapai_penuh(self):
+        axes = dict(AXIS_NEUTRAL)
+        for _ in range(20):  # 20 tick * 50 = 1000
+            axes = self.shape(axes, {"surge": 1000})
+        self.assertEqual(axes["surge"], 1000)
+
+        # Sudah di target -> berhenti di sana, tidak melewatinya.
+        self.assertEqual(self.shape(axes, {"surge": 1000})["surge"], 1000)
+
+    def test_turun_lebih_cepat_daripada_naik(self):
+        naik = self.shape(dict(AXIS_NEUTRAL), {"surge": 1000})["surge"]
+        turun = 1000 - self.shape({"surge": 1000}, AXIS_NEUTRAL)["surge"]
+        self.assertGreater(turun, naik)
+
+    def test_skala_mengecilkan_target_akhir(self):
+        # sway scale 0.5 -> stik penuh hanya sampai 500.
+        axes = dict(AXIS_NEUTRAL)
+        for _ in range(50):
+            axes = self.shape(axes, {"sway": 1000})
+        self.assertEqual(axes["sway"], 500)
+
+    def test_skala_tidak_mengubah_axis_lain(self):
+        axes = dict(AXIS_NEUTRAL)
+        for _ in range(50):
+            axes = self.shape(axes, {"surge": 1000})
+        self.assertEqual(axes["surge"], 1000)
+
+    def test_arah_negatif_simetris(self):
+        axes = dict(AXIS_NEUTRAL)
+        for _ in range(50):
+            axes = self.shape(axes, {"yaw": -1000})
+        self.assertEqual(axes["yaw"], -1000)
+
+    def test_balik_tanda_melewati_nol(self):
+        # +200 -> -1000 harus melandai, bukan melompat.
+        out = self.shape({"yaw": 200}, {"yaw": -1000})
+        self.assertEqual(out["yaw"], 150)
+        self.assertGreater(out["yaw"], -1000)
+
+    def test_dt_atau_rate_tidak_masuk_akal_langsung_ke_target(self):
+        # Menahan axis karena jam aneh lebih berbahaya daripada melompat:
+        # wahana bisa berhenti merespons stik tanpa sebab yang terlihat.
+        for dt in (0, -1, None, "abc", float("nan"), float("inf")):
+            out = self.shape(dict(AXIS_NEUTRAL), {"surge": 1000}, dt=dt)
+            self.assertEqual(out["surge"], 1000, f"dt={dt!r}")
+
+    def test_input_sampah_tidak_melempar(self):
+        out = self.shape({"surge": "abc"}, {"surge": None, "sway": {}})
+        self.assertEqual(out["surge"], 0)
+        self.assertEqual(out["sway"], 0)
+
+    def test_current_atau_target_none_dianggap_netral(self):
+        self.assertEqual(self.shape(None, None), dict(AXIS_NEUTRAL))
+
+    def test_selalu_mengembalikan_keempat_axis(self):
+        self.assertEqual(set(self.shape({}, {})), set(AXIS_NEUTRAL))
+
+    def test_tidak_mengubah_dict_masukan(self):
+        cur = dict(AXIS_NEUTRAL)
+        self.shape(cur, {"surge": 1000})
+        self.assertEqual(cur, dict(AXIS_NEUTRAL))
+
+
+class TestResolveShapeUpdates(unittest.TestCase):
+    """Validasi command `axis_shape` — ini masukan dari jaringan."""
+
+    def test_update_parsial_mempertahankan_field_lain(self):
+        applied, rejects = resolve_shape_updates({"sway": {"scale": 0.5}})
+        self.assertEqual(rejects, [])
+        rise, fall, scale = applied["sway"]
+        self.assertEqual(scale, 0.5)
+        self.assertEqual((rise, fall), AXIS_SHAPE["sway"][:2])
+
+    def test_axis_tak_disebut_tidak_ikut_diubah(self):
+        applied, _ = resolve_shape_updates({"sway": {"scale": 0.5}})
+        self.assertEqual(list(applied), ["sway"])
+
+    def test_di_luar_rentang_ditolak_bukan_dijepit(self):
+        for spec in ({"scale": 0}, {"scale": 5}, {"rise": 1}, {"fall": 99999}):
+            applied, rejects = resolve_shape_updates({"surge": spec})
+            self.assertEqual(applied, {}, spec)
+            self.assertTrue(rejects, spec)
+
+    def test_nilai_tidak_valid_ditolak(self):
+        for bad in (None, "abc", True, False, float("nan"), float("inf"), []):
+            applied, rejects = resolve_shape_updates({"surge": {"scale": bad}})
+            self.assertEqual(applied, {}, repr(bad))
+            self.assertTrue(rejects, repr(bad))
+
+    def test_satu_field_gagal_membatalkan_axis_itu_saja(self):
+        applied, rejects = resolve_shape_updates(
+            {"surge": {"scale": 99}, "sway": {"scale": 0.5}}
+        )
+        self.assertNotIn("surge", applied)
+        self.assertIn("sway", applied)
+        self.assertTrue(rejects)
+
+    def test_axis_dan_field_tak_dikenal_ditolak(self):
+        _, rejects = resolve_shape_updates({"terbang": {"scale": 0.5}})
+        self.assertTrue(rejects)
+        _, rejects = resolve_shape_updates({"surge": {"turbo": 2}})
+        self.assertTrue(rejects)
+
+    def test_payload_bukan_dict_ditolak(self):
+        for bad in (None, 5, "sway", []):
+            applied, rejects = resolve_shape_updates(bad)
+            self.assertEqual(applied, {})
+            self.assertTrue(rejects)
+
+    def test_resolve_tidak_memutasi_AXIS_SHAPE(self):
+        sebelum = dict(AXIS_SHAPE)
+        resolve_shape_updates({"sway": {"scale": 0.2}})
+        self.assertEqual(dict(AXIS_SHAPE), sebelum)
 
 
 if __name__ == "__main__":
