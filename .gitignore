@@ -37,3 +37,4 @@ public/models/rov.obj
 # Planning
 Planning/ANALISIS-PID-ROLL-PITCH.md
 server/GUI-ROV.log
+ros2_ws.code-workspace

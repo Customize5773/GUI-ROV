@@ -570,8 +570,25 @@ export const setupPage = {
      setelah param diubah dari halaman Vehicle. */
   onShow() { this.readPidFromVehicle(); },
 
-  readPidFromVehicle() {
+  /* param_get bersifat fire-and-forget: agent mengirim param_request_read_send
+     tanpa retry, jadi SATU paket hilang di link serial/UDP = tidak ada
+     PARAM_VALUE = badge diam di "Belum dibaca dari FC" selamanya, tanpa
+     operator tahu apakah FC bisu atau dia yang lupa menekan tombol. Satu retry
+     + satu pesan kegagalan menutup lubang itu. */
+  readPidFromVehicle(retry = true) {
     for (const name of PID_PARAM_NAMES) sendCmd("param_get", name);
+
+    clearTimeout(this._pidReadTimer);
+    this._pidReadSeq = (this._pidReadSeq || 0) + 1;
+    const seq = this._pidReadSeq;
+    this._pidReadTimer = setTimeout(() => {
+      // Batch yang datang lebih dulu menaikkan _pidReadSeq lewat onParamBatch,
+      // jadi timer yang basi tidak boleh berbuat apa-apa.
+      if (seq !== this._pidReadSeq || this._pidReadOk === seq) return;
+      if (retry) { this.readPidFromVehicle(false); return; }
+      this.els.pidSrc.textContent = "FC tidak menjawab";
+      this.els.pidSrc.className = "badge badge--warn";
+    }, 2000);
   },
 
   /* Isi kolom PID dari PARAM_VALUE yang dikirim wahana.
@@ -604,6 +621,7 @@ export const setupPage = {
     }
 
     if (terisi) {
+      this._pidReadOk = this._pidReadSeq;   // matikan timer "FC tidak menjawab"
       const jam = new Date().toLocaleTimeString();
       this.els.pidSrc.textContent = `Dari FC · ${jam}`;
       this.els.pidSrc.className = "badge badge--ok";

@@ -79,6 +79,10 @@ state = {
     "armed": False,
     "light": False,
     "mode": "manual",
+    # Gate otoritas GUI ("manual"|"autonomous"). SENGAJA kunci sendiri, BUKAN
+    # "mode" di atas — yang itu pilot mode ArduSub dari HEARTBEAT. Pernah
+    # ditimpa di send_telemetry() dan itu mematikan seluruh gerbang depth-hold.
+    "control_mode": "manual",
     # "ok" selama axis dari GUI masih mengalir, "stale" saat fail-safe idle
     # aktif dan Pi mengirim netral sendiri. Sengaja BUKAN "link": sisi browser
     # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
@@ -465,8 +469,14 @@ def send_telemetry():
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
 
-    # Update control mode untuk mission5 FSM (saat toggle autonomous/manual di GUI)
-    state["mode"] = current_control_mode
+    # Gate otoritas untuk mission5 FSM (toggle autonomous/manual di GUI).
+    # HARUS kunci sendiri: dulu ini menulis ke state["mode"] dan menimpa pilot
+    # mode ArduSub dari HEARTBEAT 10x/detik. Akibatnya requested_mode tak pernah
+    # terkonfirmasi, dan sesudah REQUESTED_MODE_TIMEOUT semua gerbang
+    # depth_hold_allowed() jatuh ke "manual" — depth-set dan overlay POSHOLD
+    # berhenti diam-diam persis 3 detik setelah masuk ALT_HOLD.
+    # Pola yang sama dipakai autonomy/rov_link.py dan server/server.js.
+    state["control_mode"] = current_control_mode
 
     send_to_gui(state)
 
