@@ -196,6 +196,23 @@ DEPTH_BIAS_DEADZONE = 130
 DEPTH_BIAS_ENGAGE = 0.05
 DEPTH_BIAS_RELEASE = 0.02
 
+# Redaman: kurangi dorongan begitu vehicle sudah bergerak menuju target dengan
+# cukup cepat, supaya berhenti SEBELUM overshoot alih-alih terus mendorong
+# sampai error kecil. Tanpa ini, DEPTH_BIAS_DEADZONE mendominasi magnitude di
+# SELURUH rentang error praktis (untuk err < 0,65 m, GAIN*err < DEADZONE) —
+# dorongan nyaris konstan ~140-170 sampai sangat dekat target. Trial 15 Agu
+# 2026 (sesi setelah otoritas thruster dipulihkan lewat uji roll + kenaikan
+# ATC_RAT_*_P) membuktikan konsekuensinya: depth berosilasi 0,15-0,57 m
+# mengelilingi target 0,37 m selama 5 menit tanpa menetap — limit cycle
+# klasik, bukan lagi macet di deadzone (masalah lama yang dipecahkan
+# DEPTH_BIAS_DEADZONE) tapi overshoot karena tidak ada redaman sama sekali.
+#
+# Konservatif dulu: LEBIH BAIK redaman kurang (osilasi menyusut pelan)
+# daripada lebih (bias jadi lemah mendekati nol, gagal menahan sama sekali).
+# Naikkan lewat trial berikutnya kalau ayunan masih lebar (lihat
+# tools/analyze_trial.py, kolom "ayunan").
+DEPTH_BIAS_DAMPING = 300.0  # unit z per (m/s) laju error mengecil
+
 
 def depth_bias_active(error, was_active):
     """Apakah bias boleh mengalir untuk `error` ini, mengingat keadaan sebelumnya.
@@ -210,7 +227,7 @@ def depth_bias_active(error, was_active):
     return magnitude >= DEPTH_BIAS_ENGAGE
 
 
-def depth_hold_bias(error, was_active=False):
+def depth_hold_bias(error, was_active=False, closing_rate=0.0, damping=DEPTH_BIAS_DAMPING):
     """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
 
     Dipisah dari apply_depth_hold_bias() (rov_agent.py) supaya bisa diuji
@@ -225,11 +242,21 @@ def depth_hold_bias(error, was_active=False):
 
     `was_active` adalah keluaran depth_bias_active() dari tick sebelumnya —
     lihat catatan histeresis di atas.
+
+    `closing_rate`: seberapa cepat |error| MENGECIL saat ini (m/s, positif =
+    mendekati target — lihat DEPTH_BIAS_DAMPING). Default 0.0 membuat
+    perilaku IDENTIK dengan sebelum redaman ditambahkan, untuk caller lama
+    yang belum menghitung rate.
     """
     if not depth_bias_active(error, was_active):
         return 0.0
 
     magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN
+    # max(0, closing_rate): rate yang MENJAUH dari target (negatif) tidak
+    # boleh MENAMBAH dorongan lewat sini — itu tugas GAIN*err di atas.
+    # max(0, ...) di luar: redaman hanya boleh MELEMAHKAN, tidak pernah
+    # membalik arah dorongan.
+    magnitude = max(0.0, magnitude - damping * max(0.0, closing_rate))
     magnitude = min(magnitude, DEPTH_BIAS_LIMIT)
     return magnitude if error > 0 else -magnitude
 

@@ -191,6 +191,14 @@ _DEPTH_SAMPLE_BUFFER_SIZE = 10  # 0.1 s @ 10 Hz
 # ini?" supaya histeresis bekerja.
 _bias_active = False
 
+# EMA depth untuk estimasi laju (rate) — dipakai meredam bias saat vehicle
+# sudah bergerak cepat menuju target, lihat DEPTH_BIAS_DAMPING di rov_pid.py.
+# Alpha lebih rendah dari smooth_depth() (0,5-0,7): turunan memperkuat noise
+# baro lebih dari posisi mentah, meniru pola AttitudeFilter (attitude_filter.py).
+_DEPTH_RATE_ALPHA = 0.3
+_depth_ema = None
+_depth_ema_ts = None
+
 # Throttle log diagnostik depth-hold ke 1 Hz — sama seperti _last_telem_log.
 # Ditambahkan setelah trial 15 Agu 2026 menunjukkan bias TERHITUNG besar
 # (z~660) tapi PWM thruster vertikal nyaris tidak bergerak saat surge/yaw
@@ -279,6 +287,8 @@ def apply_depth_hold_bias(mc, axes):
       4. stik heave netral           -> begitu operator menyentuh stik, input
                                         manual menang mutlak
     """
+    global _bias_active, _depth_ema, _depth_ema_ts
+
     with depth_lock:
         target = depth_target
         enabled = depth_hold_enabled
@@ -290,9 +300,38 @@ def apply_depth_hold_bias(mc, axes):
         axes.get("heave", 0),
         HEAVE_MANUAL_EPSILON,
     ):
-        global _bias_active
         _bias_active = False
+        # Buang EMA saat gerbang tertutup: begitu bias hidup lagi nanti
+        # (mis. depth-set di-ON-kan ulang), rate tidak boleh dihitung dari
+        # depth yang mungkin sudah lama dan sangat berbeda.
+        _depth_ema = None
+        _depth_ema_ts = None
         return mc
+
+    now = time.time()
+    depth_now = state["depth"]
+
+    # EMA + turunan waktu untuk closing_rate (lihat DEPTH_BIAS_DAMPING di
+    # rov_pid.py). Sampel pertama sejak gerbang terbuka: seed EMA, rate=0 —
+    # tidak ada dt yang valid untuk diturunkan.
+    closing_rate = 0.0
+    if _depth_ema is None:
+        _depth_ema = depth_now
+        _depth_ema_ts = now
+    else:
+        dt = now - _depth_ema_ts
+        ema_lama = _depth_ema
+        _depth_ema += _DEPTH_RATE_ALPHA * (depth_now - _depth_ema)
+        _depth_ema_ts = now
+        if dt > 0:
+            rate = (_depth_ema - ema_lama) / dt
+            err_lama = target - ema_lama
+            # Mendekat = |error| mengecil = closing_rate POSITIF, terlepas
+            # dari arah target ada di atas atau di bawah depth sekarang.
+            if err_lama > 0:
+                closing_rate = rate
+            elif err_lama < 0:
+                closing_rate = -rate
 
     # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
     # HISTERESIS untuk menghindari limit cycle (naik-turun terus di sekitar
@@ -304,7 +343,7 @@ def apply_depth_hold_bias(mc, axes):
         target - state["depth"],
         _bias_active
     )
-    bias = depth_hold_bias(target - state["depth"], _bias_active)
+    bias = depth_hold_bias(target - state["depth"], _bias_active, closing_rate)
     if bias == 0.0:
         return mc
 
@@ -312,12 +351,12 @@ def apply_depth_hold_bias(mc, axes):
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
 
     global _last_depth_diag
-    now = time.time()
     if now - _last_depth_diag >= 1.0:
         _last_depth_diag = now
         mentok = " MENTOK LIMIT" if abs(bias) >= DEPTH_BIAS_LIMIT - 0.5 else ""
         print(f"[DEPTH] diag target={target:.2f} depth={state['depth']:.2f} "
-              f"err={target - state['depth']:+.3f} bias={bias:+.1f} z={out['z']}{mentok}")
+              f"err={target - state['depth']:+.3f} rate={closing_rate:+.3f} "
+              f"bias={bias:+.1f} z={out['z']}{mentok}")
 
     return out
 

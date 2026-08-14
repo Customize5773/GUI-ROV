@@ -33,6 +33,7 @@ SEND = re.compile(r"\[SEND\].*?(\{.*\})")
 # menyaring koreksi kecil, cukup rendah untuk menangkap manuver sungguhan.
 AKTIF = 500
 TENANG_DEG = 3.0  # |roll| & |pitch| di bawah ini = sudah tenang
+OSC_THRESHOLD = 0.10  # ayunan depth (err_max - err_min) di atas ini = berosilasi
 
 
 def baca_gui(path):
@@ -105,11 +106,16 @@ def depth_hold_windows(rows):
     """Kelompokkan sampel depth_hold=True berurutan jadi window, dengan
     err_awal/err_akhir (target - depth) dan rata-rata |roll|/|pitch|.
 
-    Dipakai pertama kali secara manual untuk mendiagnosis trial 15 Agu 2026:
-    error yang TIDAK mengecil sepanjang window (bahkan membesar) adalah
-    tanda depth-hold "tidak respons", biasanya karena thruster vertikal
-    sedang dipakai FC untuk melawan roll/pitch dari manuver surge/yaw
-    bersamaan, bukan bug di perhitungan bias.
+    Dipakai pertama kali secara manual untuk mendiagnosis trial 15 Agu 2026.
+    PENTING: baris dari sini (`rows`, hasil baca_send()) datang dari
+    hydroships*.log, yang di-throttle 1 Hz oleh rov_agent.py
+    (_last_telem_log) — BEDA dari server/GUI.log yang mencetak tiap paket
+    UDP tanpa throttle (10 Hz). Durasi window karena itu `len(w) * 1.0`,
+    BUKAN `* 0.1` — sempat salah 10x di versi awal alat ini dan membuat
+    window 5 menit yang berosilasi terbaca sebagai "29,8 detik, OK".
+    Endpoint (err_awal/err_akhir) saja TIDAK CUKUP untuk menilai window:
+    ayunan lebar bisa kebetulan berakhir dekat titik awal. err_min/err_max
+    itulah yang mengungkap osilasi yang endpoint-nya sembunyikan.
     """
     windows, cur = [], []
     for r in rows:
@@ -126,12 +132,15 @@ def depth_hold_windows(rows):
         if len(w) < 10 or w[0].get("depth_target") is None:
             continue
         tgt = w[0]["depth_target"]
+        errs = [r["depth"] - tgt for r in w]
         out.append({
             "n": len(w),
-            "durasi": len(w) * 0.1,
+            "durasi": len(w) * 1.0,
             "target": tgt,
-            "err_awal": w[0]["depth"] - tgt,
-            "err_akhir": w[-1]["depth"] - tgt,
+            "err_awal": errs[0],
+            "err_akhir": errs[-1],
+            "err_min": min(errs),
+            "err_max": max(errs),
             "roll": st.mean(abs(r["roll"]) for r in w),
             "pitch": st.mean(abs(r["pitch"]) for r in w),
         })
@@ -185,12 +194,19 @@ def main(argv):
         windows = depth_hold_windows(send_rows)
         if windows:
             print(f"\n{len(windows)} window depth-hold ON dari {argv[1]}")
-            print("  durasi  target  err_awal  err_akhir  |roll|  |pitch|")
+            print("  durasi   target  err_awal  err_akhir  ayunan  |roll|  |pitch|")
             for w in windows:
-                membaik = "OK" if abs(w["err_akhir"]) < abs(w["err_awal"]) else "MACET/MELEBAR"
-                print(f"  {w['durasi']:5.1f}s  {w['target']:5.2f}   "
+                ayunan = w["err_max"] - w["err_min"]
+                # Rentang ayunan itu sendiri yang menentukan tenang/tidak —
+                # endpoint saja BISA kebetulan berdekatan padahal di antaranya
+                # berosilasi lebar (lihat docstring depth_hold_windows).
+                verdict = ("BEROSILASI" if ayunan >= OSC_THRESHOLD
+                           else "OK" if abs(w["err_akhir"]) < abs(w["err_awal"])
+                           else "MACET/MELEBAR")
+                menit = f"{w['durasi']/60:4.1f}m" if w["durasi"] >= 60 else f"{w['durasi']:4.0f}s"
+                print(f"  {menit:>7s}  {w['target']:5.2f}   "
                       f"{w['err_awal']:+.3f}    {w['err_akhir']:+.3f}    "
-                      f"{w['roll']:5.2f}   {w['pitch']:5.2f}   {membaik}")
+                      f"{ayunan:.3f}   {w['roll']:5.2f}   {w['pitch']:5.2f}   {verdict}")
     print()
     return 0
 

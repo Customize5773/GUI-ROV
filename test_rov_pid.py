@@ -283,6 +283,51 @@ class TestDepthHoldBias(unittest.TestCase):
         self.assertLess(DEPTH_BIAS_LIMIT, 500)
 
 
+class TestDepthHoldBiasDamping(unittest.TestCase):
+    """Redaman: kurangi dorongan saat vehicle sudah bergerak menuju target.
+
+    Ditambahkan setelah trial 15 Agu 2026 menunjukkan depth berosilasi
+    0,15-0,57 m mengelilingi target selama 5 menit tanpa menetap -- P+floor
+    tanpa redaman jadi limit cycle begitu otoritas thruster cukup untuk
+    benar-benar menggerakkan vehicle (lihat DEPTH_BIAS_DAMPING di rov_pid.py).
+    """
+
+    def test_default_identik_dengan_perilaku_lama(self):
+        # closing_rate default 0.0 -- caller lama yang belum menghitung rate
+        # tidak boleh berubah perilakunya sama sekali.
+        for error in (-0.3, -0.05, 0.0, 0.05, 0.3, 5.0):
+            self.assertEqual(depth_hold_bias(error, was_active=True),
+                              depth_hold_bias(error, was_active=True, closing_rate=0.0))
+
+    def test_rate_mendekat_mengurangi_magnitude(self):
+        tanpa_rate = depth_hold_bias(0.2, was_active=True, closing_rate=0.0)
+        dengan_rate = depth_hold_bias(0.2, was_active=True, closing_rate=0.3)
+        self.assertLess(abs(dengan_rate), abs(tanpa_rate))
+
+    def test_rate_menjauh_tidak_menambah_magnitude(self):
+        # closing_rate NEGATIF (menjauh dari target) bukan tugas redaman --
+        # itu tugas GAIN*err. max(0, ...) di dalam depth_hold_bias menjamin ini.
+        diam = depth_hold_bias(0.2, was_active=True, closing_rate=0.0)
+        menjauh = depth_hold_bias(0.2, was_active=True, closing_rate=-0.3)
+        self.assertEqual(diam, menjauh)
+
+    def test_tidak_pernah_membalik_arah(self):
+        # Redaman sebesar apa pun melemahkan, tidak pernah membalik tanda.
+        for rate in (0.5, 1.0, 5.0, 100.0):
+            bias = depth_hold_bias(0.1, was_active=True, closing_rate=rate)
+            self.assertGreaterEqual(bias, 0.0, msg=rate)
+
+    def test_tetap_dijepit_limit(self):
+        bias = depth_hold_bias(50.0, was_active=True, closing_rate=0.0)
+        self.assertEqual(bias, DEPTH_BIAS_LIMIT)
+
+    def test_arah_error_tetap_konsisten_dengan_redaman(self):
+        pos = depth_hold_bias(0.2, was_active=True, closing_rate=0.3)
+        neg = depth_hold_bias(-0.2, was_active=True, closing_rate=0.3)
+        self.assertGreaterEqual(pos, 0.0)
+        self.assertLessEqual(neg, 0.0)
+
+
 class TestSmoothDepth(unittest.TestCase):
     """Rata-rata berbobot untuk sampel SET -- meredam noise baro."""
 
