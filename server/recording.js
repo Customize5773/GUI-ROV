@@ -1,12 +1,13 @@
 // recording.js — Manajer rekaman sesi misi untuk fitur REPLAY (nilai tambah KKI 2026).
 //
 // Merekam, PER SESI, dua hal yang tersinkron pada satu clock server:
-//   1. Trajectory  : sampel telemetry (heading, depth, roll, pitch) + command gerak
-//                    (surge/sway/yaw/heave/control_mode/set_surface) — keduanya
-//                    berstempel waktu. Posisi x,y direkonstruksi saat replay di
-//                    browser dengan integrator dead-reckoning yang SAMA seperti
-//                    mission.js (posisi x,y tidak pernah ada di server — ia diturunkan
-//                    di browser dari surge/sway + heading).
+//   1. Trajectory  : sampel telemetry (heading, depth, roll, pitch, pos_n, pos_e)
+//                    + command gerak (surge/sway/yaw/heave/control_mode/set_surface)
+//                    — keduanya berstempel waktu. pos_n/pos_e adalah posisi EKF
+//                    ArduSub (LOCAL_POSITION_NED, meter) bila FC mengirimnya; kalau
+//                    null (EKF belum publish saat sesi direkam), replay.js jatuh ke
+//                    fallback dead-reckoning dari surge/sway + heading yang SAMA
+//                    seperti mission.js.
 //   2. Video       : stream MJPEG kamera BOTTOM & WALL ditap frame-per-frame. Tiap
 //                    frame JPEG mentah ditulis apa adanya ke `<role>.mjpeg`, dengan
 //                    index `<role>.index.jsonl` ({t, off, len}) agar bisa di-seek per
@@ -15,7 +16,7 @@
 // Semua tersimpan di server (laptop operator), bukan di Raspberry Pi:
 //   server/recordings/<session_id>/
 //     meta.json            metadata sesi (session_start_time, durasi, ukuran, dst)
-//     trajectory.jsonl     {t, heading, depth, roll, pitch}
+//     trajectory.jsonl     {t, heading, depth, roll, pitch, pos_n, pos_e}
 //     commands.jsonl       {t, name, value}   (hanya command relevan trajectory)
 //     bottom.mjpeg         JPEG BOTTOM disambung
 //     bottom.index.jsonl   {t, off, len} per frame
@@ -261,6 +262,8 @@ function onTelemetry(data) {
     depth: numOrNull(data.depth),
     roll: numOrNull(data.roll),
     pitch: numOrNull(data.pitch),
+    pos_n: numOrNull(data.pos_n),
+    pos_e: numOrNull(data.pos_e),
   };
   try { fs.appendFileSync(active.trajPath, JSON.stringify(line) + "\n"); } catch {}
   active.telemCount += 1;

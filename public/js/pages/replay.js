@@ -12,10 +12,11 @@
 // kontrol live. Satu-satunya pesan keluar adalah record_start/record_stop. Tidak
 // ada kode di sini yang bisa mengirim surge/sway/arm/mode ke ROV.
 //
-// Posisi x,y ROV tidak ada di log (server hanya punya heading/depth). Ia
-// direkonstruksi di sini dengan integrator dead-reckoning yang SAMA seperti
-// mission.js (VEL_SCALE, DEPTH_SCALE, konvensi heading), dari log trajectory +
-// command surge/sway — sehingga lintasan replay sepadan dengan tampilan live.
+// Posisi x,y ROV: dipakai langsung dari pos_n/pos_e di log (posisi EKF ArduSub,
+// LOCAL_POSITION_NED) bila sesi merekamnya. Untuk sampel yang tidak punya
+// pos_n/pos_e (sesi lama, atau EKF belum publish saat itu), jatuh ke integrator
+// dead-reckoning yang SAMA seperti mission.js (VEL_SCALE, DEPTH_SCALE, konvensi
+// heading), dari log trajectory + command surge/sway.
 
 import { CONFIG } from "../config.js";
 import { log, num, wsSend } from "../core.js";
@@ -366,17 +367,27 @@ function reconstructTrajectory(traj, cmds) {
   let px = 0, pz = 0;         // posisi bidang dasar
   let si = 0, wi = 0;         // pointer command
   let surge = 0, sway = 0;
+  let originN = null, originE = null; // titik nol sesi untuk pos_n/pos_e (EKF)
   const poses = [];
 
   for (let k = 0; k < samples.length; k++) {
     const s = samples[k];
+    const hasPos = Number.isFinite(s.pos_n) && Number.isFinite(s.pos_e);
+    if (hasPos && originN == null) { originN = s.pos_n; originE = s.pos_e; }
+
     if (k > 0) {
       const tPrev = samples[k - 1].t;
       // command yang aktif hingga awal interval
       while (si < surgeCmds.length && surgeCmds[si].t <= tPrev) surge = numOr0(surgeCmds[si++].value);
       while (wi < swayCmds.length && swayCmds[wi].t <= tPrev) sway = numOr0(swayCmds[wi++].value);
+    }
 
-      let dt = (s.t - tPrev) / 1000;
+    if (hasPos) {
+      // posisi EKF sungguhan, relatif ke sampel pertama yang punya pos_n/pos_e
+      px = s.pos_e - originE;
+      pz = -(s.pos_n - originN);
+    } else if (k > 0) {
+      let dt = (s.t - samples[k - 1].t) / 1000;
       if (!(dt > 0)) dt = 0;
       if (dt > 0.5) dt = 0.5; // batasi lompatan bila ada jeda telemetry
 

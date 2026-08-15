@@ -338,6 +338,10 @@ function applyDepthHold(d) {
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
+  _pyQrData = (m5 && m5.qr_data) || null;
+  _pyQrAt = Date.now();
+  renderQrReadout();
+
   if (!els.mission5State) return;
   if (!m5) {
     els.mission5State.textContent = "IDLE";
@@ -414,10 +418,32 @@ setInterval(() => {
   }
 }, 500);
 
-/* indikasi QR di strip Control: scan feed #camImg dengan jsQR (sama seperti
-   halaman Camera), supaya operator lihat status QR tanpa pindah halaman */
+/* indikasi QR di strip Control. Dua sumber, pipeline Python (mission5.py,
+   dibaca via applyMission5 di bawah) diutamakan selama masih segar (misi
+   autonomous jalan) karena itu deteksi ROV sungguhan; scan jsQR lokal
+   terhadap #camImg (sama seperti halaman Camera) jadi fallback saat FSM
+   Python belum/tidak aktif, supaya operator tetap lihat indikasi saat manual. */
 const qrScanCanvas = document.createElement("canvas");
 let _lastQrScan = 0;
+let _pyQrData = null, _pyQrAt = 0;
+let _clientQrData = null;
+const PY_QR_FRESH_MS = 3000;
+
+function renderQrReadout() {
+  if (!els.vQR) return;
+  const pyFresh = _pyQrData && (Date.now() - _pyQrAt < PY_QR_FRESH_MS);
+  const val = pyFresh ? _pyQrData : _clientQrData;
+  if (val) {
+    els.vQR.textContent = val;
+    els.vQR.title = val;
+    els.qrReadout.classList.add("is-ok");
+  } else {
+    els.vQR.textContent = "—";
+    els.vQR.removeAttribute("title");
+    els.qrReadout.classList.remove("is-ok");
+  }
+}
+
 function scanControlQR() {
   if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
   const now = performance.now();
@@ -432,15 +458,8 @@ function scanControlQR() {
     ctx.drawImage(els.camImg, 0, 0, cw, ch);
     const img = ctx.getImageData(0, 0, cw, ch);
     const code = window.jsQR(img.data, cw, ch);
-    if (code) {
-      els.vQR.textContent = code.data;
-      els.vQR.title = code.data;
-      els.qrReadout.classList.add("is-ok");
-    } else {
-      els.vQR.textContent = "—";
-      els.vQR.removeAttribute("title");
-      els.qrReadout.classList.remove("is-ok");
-    }
+    _clientQrData = code ? code.data : null;
+    renderQrReadout();
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
 setInterval(scanControlQR, 200);
