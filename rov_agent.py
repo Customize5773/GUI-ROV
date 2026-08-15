@@ -113,6 +113,11 @@ state = {
     "pid_pitch_p_out": 0.0,
     "pid_pitch_i_out": 0.0,
     "pid_pitch_d_out": 0.0,
+    # Posisi lokal dari EKF ArduSub (LOCAL_POSITION_NED, meter, utara/timur+).
+    # None selama pesan itu belum pernah diterima, supaya frontend bisa
+    # membedakan "belum ada data" dari "posisi 0,0" dan jatuh ke fallback.
+    "pos_n": None,
+    "pos_e": None,
 }
 
 master = None
@@ -1682,6 +1687,14 @@ def main():
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
             prev_attitude_ts = now_ts
+
+        # --------------------------------
+        # LOCAL_POSITION_NED: estimasi posisi EKF (utara/timur, meter).
+        # Sudah mengalir lewat MAV_DATA_STREAM_ALL, cuma belum pernah dibaca.
+        # --------------------------------
+        elif mtype == "LOCAL_POSITION_NED":
+            state["pos_n"] = float(msg.x)
+            state["pos_e"] = float(msg.y)
 
         # --------------------------------
         # PARAM_VALUE: tabel param (halaman Vehicle) + verifikasi param_set.

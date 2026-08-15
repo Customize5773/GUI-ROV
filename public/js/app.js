@@ -49,6 +49,7 @@ const els = {
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   depthTarget: $("vDepthTarget"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"),
   btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
   modeActual: $("modeActual"), modeWarn: $("modeWarn"),
   acroModal: $("acroModal"), acroModalBody: $("acroModalBody"),
@@ -412,6 +413,37 @@ setInterval(() => {
     }
   }
 }, 500);
+
+/* indikasi QR di strip Control: scan feed #camImg dengan jsQR (sama seperti
+   halaman Camera), supaya operator lihat status QR tanpa pindah halaman */
+const qrScanCanvas = document.createElement("canvas");
+let _lastQrScan = 0;
+function scanControlQR() {
+  if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
+  const now = performance.now();
+  if (now - _lastQrScan < 200) return;
+  _lastQrScan = now;
+  const sw = els.camImg.naturalWidth, sh = els.camImg.naturalHeight;
+  const scale = Math.min(1, 640 / Math.max(sw, sh));
+  const cw = Math.max(1, Math.round(sw * scale)), ch = Math.max(1, Math.round(sh * scale));
+  qrScanCanvas.width = cw; qrScanCanvas.height = ch;
+  const ctx = qrScanCanvas.getContext("2d", { willReadFrequently: true });
+  try {
+    ctx.drawImage(els.camImg, 0, 0, cw, ch);
+    const img = ctx.getImageData(0, 0, cw, ch);
+    const code = window.jsQR(img.data, cw, ch);
+    if (code) {
+      els.vQR.textContent = code.data;
+      els.vQR.title = code.data;
+      els.qrReadout.classList.add("is-ok");
+    } else {
+      els.vQR.textContent = "—";
+      els.vQR.removeAttribute("title");
+      els.qrReadout.classList.remove("is-ok");
+    }
+  } catch (e) { /* frame belum siap / cross-origin, lewati */ }
+}
+setInterval(scanControlQR, 200);
 
 /*  WebSocket  */
 let ws = null, demo = null, pingT = 0, linkStale = false;
