@@ -148,7 +148,26 @@ export const setupPage = {
               ${numField("suPwmMin", "PWM Min", T.pwmMin, "10", "us")}
               ${numField("suPwmNeutral", "Neutral", T.pwmNeutral, "10", "us")}
               ${numField("suPwmMax", "PWM Max", T.pwmMax, "10", "us")}
+
+             <div class="thruster-gain-wrap">
               ${numField("suGain", "Gain", T.gain, "5", "%")}
+
+              <div class="thruster-gain-buttons">
+                <button
+                  id="suGainDown"
+                  class="thruster-gain-btn thruster-gain-btn--down"
+                  type="button"
+                  title="Kurangi Gain 10%"
+                >−</button>
+
+                <button
+                  id="suGainUp"
+                  class="thruster-gain-btn thruster-gain-btn--up"
+                  type="button"
+                  title="Tambah Gain 10%"
+                >+</button>
+              </div>
+            </div>
             </div>
             <label class="card__label">Reverse arah thruster</label>
             <div class="toggles" id="suReverse"></div>
@@ -292,35 +311,105 @@ export const setupPage = {
       };
       revWrap.appendChild(b);
     });
+
     root.querySelector("#suApplyThruster").onclick = () => {
       const min = parseInt(root.querySelector("#suPwmMin").value, 10);
       const neu = parseInt(root.querySelector("#suPwmNeutral").value, 10);
       const max = parseInt(root.querySelector("#suPwmMax").value, 10);
       const gain = parseInt(root.querySelector("#suGain").value, 10);
-      if (![min, neu, max].every(Number.isFinite) || !(min < neu && neu < max)) { log("PWM tidak valid (Min < Neutral < Max)", "warn"); return; }
+
+      if (![min, neu, max].every(Number.isFinite) || !(min < neu && neu < max)) {
+        log("PWM tidak valid (Min < Neutral < Max)", "warn");
+        return;
+      }
+
+      if (!Number.isFinite(gain)) {
+        log("Gain tidak valid", "warn");
+        return;
+      }
+
       Object.assign(CONFIG.THRUSTER, {
-          pwmMin: min,
-          pwmNeutral: neu,
-          pwmMax: max,
-          gain: Math.max(0, Math.min(200, gain || 100)),
-          reversed: [...revWrap.children].map((b) => b.getAttribute("aria-pressed") === "true"),
+        pwmMin: min,
+        pwmNeutral: neu,
+        pwmMax: max,
+        gain: Math.max(0, Math.min(100, gain)),
+        reversed: [...revWrap.children].map(
+          (b) => b.getAttribute("aria-pressed") === "true"
+        ),
       });
+
       saveSetup();
+
       const motors = {};
 
       CONFIG.THRUSTER.reversed.forEach((rev, index) => {
-          motors[String(index + 1)] = rev ? -1 : 1;
+        motors[String(index + 1)] = rev ? -1 : 1;
       });
 
       wsSend({
-          type: "cmd",
-          name: "thruster_config",
-          motors
+        type: "cmd",
+        name: "thruster_config",
+        gain: CONFIG.THRUSTER.gain,
+        motors
       });
 
-      log("Thruster configuration dikirim", "ok");
-      log(`Thruster config dikirim — ${CONFIG.THRUSTER.frame}, gain ${CONFIG.THRUSTER.gain}%`, "ok");
+      log(
+        `Thruster configuration dikirim — gain ${CONFIG.THRUSTER.gain}%`,
+        "ok"
+      );
     };
+
+    root.querySelector("#suGainUp")?.addEventListener("click", () => {
+  const input = root.querySelector("#suGain");
+  const current = Number(input?.value ?? CONFIG.THRUSTER.gain);
+
+  const gain = Math.min(100, current + 10);
+
+  if (input) input.value = gain;
+  CONFIG.THRUSTER.gain = gain;
+
+  const motors = {};
+
+  CONFIG.THRUSTER.reversed.forEach((rev, index) => {
+    motors[String(index + 1)] = rev ? -1 : 1;
+  });
+
+  wsSend({
+    type: "cmd",
+    name: "thruster_config",
+    gain,
+    motors
+  });
+
+  saveSetup();
+  log(`Thruster Gain → ${gain}%`, "ok");
+});
+
+root.querySelector("#suGainDown")?.addEventListener("click", () => {
+  const input = root.querySelector("#suGain");
+  const current = Number(input?.value ?? CONFIG.THRUSTER.gain);
+
+  const gain = Math.max(0, current - 10);
+
+  if (input) input.value = gain;
+  CONFIG.THRUSTER.gain = gain;
+
+  const motors = {};
+
+  CONFIG.THRUSTER.reversed.forEach((rev, index) => {
+    motors[String(index + 1)] = rev ? -1 : 1;
+  });
+
+  wsSend({
+    type: "cmd",
+    name: "thruster_config",
+    gain,
+    motors
+  });
+
+  saveSetup();
+  log(`Thruster Gain → ${gain}%`, "ok");
+});
 
     /* THRUSTER TEST — slider dua-arah + checkbox Reversed per thruster,
        meniru Motor Test QGroundControl/ArduSub. Diagnostik saja: checkbox

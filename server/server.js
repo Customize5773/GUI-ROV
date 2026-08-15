@@ -380,6 +380,12 @@ wss.on("connection", (ws, req) => {
       };
 
       if (msg.name === "thruster_config") {
+          const gain = Number(msg.gain);
+
+          command.gain = Number.isFinite(gain)
+              ? Math.max(0, Math.min(100, gain))
+              : 100;
+
           command.motors = msg.motors;
       }
 
