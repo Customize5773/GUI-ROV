@@ -6,7 +6,14 @@ import threading
 import math
 from pymavlink import mavutil
 
-from rov_axes import AXIS_NEUTRAL, AXIS_RANGE, clamp_axis, resolve_manual_packet
+from rov_axes import (
+    AXIS_NEUTRAL,
+    AXIS_RANGE,
+    clamp_axis,
+    resolve_manual_packet,
+    axes_to_manual_control,
+)
+
 from rov_modes import (
     depth_hold_allowed,
     is_poshold_request,
@@ -53,6 +60,9 @@ PIXHAWK_BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 # Tidak ada satu pun pesan MAVLink selama ini -> link dianggap mati dan
 # disambungkan ulang (USB lepas / Pixhawk re-enumerate).
 LINK_TIMEOUT = 3.0
+
+
+thruster_gain = 1.0
 
 # =========================
 # Socket UDP
@@ -116,6 +126,7 @@ joystick = {
     "yaw": 0,
 }
 
+last_joystick_update = time.time()
 depth_target = 0.0
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
@@ -380,7 +391,6 @@ def apply_heading_hold(mc, axes):
 # lebih bisa diprediksi: diam di tempat, dan di ALT_HOLD berarti tahan
 # kedalaman.
 JOYSTICK_SEND_INTERVAL = 0.05   # 20 Hz
-last_joystick_update = 0.0
 joystick_lock = threading.Lock()
 
 # Log axis per-iterasi membanjiri console Pi (20 baris/detik) dan memakan CPU
@@ -490,7 +500,8 @@ def send_telemetry():
     # Ikut dipantulkan supaya halaman Setup menampilkan nilai yang benar-benar
     # aktif di wahana, bukan sekadar isi localStorage browser.
     state["depth_default"] = default_depth_target
-
+    
+    state["thruster_gain"] = thruster_gain * 100.0
     send_to_gui(state)
 
     now = time.time()
@@ -548,6 +559,7 @@ def command_listener():
     global default_depth_target
     global poshold_active
     global heading_target
+    global thruster_gain
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -825,16 +837,51 @@ def command_listener():
                         target=apply_pid_gains, args=(writes,), daemon=True
                     ).start()
 
+            elif name == "thruster_gain_inc":
+                gain = min(100.0, thruster_gain * 100.0 + 10.0)
+                thruster_gain = gain / 100.0
+
+                print(f"[THRUSTER GAIN] +10% -> {gain:.0f}%")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Thruster Gain = {gain:.0f}%",
+                    "level": "ok",
+                })
+
+            elif name == "thruster_gain_dec":
+                gain = max(0.0, thruster_gain * 100.0 - 10.0)
+                thruster_gain = gain / 100.0
+
+                print(f"[THRUSTER GAIN] -10% -> {gain:.0f}%")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Thruster Gain = {gain:.0f}%",
+                    "level": "ok",
+                })
+
             elif name == "thruster_config":
 
-                # Dijalankan di thread terpisah: loop param_set_send + sleep
-                # menahan listener ini ~0.6 s dan membuat axis/mode ikut tertunda.
                 motors = msg.get("motors", {})
-                print("[DEBUG] Motors received:", motors)
-                threading.Thread(
-                    target=apply_thruster_config, args=(motors,), daemon=True
-                ).start()
 
+                try:
+                    gain = float(msg.get("gain", 100))
+                except (TypeError, ValueError):
+                    gain = 100.0
+
+                gain = max(0.0, min(100.0, gain))
+                thruster_gain = gain / 100.0
+
+                print("[DEBUG] Motors received:", motors)
+                print(f"[DEBUG] Thruster gain received: {gain:.0f}%")
+                print(f"[DEBUG] thruster_gain factor: {thruster_gain:.2f}")
+
+                threading.Thread(
+                    target=apply_thruster_config,
+                    args=(motors,),
+                    daemon=True
+                ).start()
             elif name == "motor_test":
                 # server.js kirim motor/throttle/duration/direction sebagai
                 # field top-level (bukan di dalam "value" — motor_test tidak
@@ -1251,13 +1298,38 @@ def joystick_sender():
         # Saat stale, axes yang dipakai juga harus netral supaya bias
         # depth-hold tidak dihitung dari input basi.
         eff_axes = AXIS_NEUTRAL if stale else axes
-        mc = apply_depth_hold_bias(mc, eff_axes)
 
-        # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
-        # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
-        # mudah dibaca. Saat stale, axes netral yang dipakai sehingga overlay
-        # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
-        mc = apply_heading_hold(mc, eff_axes)
+        # Terapkan Thruster Gain hanya pada perintah manual joystick.
+        # Gain 0-100% -> faktor 0.0-1.0.
+        gain = thruster_gain
+        
+
+
+        scaled_axes = {
+            "surge": int(round(eff_axes.get("surge", 0) * gain)),
+            "sway": int(round(eff_axes.get("sway", 0) * gain)),
+            "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
+            "heave": int(round(eff_axes.get("heave", 0) * gain)),
+        }
+
+        print(
+            f"[GAIN DEBUG] gain={gain:.2f} "
+            f"axes={eff_axes} "
+            f"scaled={scaled_axes}"
+        )
+
+        # Buat ulang MANUAL_CONTROL dari axis yang sudah dikalikan gain.
+        # Heave tetap dikonversi oleh rov_axes.py:
+        # heave 0 -> z 500 (netral).
+        mc = axes_to_manual_control(
+            surge=scaled_axes["surge"],
+            sway=scaled_axes["sway"],
+            yaw=scaled_axes["yaw"],
+            heave=scaled_axes["heave"],
+        )
+
+        mc = apply_depth_hold_bias(mc, scaled_axes)
+        mc = apply_heading_hold(mc, scaled_axes)
 
         try:
             with master_lock:

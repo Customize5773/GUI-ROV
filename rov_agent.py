@@ -11,6 +11,7 @@ from rov_axes import (
     AXIS_RANGE,
     AXIS_SHAPE,
     apply_shape_updates,
+    axes_to_manual_control,
     clamp_axis,
     resolve_manual_packet,
     shape_axes,
@@ -66,6 +67,7 @@ PIXHAWK_BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 # Tidak ada satu pun pesan MAVLink selama ini -> link dianggap mati dan
 # disambungkan ulang (USB lepas / Pixhawk re-enumerate).
 LINK_TIMEOUT = 3.0
+thruster_gain = 1.0
 
 # =========================
 # Socket UDP
@@ -556,7 +558,7 @@ def send_telemetry():
     # berhenti diam-diam persis 3 detik setelah masuk ALT_HOLD.
     # Pola yang sama dipakai autonomy/rov_link.py dan server/server.js.
     state["control_mode"] = current_control_mode
-
+    state["thruster_gain"] = thruster_gain * 100.0
     send_to_gui(state)
 
     now = time.time()
@@ -615,6 +617,7 @@ def command_listener():
     global poshold_active
     global heading_target
     global shape_reset_requested
+    global thruster_gain
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -978,6 +981,32 @@ def command_listener():
                 if not applied and not rejects:
                     print(f"[SHAPE] tidak ada yang diubah: {value!r}")
 
+            elif name == "thruster_gain_inc":
+
+                gain = min(100.0, thruster_gain * 100.0 + 10.0)
+                thruster_gain = gain / 100.0
+
+                print(f"[THRUSTER GAIN] +10% -> {gain:.0f}%")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Thruster Gain = {gain:.0f}%",
+                    "level": "ok",
+                })
+
+            elif name == "thruster_gain_dec":
+
+                gain = max(0.0, thruster_gain * 100.0 - 10.0)
+                thruster_gain = gain / 100.0
+
+                print(f"[THRUSTER GAIN] -10% -> {gain:.0f}%")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Thruster Gain = {gain:.0f}%",
+                    "level": "ok",
+                })
+
             elif name == "pid":
 
                 # Gain yaw/depth dari Setup -> param ArduSub. Pemetaan dan batas
@@ -1004,12 +1033,24 @@ def command_listener():
 
             elif name == "thruster_config":
 
-                # Dijalankan di thread terpisah: loop param_set_send + sleep
-                # menahan listener ini ~0.6 s dan membuat axis/mode ikut tertunda.
                 motors = msg.get("motors", {})
+
+                try:
+                    gain = float(msg.get("gain", 100))
+                except (TypeError, ValueError):
+                    gain = 100.0
+
+                gain = max(0.0, min(100.0, gain))
+                thruster_gain = gain / 100.0
+
                 print("[DEBUG] Motors received:", motors)
+                print(f"[DEBUG] Thruster gain received: {gain:.0f}%")
+                print(f"[DEBUG] thruster_gain factor: {thruster_gain:.2f}")
+
                 threading.Thread(
-                    target=apply_thruster_config, args=(motors,), daemon=True
+                    target=apply_thruster_config,
+                    args=(motors,),
+                    daemon=True
                 ).start()
 
             elif name == "motor_test":
@@ -1447,14 +1488,33 @@ def joystick_sender():
         # dipakai nilai TER-SHAPE, bukan mentah: gerbang "operator sedang
         # memegang stik" (HEAVE/YAW_MANUAL_EPSILON) harus menilai apa yang
         # benar-benar diperintahkan ke thruster, bukan niat mentahnya.
-        eff_axes = AXIS_NEUTRAL if stale else shaped
-        mc = apply_depth_hold_bias(mc, eff_axes)
 
-        # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
-        # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
-        # mudah dibaca. Saat stale, axes netral yang dipakai sehingga overlay
-        # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
-        mc = apply_heading_hold(mc, eff_axes)
+        eff_axes = AXIS_NEUTRAL if stale else shaped
+
+        # =========================
+        # THRUSTER GAIN
+        # =========================
+        gain = thruster_gain
+
+        scaled_axes = {
+            "surge": int(round(eff_axes.get("surge", 0) * gain)),
+            "sway": int(round(eff_axes.get("sway", 0) * gain)),
+            "heave": int(round(eff_axes.get("heave", 0) * gain)),
+            "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
+        }
+
+        # Buat ulang MANUAL_CONTROL berdasarkan axis
+        # yang sudah dikalikan thruster gain.
+        mc = axes_to_manual_control(
+            surge=scaled_axes["surge"],
+            sway=scaled_axes["sway"],
+            yaw=scaled_axes["yaw"],
+            heave=scaled_axes["heave"],
+        )
+
+        # Depth hold dan heading hold bekerja SETELAH gain.
+        mc = apply_depth_hold_bias(mc, scaled_axes)
+        mc = apply_heading_hold(mc, scaled_axes)
 
         try:
             with master_lock:
