@@ -734,4 +734,16 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       this._startMotorTestFailCooldown();
     }
   },
+
+  onThrusterGainTelemetry(gain) {
+    const value = Number(gain);
+    if (!Number.isFinite(value)) return;
+
+    const clamped = Math.max(0, Math.min(100, value));
+
+    const input = document.getElementById("suGain");
+    if (input) input.value = clamped;
+
+    CONFIG.THRUSTER.gain = clamped;
+  },
 };

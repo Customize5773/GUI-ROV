@@ -75,6 +75,8 @@ export const BUTTON_ACTIONS = [
   "lights_dimmer",
   "depth_set",
   "depth_hold_toggle",
+  "thruster_gain_inc",
+  "thruster_gain_dec",
 ];
 
 /* Cara sebuah tombol memicu aksinya:
@@ -186,8 +188,8 @@ function defaultButtonLayer() {
     { action: "depth_hold_toggle", button: 13, mode: "toggle" },  // D-pad ↓ : ON/OFF
     { action: "cam_prev", button: 14, mode: "toggle" },        // D-pad ← : CAM sebelumnya
     { action: "cam_next", button: 15, mode: "toggle" },        // D-pad → : CAM berikutnya
-    { action: "lights_dimmer", button: 10, mode: "hold" },     // L3
-    { action: "lights_brighter", button: 11, mode: "hold" },   // R3
+    { action: "thruster_gain_dec", button: 10, mode: "toggle" }, // L3
+    { action: "thruster_gain_inc", button: 11, mode: "toggle" }, // R3
     { action: "camera_stream", button: 16, mode: "toggle" },     // Logitech
   ];
 }

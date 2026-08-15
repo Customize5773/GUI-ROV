@@ -310,6 +310,10 @@ function applyTelemetry(d) {
     if (m && m.onTelemetry) { try { m.onTelemetry(d); } catch (e) {} }
   }
 
+  if (Number.isFinite(Number(d.thruster_gain))) {
+    toPage("setup", "onThrusterGainTelemetry", d.thruster_gain);
+  }
+
   els.depthTarget.textContent = num(d.depth_target, 2);
   applyDepthHold(d);
 }
@@ -1308,6 +1312,16 @@ function executeJoystickAction(action, mode = "toggle") {
 
     case "lights_dimmer": {
       sendCmd("light_level", mode === "hold" ? { dir: "down", hold: true } : "down");
+      return;
+    }
+
+    case "thruster_gain_inc": {
+      sendCmd("thruster_gain_inc", true);
+      return;
+    }
+
+    case "thruster_gain_dec": {
+      sendCmd("thruster_gain_dec", true);
       return;
     }
 
