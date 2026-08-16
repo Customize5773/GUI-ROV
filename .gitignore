@@ -11,6 +11,9 @@
 autonomy/.venv/
 
 # Config tuning lokal (hasil tuning kolam tim) — jangan commit, cukup example*
+# run log tiap trial (fsm/mission5.py --run-log) — data mentah, bukan sumber kode.
+# rov_tuned.yaml SENGAJA tidak diabaikan: riwayat gitnya = catatan tuning antar trial.
+autonomy/logs/
 autonomy/config/*.local.yaml
 autonomy/config/*.local.yml
 autonomy/config/*.local.json

@@ -290,6 +290,8 @@ body[data-theme="light"] .theme__icon::after {
 .readout--danger .readout__v, .readout--danger .readout__u, .readout--danger .readout__k { color: var(--alert) !important; }
 .readout--danger { animation: danger-blink 1s steps(2) infinite; border-radius: 6px; }
 @keyframes danger-blink { 50% { background: rgba(255,90,90,.16); } }
+/* hasil run autonomous terakhir yang ABORT/terpotong — tandai, tanpa kedip */
+.readout__v.is-fault { color: var(--alert); }
 
 /* identitas tim + jam di header (KKI 2026) */
 .ident {

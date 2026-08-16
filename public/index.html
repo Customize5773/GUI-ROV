@@ -244,6 +244,13 @@
                 <button class="ctrl" id="btnGripOpen" title="Buka gripper (H)"><span class="ctrl__led"></span> OPEN</button>
                 <button class="ctrl" id="btnGripClose" title="Tutup gripper (G)"><span class="ctrl__led"></span> CLOSE</button>
               </div>
+              <!-- Ringkasan run autonomous terakhir (dari autonomy/logs/*.jsonl via
+                   /api/runs). Bahan analisis trial/error tanpa harus buka terminal. -->
+              <div class="readout"><span class="readout__k">RUN TERAKHIR</span><span class="readout__v readout__v--text" id="runLastFile" title="belum ada run terekam">—</span></div>
+              <div class="readout"><span class="readout__k">HASIL</span><span class="readout__v readout__v--text" id="runLastResult">—</span></div>
+              <div class="readout"><span class="readout__k">SKOR</span><span class="readout__v" id="runLastScore">—</span><span class="readout__u">/100</span></div>
+              <div class="readout"><span class="readout__k">DURASI</span><span class="readout__v" id="runLastDur">—</span><span class="readout__u">s</span></div>
+              <div class="readout"><span class="readout__k">QR RATE</span><span class="readout__v" id="runLastQr">—</span><span class="readout__u">%</span></div>
             </section>
 
             <!-- LIVE CAMERA -->

@@ -16,6 +16,7 @@ const https = require("https");
 const dgram = require("dgram");
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
 const { WebSocketServer } = require("ws");
 const recording = require("./recording");
 const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
@@ -26,6 +27,7 @@ const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 const SHARED_ROOT = path.join(__dirname, "..", "shared");
+const AUTONOMY = path.join(__dirname, "..", "autonomy");
 
 const MOTION_AXES = new Set([
     "surge",
@@ -139,6 +141,27 @@ const httpServer = http.createServer((req, res) => {
     const list = recording.listSessions();
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify(list));
+  }
+
+  // Ringkasan run misi autonomous (JSONL dari fsm/mission5.py --run-log).
+  // Ringkasannya DIHITUNG oleh tools/analyze_run.py, bukan di-parse ulang di sini —
+  // supaya angka di panel GUI persis sama dgn laporan CLI yang dibaca saat analisis
+  // trial. Run jarang & filenya kecil, jadi spawn per-request cukup murah.
+  if (urlPath === "/api/runs") {
+    return execFile("python3",
+      [path.join(AUTONOMY, "tools", "analyze_run.py"),
+       path.join(AUTONOMY, "logs", "*.jsonl"), "--json"],
+      { maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => {
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        if (err) return res.end("[]");   // belum ada run / python3 tak tersedia
+        let list;
+        try { list = JSON.parse(stdout); } catch { return res.end("[]"); }
+        // analyze_run.py mengeluarkan object tunggal bila cuma ada 1 run.
+        if (!Array.isArray(list)) list = [list];
+        list.reverse();                  // terbaru dulu (nama file berurut waktu)
+        res.end(JSON.stringify(list));
+      });
   }
 
   // Satu frame JPEG dari sesi: /replay/frame?session=<id>&cam=<bottom|wall>&i=<idx>

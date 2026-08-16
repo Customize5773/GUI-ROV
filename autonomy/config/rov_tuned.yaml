@@ -1,0 +1,82 @@
+# config/rov_tuned.yaml — LAPISAN TUNING ROV (berpindah antar kolam)
+#
+# Isi file ini HANYA parameter yang tergantung pada ROV, kamera, dan air —
+# BUKAN pada ukuran kolam. Karena itu nilai yang diasah saat trial di kolam
+# 2,2 × 4,4 × 0,8 m dipakai APA ADANYA di arena lomba 5 × 5 m. Geometri lokasi
+# dipisah ke config/pool_trial.yaml dan config/pool_kki.yaml.
+#
+# Pakai (file belakangan menang):
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_trial.yaml
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki.yaml
+#
+# File ini DI-COMMIT (beda dgn *.local.yaml) — riwayat git-nya adalah catatan
+# tuning antar trial, dan tools/analyze_run.py memakainya untuk mengaitkan skor
+# tiap run ke nilai yang menghasilkannya.
+#
+# Nilai awal = default fsm/mission5.py. Perbarui setiap selesai sesi trial.
+
+# ── Arah sumbu servo — hasil verifikasi kolam (VERIFIKASI_ARDUSUB.md) ─────────
+# Sifat rangka & wiring thruster, sama di kolam mana pun. Balik bila error MEMBESAR.
+invert:
+  sway: false
+  vert: false
+  surge: false
+  yaw: false
+
+# ── Gain PID servo docking — IBVS (piksel, tanpa kalibrasi kamera) ────────────
+pid_ibvs:
+  kp_sway: 45.0
+  kp_surge: 40.0
+  kp_vert: 35.0
+
+# ── Gain PID servo docking — PBVS (meter, kamera terkalibrasi) ────────────────
+pid_pbvs:
+  kp_sway: 140.0
+  kp_surge: 140.0
+  kp_vert: 110.0
+
+# ── Target docking QR payload — geometri gripper & optik, bukan kolam ─────────
+docking:
+  qr_side_m: 0.04            # QR payload KKI 2026 = 4×4 cm (fisik, tetap)
+  servo_target_area: 3000.0  # IBVS: luas QR (px²) saat jarak engage
+  servo_target_dist: 0.30    # PBVS: jarak engage (m) — jangkauan gripper
+  servo_kp_yaw: 0.0          # >0 → squaring tegak lurus dinding (aktifkan stlh verifikasi)
+  lock_grace_t: 0.6          # detik hold saat QR dropout (riak air) sblm menyapu
+
+# ── Docking ke HOOK (misi 3b HANG & misi 4 DOCK) ──────────────────────────────
+hook_docking:
+  target_area: 3000.0
+  target_dist: 0.30
+  lock_grace_t: 0.6
+  acquire_t: 8.0
+  # approach_speed TIDAK di sini — ruang pengereman tergantung ukuran kolam.
+
+# ── Deteksi hook — sifat optik & pipa fisik ───────────────────────────────────
+hook_detect:
+  min_area: 150.0
+  pipe_diam_m: 0.025         # ¾" PVC = 25 mm
+  color_hsv_range: null      # isi HANYA stlh warna PVC & kontras dinding terukur
+
+# ── Fase mekanis lepas payload ke hook (misi 3b) — detik ──────────────────────
+hang:
+  seat_t: 1.5
+  open_t: 1.5
+  back_t: 2.0
+
+# ── Gerak mekanis lepas-hook (misi 5d) — geometri payload/hook, bukan kolam ───
+m5_mechanics:
+  engage_surge: 15
+  unhook_vert: 30
+  unhook_surge: -20
+  unhook_lift_t: 3.0
+  unhook_pull_t: 2.0
+
+# ── Toleransi kontrol kedalaman — sifat sensor & kontroler ────────────────────
+depth:
+  tolerance: 0.05
+  target_surface: 0.05
+
+# ── Validasi payload QR ───────────────────────────────────────────────────────
+payload:
+  mission: 5
+  type: payload

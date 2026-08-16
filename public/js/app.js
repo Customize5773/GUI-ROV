@@ -45,6 +45,8 @@ const els = {
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
+  runLastFile: $("runLastFile"), runLastResult: $("runLastResult"),
+  runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"),
   btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
@@ -357,6 +359,35 @@ function applyMission5(m5) {
   els.mission5Z.textContent = num(m5.distance_z, 2);
   els.mission5OffX.textContent = num(m5.offset_x, 1);
   els.mission5OffY.textContent = num(m5.offset_y, 1);
+
+  // Run baru saja berakhir → tarik ringkasannya. Ditunda sesaat karena FSM menulis
+  // event `end` setelah state jadi DONE/ABORT (saat proses menutup run log).
+  if ((state === "DONE" || state === "ABORT") && state !== _lastM5State)
+    setTimeout(refreshLastRun, 1500);
+  _lastM5State = state;
+}
+
+/* Ringkasan run autonomous terakhir — historis, jadi lewat HTTP (bukan WS live).
+   Angkanya dihitung tools/analyze_run.py agar identik dgn laporan CLI. */
+let _lastM5State = null;
+
+async function refreshLastRun() {
+  if (!els.runLastFile) return;
+  let r;
+  try {
+    r = (await (await fetch("/api/runs")).json())[0];
+  } catch { return; }               // server tanpa endpoint / offline → biarkan "—"
+  if (!r) return;
+
+  els.runLastFile.textContent = r.file.replace(/^run_|\.jsonl$/g, "");
+  els.runLastFile.title = `config: ${(r.config_files || []).join(", ") || "default"}`;
+  const gagal = r.terpotong || r.state_akhir === "ABORT";
+  els.runLastResult.textContent =
+    r.terpotong ? "TERPOTONG" : `${r.state_akhir}${r.dock_used_fallback ? " (fallback)" : ""}`;
+  els.runLastResult.className = "readout__v readout__v--text" + (gagal ? " is-fault" : "");
+  els.runLastScore.textContent = (r.skor && r.skor.total != null) ? r.skor.total : "—";
+  els.runLastDur.textContent = num(r.durasi_s, 1);
+  els.runLastQr.textContent = num(r.qr_rate_pct, 1);
 }
 
 function reflectArm(on) {
@@ -1739,4 +1770,5 @@ setInterval(tickClock, 1000);
 loadTheme();
 initScene();
 connect();
+refreshLastRun();
 maybeDemo();
