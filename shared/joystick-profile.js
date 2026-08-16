@@ -39,8 +39,13 @@
    dihapus. Penggantinya "depth_set" (rekam kedalaman saat ini) dan
    "depth_hold_toggle" (nyalakan/matikan depth-set), keduanya sekali-pencet di
    posisi D-pad yang sama. Versi dinaikkan supaya profil tersimpan ikut
-   dibetulkan mode-nya, bukan hanya nama aksinya. */
-export const SCHEMA_VERSION = 7;
+   dibetulkan mode-nya, bukan hanya nama aksinya.
+
+   v7: mode ACRO dihapus dari dashboard (tanpa cascade PID kedalaman ArduSub
+   dan tanpa handler ACRO di app.js, action ini praktis mati). Profil
+   tersimpan yang punya tombol terikat ke "mode_acro" dimigrasikan ke
+   "no_function" supaya tidak diam-diam macet. */
+export const SCHEMA_VERSION = 8;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -53,13 +58,9 @@ export const BUTTON_ACTIONS = [
   "mode_stabilize",
   "mode_depth_hold",
   // Alt Hold + tahan heading (overlay sisi Pi). Tidak ter-bind di
-  // defaultButtonLayer() dengan alasan yang sama seperti ACRO: ke-16 tombol pad
-  // sudah terpakai. Bind manual lewat halaman Setup > Joystick.
+  // defaultButtonLayer(): ke-16 tombol pad sudah terpakai. Bind manual lewat
+  // halaman Setup > Joystick.
   "mode_poshold",
-  // ACRO tidak ter-bind di defaultButtonLayer(): ke-16 tombol pad sudah
-  // terpakai, dan mode ini terlalu berisiko untuk menggeser binding yang sudah
-  // dihafal operator. Bind manual lewat halaman Setup > Joystick.
-  "mode_acro",
   "input_hold_set",
   "mount_tilt_up",
   "mount_tilt_down",
@@ -118,6 +119,10 @@ const ACTION_MIGRATION = {
      "repeat" tidak masuk akal untuk tombol sekali-pencet. */
   gain_dec: "depth_set",
   gain_inc: "depth_hold_toggle",
+
+  // ACRO dihapus dari dashboard (v7): tombol yang masih terikat ke aksi ini
+  // dimigrasikan ke no_function alih-alih diam-diam macet.
+  mode_acro: "no_function",
 };
 
 export function migrateButtonAction(action) {

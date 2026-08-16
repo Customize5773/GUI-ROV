@@ -65,16 +65,10 @@ Z_NEUTRAL = 500
 # Nama mode GUI -> nama mode ArduSub. Sengaja diduplikasi (bukan import) supaya
 # rov_link.py tetap bisa dijalankan langsung dari dalam autonomy/ tanpa root repo
 # di sys.path — tapi HARUS tetap sinkron dengan rov_modes.PILOT_MODE_MAP.
-#
-# ACRO: tanpa stabilisasi attitude; z = 500 di sini BUKAN "tahan kedalaman".
-# "stabilize" adalah ALIAS ALT_HOLD (bukan STABILIZE ArduSub): STABILIZE tidak
-# menjalankan cascade PID kedalaman, jadi z = 500 di sana juga bukan "tahan
-# kedalaman" — lihat docstring rov_modes.py.
 PILOT_MODE_MAP = {
     "manual": "MANUAL",
-    "stabilize": "ALT_HOLD",
+    "stabilize": "STABILIZE",
     "depth_hold": "ALT_HOLD",
-    "acro": "ACRO",
 }
 
 # Kill-switch: abaikan noise/jitter joystick fisik (mis. drift Logitech F310/DS4) di

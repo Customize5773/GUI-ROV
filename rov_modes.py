@@ -5,45 +5,31 @@ pemetaan nama mode dan aturan keselamatan per-mode bisa di-unit-test tanpa
 pymavlink, socket, atau hardware.
 
 Dua lapis nama yang sengaja dibedakan:
-    - Nama GUI  : "manual", "stabilize", "depth_hold", "poshold", "acro" — yang
+    - Nama GUI  : "manual", "stabilize", "depth_hold", "poshold" — yang
       dikirim dashboard lewat command JSON {"name": "pilot_mode", "value": ...}.
-    - Nama ArduSub : "MANUAL", "STABILIZE", "ALT_HOLD", "ACRO" — yang dipakai
+    - Nama ArduSub : "MANUAL", "STABILIZE", "ALT_HOLD" — yang dipakai
       master.mode_mapping() dan yang dilaporkan balik lewat HEARTBEAT.
 
-Kenapa "stabilize" sekarang alias ALT_HOLD
+Kenapa "stabilize" adalah mode STABILIZE sungguhan
     Di STABILIZE attitude (roll/pitch) distabilkan, TAPI kedalaman tidak —
     ArduSub hanya menjalankan cascade PID kedalaman (POSZ->VELZ->PSC_ACCZ) di
-    ALT_HOLD. Artinya MANUAL_CONTROL.z = 500 di ALT_HOLD berarti "tahan
-    kedalaman", sedangkan di STABILIZE cuma "tidak ada dorongan vertikal":
-    wahana yang tidak neutrally buoyant tenggelam/naik kecuali pilot menahan
-    stick throttle terus-menerus. Untuk operasi kolam dangkal ini tidak pernah
-    menjadi pilihan yang berguna, sementara ALT_HOLD sudah memberi attitude
-    stabilized DAN depth hold sekaligus. Jadi kedua nama GUI ("stabilize" dan
-    "depth_hold") sekarang mengarah ke ALT_HOLD, dan tab STABILIZE dihapus dari
-    dashboard. Aliasnya dipertahankan (bukan dihapus) supaya profil joystick
-    tersimpan dengan aksi `mode_stabilize` tetap bekerja.
+    ALT_HOLD. Bias depth-set karena itu digeser mengikuti mode ini (lihat
+    DEPTH_HOLD_MODES di bawah): tanpa cascade PID ArduSub yang menahan
+    kedalaman, bias jadi satu-satunya yang mendorong wahana ke setpoint —
+    dorongan open-loop, bukan koreksi di atas PID firmware.
 
 Mode vs depth-set (sengaja TERPISAH)
     ALT_HOLD = "tahan kedalaman tempat wahana berada sekarang", dikerjakan
     sepenuhnya oleh cascade PID ArduSub. POSHOLD = ALT_HOLD + overlay heading
-    hold sisi Python. Itu saja esensi keduanya.
+    hold sisi Python. Keduanya TIDAK LAGI menjadi syarat bias depth-set —
+    lihat DEPTH_HOLD_MODES.
 
     "Depth-set" (menuju sebuah setpoint yang DIREKAM operator lewat tombol SET,
     lalu dinyalakan lewat tombol ON/OFF) adalah fitur TERSENDIRI. Masuk
-    ALT_HOLD/POSHOLD tidak menyalakannya, dan menyalakannya tidak memindahkan
-    mode. Dulu keduanya menempel: menekan tab Alt Hold langsung memasang
-    setpoint tetap 0.30 m, jadi memilih mode = perintah menyelam.
+    STABILIZE tidak menyalakannya, dan menyalakannya tidak memindahkan mode.
 
     Yang TETAP menjadi syarat: bias depth-set hanya dikirim saat mode ArduSub
-    ada di DEPTH_HOLD_MODES. Itu syarat fisik (bias mengasumsikan ada cascade
-    PID kedalaman yang menerimanya), bukan coupling arah sebaliknya.
-
-Tentang ACRO
-    Di ACRO tidak ada stabilisasi attitude sama sekali: stik memerintahkan RATE
-    (kecepatan sudut), bukan sudut, dan throttle netral juga tidak menahan
-    kedalaman. Karena itu ACRO tidak masuk DEPTH_HOLD_MODES: bias depth-hold
-    tidak boleh ikut campur saat tidak ada cascade PID kedalaman yang menahan
-    wahana.
+    ada di DEPTH_HOLD_MODES.
 
 Kenapa "poshold" menunjuk ALT_HOLD, bukan mode POSHOLD ArduSub
     POSHOLD ArduSub butuh estimasi posisi horizontal yang dipercaya EKF
@@ -67,60 +53,30 @@ Kenapa "poshold" menunjuk ALT_HOLD, bukan mode POSHOLD ArduSub
     dan dipakai GUI untuk menyorot tab yang benar.
 """
 
-# Nama GUI -> nama mode ArduSub. "stabilize" sengaja menunjuk ALT_HOLD juga —
-# lihat catatan di docstring modul.
+# Nama GUI -> nama mode ArduSub.
 PILOT_MODE_MAP = {
     "manual": "MANUAL",
-    "stabilize": "ALT_HOLD",
+    "stabilize": "STABILIZE",
     "depth_hold": "ALT_HOLD",
     # Overlay heading-hold sisi Python, BUKAN mode POSHOLD firmware — lihat
     # docstring modul.
     "poshold": "ALT_HOLD",
-    "acro": "ACRO",
 }
 
 # Nama GUI untuk station-keep. Dipakai agent supaya tidak membandingkan string
 # mentah di tengah handler command.
 POSHOLD_MODE = "poshold"
 
-# Mode yang menjalankan cascade PID kedalaman dari autopilot, sehingga
-# menggeser setpoint kedalaman lewat bias throttle masuk akal.
+# Mode yang jadi syarat bias depth-set (lihat depth_bias_engaged()).
 #
-# INI BUKAN saklar depth-set. Berada di ALT_HOLD tidak menyalakan depth-set,
+# INI BUKAN saklar depth-set. Berada di STABILIZE tidak menyalakan depth-set,
 # dan menyalakan depth-set tidak memindahkan mode — lihat depth_bias_engaged().
 #
 # MANUAL tidak masuk: tidak ada yang menahan kedalaman, bias hanya akan
 # mendorong wahana tanpa umpan balik.
-# STABILIZE tidak masuk: attitude distabilkan, tapi kedalaman tidak — lihat
-# catatan di docstring modul. Mode ini tidak bisa lagi diminta dari GUI, tapi
-# wahana masih bisa berada di sana lewat saklar RC / GCS lain.
-# ACRO tidak masuk: lihat catatan di docstring modul.
-DEPTH_HOLD_MODES = frozenset({"ALT_HOLD"})
-
-# Mode yang memerlukan konfirmasi eksplisit SEBELUM diminta operator. STABILIZE
-# tidak ada di sini karena tidak bisa lagi diminta dari GUI — tapi peringatannya
-# tetap hidup di MODE_WARNINGS untuk kasus wahana masuk STABILIZE dari luar.
-RISKY_MODES = frozenset({"ACRO"})
-
-ACRO_WARNING = (
-    "ACRO: tanpa stabilisasi attitude. Stik = rate, dan throttle netral "
-    "TIDAK menahan kedalaman. Depth-set tidak akan menahan di mode ini."
-)
-
-STABILIZE_WARNING = (
-    "STABILIZE: attitude distabilkan, tapi kedalaman TIDAK. Throttle netral "
-    "berarti dorongan vertikal nol, bukan tahan kedalaman. Depth-set tidak "
-    "akan menahan di mode ini — tahan stick throttle secara manual."
-)
-
-# Peta mode -> pesan peringatan operator, dipakai oleh warning_for_mode().
-# Sengaja LEBIH LUAS dari RISKY_MODES: STABILIZE tidak bisa diminta dari GUI
-# (jadi tidak perlu gerbang konfirmasi), tapi kalau wahana ternyata berada di
-# sana peringatannya tetap perlu muncul.
-MODE_WARNINGS = {
-    "ACRO": ACRO_WARNING,
-    "STABILIZE": STABILIZE_WARNING,
-}
+# ALT_HOLD/POSHOLD tidak masuk lagi: kedalaman sudah ditahan cascade PID
+# ArduSub sendiri di mode itu, depth-set kini dipasangkan ke STABILIZE.
+DEPTH_HOLD_MODES = frozenset({"STABILIZE"})
 
 
 def resolve_pilot_mode(name):
@@ -174,7 +130,9 @@ def depth_bias_engaged(enabled, target, mode, heave, heave_epsilon):
       - `mode` tetap harus mode depth hold (lihat DEPTH_HOLD_MODES). Ini
         bukan coupling arah sebaliknya, melainkan syarat fisik: kompensasi
         deadzone yang dipakai bias mengasumsikan ada cascade PID kedalaman
-        yang menerimanya. Di MANUAL/ACRO bias jadi dorongan open-loop.
+        yang menerimanya (atau, untuk STABILIZE, bias itu sendiri jadi
+        satu-satunya yang mendorong). Di MANUAL bias jadi dorongan open-loop
+        tanpa umpan balik sama sekali.
       - stik heave yang dipegang selalu menang atas setpoint mana pun.
     """
     if target is None:
@@ -184,13 +142,3 @@ def depth_bias_engaged(enabled, target, mode, heave, heave_epsilon):
     if not depth_hold_allowed(mode):
         return False
     return abs(heave) <= heave_epsilon
-
-
-def is_risky_mode(mode):
-    """True untuk mode yang perlu peringatan menonjol ke operator."""
-    return mode in RISKY_MODES
-
-
-def warning_for_mode(mode):
-    """Pesan peringatan operator untuk `mode`, atau None kalau tidak ada."""
-    return MODE_WARNINGS.get(mode)

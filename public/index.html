@@ -147,24 +147,21 @@
                    sehingga tab GUI dan tombol D-pad gamepad selalu sinkron. -->
               <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode">
                 <button class="mode" data-mode="manual" role="tab">Manual</button>
-                <!-- STABILIZE tidak punya tab sendiri: ia menstabilkan attitude
-                     tapi TIDAK menahan kedalaman, sedangkan ALT_HOLD memberi
-                     keduanya sekaligus. Lihat docstring rov_modes.py. -->
+                <!-- STABILIZE: attitude (roll/pitch) distabilkan, kedalaman
+                     TIDAK — tidak ada cascade PID ArduSub yang menahannya di
+                     mode ini. Karena itulah ia jadi mode yang dipasangkan ke
+                     fitur depth-set (lihat rov_modes.py). -->
+                <button class="mode" data-mode="stabilize" role="tab"
+                        title="Attitude (roll/pitch) distabilkan. Kedalaman TIDAK ditahan ArduSub — depth-set (SET DEPTH / DEPTH-SET ON) mendorong kedalaman lewat bias sendiri di mode ini.">Stabilize</button>
                 <button class="mode" data-mode="depth_hold" role="tab"
-                        title="Attitude (roll/pitch) distabilkan + PID depth hold. Masuk mode ini langsung menyetel target kedalaman default.">Alt Hold</button>
+                        title="Attitude (roll/pitch) distabilkan + PID depth hold ArduSub.">Alt Hold</button>
                 <!-- POSHOLD: overlay sisi Pi di atas ALT_HOLD (lihat
                      rov_modes.py). Mode ArduSub-nya SAMA dengan Alt Hold, jadi
                      sorotan tab ini datang dari flag `poshold` di telemetri,
                      bukan dari HEARTBEAT. -->
                 <button class="mode" data-mode="poshold" role="tab"
                         title="Alt Hold + tahan heading otomatis. Lepas stik = kedalaman & arah hadap dipertahankan. TIDAK menahan posisi x/y — arus lateral tetap menggeser wahana.">Pos Hold</button>
-                <!-- ACRO: tanpa stabilisasi attitude, dan throttle netral TIDAK
-                     menahan kedalaman. Diberi kelas mode--risky supaya jelas
-                     berbeda, dan klik-nya meminta konfirmasi di app.js. -->
-                <button class="mode mode--risky" data-mode="acro" role="tab"
-                        title="Tanpa stabilisasi attitude — stik = rate, depth hold nonaktif">Acro</button>
                 <span class="modebar__actual" id="modeActual" title="Mode aktif menurut Pixhawk">—</span>
-                <span class="modebar__warn" id="modeWarn" role="status" hidden></span>
               </div>
 
               <div class="stage" id="stage">
@@ -221,9 +218,10 @@
                 <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
 
                 <!-- Depth-set: SET merekam kedalaman saat ini, ON/OFF menyalakannya.
-                     Sengaja TERPISAH dari tab mode di atas — Alt Hold/Pos Hold
-                     menahan kedalaman tempat wahana berada, depth-set menuju
-                     kedalaman yang direkam operator. -->
+                     Sengaja TERPISAH dari tab mode di atas. Bias hanya
+                     benar-benar mengalir saat mode ArduSub = STABILIZE (lihat
+                     DEPTH_HOLD_MODES di rov_modes.py) — di Alt Hold/Pos Hold
+                     kedalaman sudah ditahan cascade PID ArduSub sendiri. -->
                 <div class="depthset">
                   <button class="btn-wide btn-wide--half" id="btnDepthSet">SET DEPTH</button>
                   <button class="btn-wide btn-wide--half" id="btnDepthHold" aria-pressed="false">DEPTH-SET OFF</button>
@@ -330,22 +328,6 @@
         <!-- PAGE 9: REPLAY (diisi oleh js/pages/replay.js) — rekam & putar ulang -->
         <div class="page page--replay" id="page-replay" data-page="replay" style="display:none;"></div>
 
-      </div>
-    </div>
-  </div>
-
-  <!-- Modal konfirmasi ACRO — pengganti confirm() bawaan browser KHUSUS saat
-       controller = Gamepad, supaya bisa ditutup lewat tombol pad (X = OK,
-       B = Batal) tanpa mengunci thread JS (confirm() sinkron memblokir
-       pollGamepad(), lihat app.js). Jalur Keyboard tetap pakai confirm()
-       native seperti sebelumnya. -->
-  <div class="modal-overlay" id="acroModal" hidden role="alertdialog" aria-modal="true" aria-labelledby="acroModalTitle">
-    <div class="modal">
-      <h3 class="modal__title" id="acroModalTitle">Masuk mode ACRO?</h3>
-      <p class="modal__body" id="acroModalBody"></p>
-      <div class="modal__actions">
-        <button class="btn-wide modal__btn modal__btn--cancel" id="acroModalCancel">Batal (B)</button>
-        <button class="btn-wide modal__btn modal__btn--confirm" id="acroModalConfirm">Konfirmasi (X)</button>
       </div>
     </div>
   </div>

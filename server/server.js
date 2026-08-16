@@ -458,20 +458,18 @@ udp.bind(UDP_IN, "0.0.0.0", () => {
 // status yang dikendalikan tombol header (di-echo balik di telemetri SIM)
 // Padanan rov_modes.PILOT_MODE_MAP di sisi Python — dipakai agar telemetri SIM
 // melaporkan nama mode ArduSub yang sama dengan yang dikirim Pixhawk sungguhan,
-// sehingga tab mode & badge peringatan ACRO bisa diuji tanpa hardware.
-// "stabilize" sengaja menunjuk ALT_HOLD juga — lihat docstring rov_modes.py.
+// sehingga tab mode bisa diuji tanpa hardware.
 const PILOT_MODE_MAP = {
   manual: "MANUAL",
-  stabilize: "ALT_HOLD",
+  stabilize: "STABILIZE",
   depth_hold: "ALT_HOLD",
   // Overlay heading-hold sisi Pi di atas ALT_HOLD, BUKAN mode POSHOLD firmware
   // — lihat docstring rov_modes.py. Karena mode ArduSub-nya sama dengan
   // depth_hold, yang membedakan di GUI adalah flag `poshold` di telemetri.
   poshold: "ALT_HOLD",
-  acro: "ACRO",
 };
 
-const DEPTH_HOLD_MODES = new Set(["ALT_HOLD"]);   // rov_modes.DEPTH_HOLD_MODES
+const DEPTH_HOLD_MODES = new Set(["STABILIZE"]);   // rov_modes.DEPTH_HOLD_MODES
 
 const simState = {
   armed: false,

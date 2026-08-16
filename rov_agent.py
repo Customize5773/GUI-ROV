@@ -23,9 +23,7 @@ from rov_modes import (
     depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
-    is_risky_mode,
     resolve_pilot_mode,
-    warning_for_mode,
 )
 from rov_heading import heading_bias, operator_holding_yaw
 from rov_motor_test import validate_motor_test
@@ -268,6 +266,15 @@ def _effective_requested_mode():
     return requested_mode
 
 
+def _current_pixhawk_mode():
+    """Mode ArduSub efektif saat ini: requested_mode selama belum kedaluwarsa
+    (lihat _effective_requested_mode), else state["mode"] yang benar-benar
+    terkonfirmasi HEARTBEAT. Tanpa fallback requested_mode, sesuatu yang
+    di-ON-kan tepat setelah ganti mode akan diam selama satu-dua tick pertama.
+    """
+    return _effective_requested_mode() or state["mode"]
+
+
 def depth_hold_mode_ok():
     """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
 
@@ -275,16 +282,10 @@ def depth_hold_mode_ok():
     depth_hold_enabled, dan keduanya sengaja terpisah: mode tidak pernah
     menyalakan depth-set, depth-set tidak pernah memindahkan mode.
 
-    requested_mode ikut dipakai (selama belum kedaluwarsa, lihat
-    _effective_requested_mode) karena state["mode"] baru ter-update saat
-    HEARTBEAT berikutnya datang. Tanpa itu, depth-set yang di-ON-kan tepat
-    setelah ganti mode akan diam selama satu-dua tick pertama.
-
-    ACRO sengaja TIDAK termasuk: di sana throttle netral bukan berarti tahan
-    kedalaman, jadi bias depth-set hanya akan mendorong wahana tanpa umpan
-    balik apa pun yang menstabilkannya.
+    MANUAL/ALT_HOLD/POSHOLD sengaja TIDAK termasuk — lihat DEPTH_HOLD_MODES
+    di rov_modes.py untuk mode mana yang jadi syaratnya sekarang.
     """
-    return depth_hold_allowed(_effective_requested_mode() or state["mode"])
+    return depth_hold_allowed(_current_pixhawk_mode())
 
 
 def apply_depth_hold_bias(mc, axes):
@@ -294,7 +295,7 @@ def apply_depth_hold_bias(mc, axes):
     rov_modes.py untuk aturannya dalam bentuk yang bisa diuji):
       1. operator sudah menekan SET  -> depth_target bukan None
       2. operator sudah meng-ON-kan  -> depth_hold_enabled
-      3. mode ArduSub = ALT_HOLD     -> ada cascade PID kedalaman yang dikoreksi
+      3. mode ArduSub ada di DEPTH_HOLD_MODES (rov_modes.py)
       4. stik heave netral           -> begitu operator menyentuh stik, input
                                         manual menang mutlak
     """
@@ -707,9 +708,9 @@ def command_listener():
                     print(f"[PILOT] Unknown mode: {value}")
                     continue
 
-                # ACRO tidak ada di semua build/frame ArduSub. mode_mapping()
-                # berasal dari firmware yang benar-benar terpasang, jadi ini
-                # satu-satunya cek yang bisa dipercaya.
+                # Tidak semua mode ada di semua build/frame ArduSub.
+                # mode_mapping() berasal dari firmware yang benar-benar
+                # terpasang, jadi ini satu-satunya cek yang bisa dipercaya.
                 mode_mapping = master.mode_mapping() or {}
 
                 if pixhawk_mode not in mode_mapping:
@@ -735,12 +736,10 @@ def command_listener():
                     heading_target = None
 
                 # CATATAN: perpindahan mode sengaja TIDAK menyentuh depth_target
-                # maupun depth_hold_enabled. Dulu masuk ALT_HOLD memasang
-                # setpoint tetap 0.30 m, sehingga menekan tombol mode berarti
-                # "menyelam ke kedalaman kerja" — padahal esensi ALT_HOLD adalah
-                # menahan kedalaman TEMPAT WAHANA BERADA SEKARANG lewat cascade
-                # PID ArduSub. Menuju setpoint tersimpan kini fitur terpisah
-                # (command depth_set / depth_hold) yang di-arm operator sendiri.
+                # maupun depth_hold_enabled. Menuju setpoint tersimpan adalah
+                # fitur terpisah (command depth_set / depth_hold) yang di-arm
+                # operator sendiri — lihat DEPTH_HOLD_MODES di rov_modes.py
+                # untuk mode mana yang jadi syarat bias-nya sekarang.
 
                 if depth_hold_allowed(pixhawk_mode):
                     was_depth_hold = (
@@ -801,10 +800,6 @@ def command_listener():
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if poshold_active:
                     print(" POSHOLD    : heading hold AKTIF (posisi x/y TIDAK ditahan)")
-                if is_risky_mode(pixhawk_mode):
-                    msg = warning_for_mode(pixhawk_mode)
-                    if msg:
-                        print(f" !! {msg}")
                 print("====================================")
 
             elif name == "stop":
@@ -1115,8 +1110,8 @@ def command_listener():
 
             elif name == "param_set":
                 # value = {"name": ..., "value": ..., "type": <MAV_PARAM_TYPE>}
-                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle), sama
-                # seperti gerbang ACRO — di sini yang dijaga hanya validitas.
+                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle) — di
+                # sini yang dijaga hanya validitas.
                 if not isinstance(value, dict):
                     print(f"[PARAM] payload param_set tidak valid: {value!r}")
                     continue
@@ -1523,15 +1518,19 @@ def joystick_sender():
 
         # Heave dipetakan ulang supaya melewati dead band FC (lihat
         # heave_skip_deadzone di rov_axes.py). Besar lompatannya tergantung MODE:
-        # di ALT_HOLD ada THR_DZ (deadzone input pilot) DI ATAS dead band motor,
-        # di MANUAL hanya dead band motor. Memakai angka ALT_HOLD di MANUAL
-        # berarti sentuhan stik sekecil apa pun langsung ~20% dorongan.
+        # di ALT_HOLD (dan POSHOLD, yang mode ArduSub-nya sama) ada THR_DZ
+        # (deadzone input pilot) DI ATAS dead band motor, di mode lain hanya
+        # dead band motor. Ini karakteristik FIRMWARE ALT_HOLD itu sendiri —
+        # sengaja TIDAK dipakaikan depth_hold_mode_ok(), yang sekarang menunjuk
+        # STABILIZE (syarat bias depth-set), bukan mode yang firmware-nya
+        # menerapkan THR_DZ. Memakai angka ALT_HOLD di mode lain berarti
+        # sentuhan stik sekecil apa pun langsung ~20% dorongan.
         #
         # Konsekuensi yang disengaja: thruster_gain jadi kurang berpengaruh pada
         # heave, karena bagian travel yang dulu dipotong gain justru bagian yang
         # memang tidak pernah sampai ke FC. Gain kecil sekarang berarti "naik
         # turun pelan", bukan lagi "naik turun tidak sama sekali".
-        skip = HEAVE_SKIP_ALT_HOLD if depth_hold_mode_ok() else HEAVE_SKIP_MANUAL
+        skip = HEAVE_SKIP_ALT_HOLD if _current_pixhawk_mode() == "ALT_HOLD" else HEAVE_SKIP_MANUAL
         heave_out = heave_skip_deadzone(
             scaled_axes["heave"], skip, epsilon=HEAVE_MANUAL_EPSILON,
         )
