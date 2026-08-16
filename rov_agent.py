@@ -13,6 +13,9 @@ from rov_axes import (
     apply_shape_updates,
     axes_to_manual_control,
     clamp_axis,
+    heave_skip_deadzone,
+    HEAVE_SKIP_ALT_HOLD,
+    HEAVE_SKIP_MANUAL,
     resolve_manual_packet,
     shape_axes,
 )
@@ -1513,13 +1516,28 @@ def joystick_sender():
             "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
         }
 
+        # Heave dipetakan ulang supaya melewati dead band FC (lihat
+        # heave_skip_deadzone di rov_axes.py). Besar lompatannya tergantung MODE:
+        # di ALT_HOLD ada THR_DZ (deadzone input pilot) DI ATAS dead band motor,
+        # di MANUAL hanya dead band motor. Memakai angka ALT_HOLD di MANUAL
+        # berarti sentuhan stik sekecil apa pun langsung ~20% dorongan.
+        #
+        # Konsekuensi yang disengaja: thruster_gain jadi kurang berpengaruh pada
+        # heave, karena bagian travel yang dulu dipotong gain justru bagian yang
+        # memang tidak pernah sampai ke FC. Gain kecil sekarang berarti "naik
+        # turun pelan", bukan lagi "naik turun tidak sama sekali".
+        skip = HEAVE_SKIP_ALT_HOLD if depth_hold_mode_ok() else HEAVE_SKIP_MANUAL
+        heave_out = heave_skip_deadzone(
+            scaled_axes["heave"], skip, epsilon=HEAVE_MANUAL_EPSILON,
+        )
+
         # Buat ulang MANUAL_CONTROL berdasarkan axis
         # yang sudah dikalikan thruster gain.
         mc = axes_to_manual_control(
             surge=scaled_axes["surge"],
             sway=scaled_axes["sway"],
             yaw=scaled_axes["yaw"],
-            heave=scaled_axes["heave"],
+            heave=heave_out,
         )
 
         # Depth hold dan heading hold bekerja SETELAH gain untuk `mc` (dorongan

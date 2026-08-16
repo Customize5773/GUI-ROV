@@ -6,6 +6,9 @@
 import unittest
 
 from rov_axes import (
+    heave_skip_deadzone,
+    HEAVE_SKIP_ALT_HOLD,
+    HEAVE_SKIP_MANUAL,
     AXIS_NEUTRAL,
     AXIS_SHAPE,
     IDLE_TIMEOUT,
@@ -275,3 +278,47 @@ class TestResolveShapeUpdates(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestHeaveSkipDeadzone(unittest.TestCase):
+    """heave_skip_deadzone: lompati dead band FC, pakai penuh travel stik."""
+
+    def test_netral_tetap_nol(self):
+        """Netral WAJIB 0 persis: jalur E-Stop/fail-safe bergantung padanya."""
+        for v in (0, 5, -5, 20, -20):
+            self.assertEqual(heave_skip_deadzone(v, HEAVE_SKIP_ALT_HOLD), 0)
+
+    def test_langsung_lewat_deadzone(self):
+        """Sentuhan terkecil di atas epsilon sudah keluar dari THR_DZ (250 unit)."""
+        self.assertGreaterEqual(heave_skip_deadzone(21, HEAVE_SKIP_ALT_HOLD), 250)
+        self.assertLessEqual(heave_skip_deadzone(-21, HEAVE_SKIP_ALT_HOLD), -250)
+
+    def test_monoton_dan_simetris(self):
+        prev = 0
+        for v in range(21, 1001, 10):
+            out = heave_skip_deadzone(v, HEAVE_SKIP_ALT_HOLD)
+            self.assertGreaterEqual(out, prev, f"turun di {v}")
+            self.assertEqual(heave_skip_deadzone(-v, HEAVE_SKIP_ALT_HOLD), -out)
+            prev = out
+
+    def test_penuh_tetap_penuh(self):
+        """Otoritas maksimum tidak boleh berkurang gara-gara remap."""
+        self.assertEqual(heave_skip_deadzone(1000, HEAVE_SKIP_ALT_HOLD), 1000)
+        self.assertEqual(heave_skip_deadzone(2000, HEAVE_SKIP_ALT_HOLD), 1000)
+
+    def test_manual_lompat_lebih_kecil(self):
+        """MANUAL cuma perlu melompati MOT_SPIN_MIN, bukan THR_DZ juga."""
+        self.assertLess(
+            heave_skip_deadzone(21, HEAVE_SKIP_MANUAL),
+            heave_skip_deadzone(21, HEAVE_SKIP_ALT_HOLD),
+        )
+
+    def test_linear_di_atas_lompatan(self):
+        """Tanpa expo tersembunyi: kenaikan stik = kenaikan output sebanding.
+
+        Kurva rasa stik dimiliki profil joystick (halaman Joystick), bukan
+        modul ini. Tes ini yang menjaga agar expo kedua tidak menyelinap balik.
+        """
+        lo = heave_skip_deadzone(21, HEAVE_SKIP_ALT_HOLD)
+        mid = heave_skip_deadzone(510, HEAVE_SKIP_ALT_HOLD)
+        self.assertAlmostEqual(mid, (lo + 1000) / 2, delta=3)

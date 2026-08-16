@@ -79,7 +79,25 @@ export const CONFIG = {
     yaw:   { p: 0.18,  i: 0.018, d: 0.0 },
     roll:  { p: 0.135, i: 0.09,  d: 0.0036 },
     pitch: { p: 0.135, i: 0.09,  d: 0.0036 },
-    depth: { p: 0.5,   i: 0.1,   d: 0.0 },
+    /* depth.i sengaja 0,4 — SATU-SATUNYA nilai di blok ini yang BUKAN default
+       FC (0,1). Alasannya terukur, bukan selera:
+
+       hydroships14.log, 757 sampel: PWM thruster vertikal mean 1425 dengan 582
+       sampel di bawah netral 1500. Artinya wahana harus didorong TERUS ~75 PWM
+       (~9% dorongan) hanya untuk diam — wahana tidak netral apung.
+
+       Di stack vertikal ArduSub, PSC_VELZ_I = 0, jadi PSC_ACCZ_I adalah
+       SATU-SATUNYA integrator yang bisa menanggung offset tetap itu. Dengan
+       I = 0,1 ia terlalu lambat: P yang menanggung, wahana melorot dulu baru
+       dikoreksi — persis pola naik-turun lambat yang dikeluhkan.
+
+       depth.d TETAP 0. Baro terkuantisasi 0,01 m dan bergetar ±0,02 m; D di
+       atas sinyal seperti itu memperkuat noise, bukan meredam gerakan.
+
+       CATATAN: ini menambal GEJALA. Penyebabnya ballast — perbaiki apung
+       sampai PWM vertikal rata-rata duduk di 1490-1500, lalu depth.i boleh
+       turun lagi ke 0,1. */
+    depth: { p: 0.5,   i: 0.4,   d: 0.0 },
   },
 
   DEMO_ON_START: false,

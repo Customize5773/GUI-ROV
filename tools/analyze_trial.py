@@ -183,10 +183,24 @@ def main(argv):
 
         vals, hold = pwm_vertikal(send_rows)
         if vals:
+            # Trim apung diukur dari BESAR simpangan rata-rata, bukan dari
+            # jumlah sampel di bawah 1500.
+            #
+            # Trial 16 Agu 2026 menunjukkan kenapa: setelah PSC_ACCZ_I dinaikkan,
+            # "di bawah netral" MEMBURUK (77% -> 88%) sementara simpangan
+            # rata-rata MEMBAIK (75 -> 50 PWM). Integrator yang lebih cepat
+            # membuat PWM duduk rapat di satu pita tepat di bawah netral alih-
+            # alih mengayun lebar sampai kadang melewati 1500 — dan hitungan
+            # sampel justru menghukum pita rapat itu. Metrik yang bisa bergerak
+            # berlawanan dengan perbaikan nyata lebih buruk daripada tidak ada.
+            offset = st.mean(vals) - 1500
             bawah = sum(1 for v in vals if v < 1500)
             print(f"\nPWM thruster vertikal dari {argv[1]}")
-            print(f"  di bawah netral 1500: {bawah}/{len(vals)} sampel"
-                  "   (trim apung: makin mendekati separuh, makin netral)")
+            print(f"  trim apung: mean {st.mean(vals):.0f}"
+                  f" = {offset:+.0f} PWM dari netral"
+                  f"   (target ±10; makin kecil |simpangan|, makin netral apung)")
+            print(f"  sebaran: sd {st.pstdev(vals):.1f},"
+                  f" {bawah}/{len(vals)} sampel di bawah 1500")
             if hold:
                 print(f"  saat depth-hold ON: mean {st.mean(hold):.1f}"
                       f" sd {st.pstdev(hold):.1f}   (target 1490-1500)")
