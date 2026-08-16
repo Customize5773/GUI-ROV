@@ -49,6 +49,7 @@ const els = {
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   depthTarget: $("vDepthTarget"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"),
   btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
   modeActual: $("modeActual"), modeWarn: $("modeWarn"),
   acroModal: $("acroModal"), acroModalBody: $("acroModalBody"),
@@ -337,6 +338,10 @@ function applyDepthHold(d) {
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
+  _pyQrData = (m5 && m5.qr_data) || null;
+  _pyQrAt = Date.now();
+  renderQrReadout();
+
   if (!els.mission5State) return;
   if (!m5) {
     els.mission5State.textContent = "IDLE";
@@ -412,6 +417,52 @@ setInterval(() => {
     }
   }
 }, 500);
+
+/* indikasi QR di strip Control. Dua sumber, pipeline Python (mission5.py,
+   dibaca via applyMission5 di bawah) diutamakan selama masih segar (misi
+   autonomous jalan) karena itu deteksi ROV sungguhan; scan jsQR lokal
+   terhadap #camImg (sama seperti halaman Camera) jadi fallback saat FSM
+   Python belum/tidak aktif, supaya operator tetap lihat indikasi saat manual. */
+const qrScanCanvas = document.createElement("canvas");
+let _lastQrScan = 0;
+let _pyQrData = null, _pyQrAt = 0;
+let _clientQrData = null;
+const PY_QR_FRESH_MS = 3000;
+
+function renderQrReadout() {
+  if (!els.vQR) return;
+  const pyFresh = _pyQrData && (Date.now() - _pyQrAt < PY_QR_FRESH_MS);
+  const val = pyFresh ? _pyQrData : _clientQrData;
+  if (val) {
+    els.vQR.textContent = val;
+    els.vQR.title = val;
+    els.qrReadout.classList.add("is-ok");
+  } else {
+    els.vQR.textContent = "—";
+    els.vQR.removeAttribute("title");
+    els.qrReadout.classList.remove("is-ok");
+  }
+}
+
+function scanControlQR() {
+  if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
+  const now = performance.now();
+  if (now - _lastQrScan < 200) return;
+  _lastQrScan = now;
+  const sw = els.camImg.naturalWidth, sh = els.camImg.naturalHeight;
+  const scale = Math.min(1, 640 / Math.max(sw, sh));
+  const cw = Math.max(1, Math.round(sw * scale)), ch = Math.max(1, Math.round(sh * scale));
+  qrScanCanvas.width = cw; qrScanCanvas.height = ch;
+  const ctx = qrScanCanvas.getContext("2d", { willReadFrequently: true });
+  try {
+    ctx.drawImage(els.camImg, 0, 0, cw, ch);
+    const img = ctx.getImageData(0, 0, cw, ch);
+    const code = window.jsQR(img.data, cw, ch);
+    _clientQrData = code ? code.data : null;
+    renderQrReadout();
+  } catch (e) { /* frame belum siap / cross-origin, lewati */ }
+}
+setInterval(scanControlQR, 200);
 
 /*  WebSocket  */
 let ws = null, demo = null, pingT = 0, linkStale = false;
