@@ -213,6 +213,26 @@ DEPTH_BIAS_RELEASE = 0.02
 # tools/analyze_trial.py, kolom "ayunan").
 DEPTH_BIAS_DAMPING = 300.0  # unit z per (m/s) laju error mengecil
 
+# Jarak koreksi maksimum yang boleh dicoba bias — di luar ini, bias diam dan
+# ArduSub ALT_HOLD asli (native, tanpa campur tangan Python) yang menahan,
+# sama seperti operator memakai BlueOS/Cockpit langsung tanpa fitur SET kita.
+#
+# Trial 15-16 Agu 2026 membuktikan dua hal yang berlawanan sekaligus:
+#   - ALT_HOLD native (bias OFF, stik netral) menahan RAPAT — sd 0,007 m
+#     selama 130+ detik nyata, persis rasa Cockpit.
+#   - Bias kita mencoba mengejar target JAUH (0,15-0,4 m) malah drift arah
+#     TERBALIK dan berosilasi lambat tanpa henti (lihat window "BEROSILASI"
+#     di tools/analyze_trial.py).
+#
+# Kesimpulannya: hukum bias ini (deadzone-jump + proporsional + redaman)
+# cukup andal untuk KOREKSI KECIL (operator sudah dekat target, cuma perlu
+# trim), tapi tidak untuk MENGGANTIKAN navigasi manual ke kedalaman jauh.
+# Daripada terus menambal hukum bias untuk kasus yang ArduSub sendiri sudah
+# tangani lebih baik secara native, batasi jangkauannya: SET yang sudah lama
+# (operator berenang jauh sebelum menekan ON) dibiarkan diam, bukan dipaksa
+# mengejar dan berisiko drift.
+DEPTH_BIAS_MAX_CORRECTION = 0.15  # meter
+
 
 def depth_bias_active(error, was_active):
     """Apakah bias boleh mengalir untuk `error` ini, mengingat keadaan sebelumnya.
@@ -227,7 +247,13 @@ def depth_bias_active(error, was_active):
     return magnitude >= DEPTH_BIAS_ENGAGE
 
 
-def depth_hold_bias(error, was_active=False, closing_rate=0.0, damping=DEPTH_BIAS_DAMPING):
+def depth_hold_bias(
+    error,
+    was_active=False,
+    closing_rate=0.0,
+    damping=DEPTH_BIAS_DAMPING,
+    max_correction=DEPTH_BIAS_MAX_CORRECTION,
+):
     """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
 
     Dipisah dari apply_depth_hold_bias() (rov_agent.py) supaya bisa diuji
@@ -247,8 +273,16 @@ def depth_hold_bias(error, was_active=False, closing_rate=0.0, damping=DEPTH_BIA
     mendekati target — lihat DEPTH_BIAS_DAMPING). Default 0.0 membuat
     perilaku IDENTIK dengan sebelum redaman ditambahkan, untuk caller lama
     yang belum menghitung rate.
+
+    `max_correction`: di atas jarak ini, bias diam (0.0) dan ArduSub ALT_HOLD
+    native yang menahan — lihat DEPTH_BIAS_MAX_CORRECTION. Dicek SETELAH
+    histeresis (bukan sebelum) supaya begitu error turun kembali ke dalam
+    jangkauan, `was_active` tidak perlu "dilupakan" dulu.
     """
     if not depth_bias_active(error, was_active):
+        return 0.0
+
+    if abs(error) > max_correction:
         return 0.0
 
     magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN

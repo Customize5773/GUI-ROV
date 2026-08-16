@@ -37,6 +37,7 @@ from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from rov_pid import (
     DEPTH_BIAS_ENGAGE,
     DEPTH_BIAS_LIMIT,
+    DEPTH_BIAS_MAX_CORRECTION,
     DEPTH_BIAS_RELEASE,
     clamp_depth_target,
     depth_bias_active,
@@ -289,7 +290,7 @@ def apply_depth_hold_bias(mc, axes):
       4. stik heave netral           -> begitu operator menyentuh stik, input
                                         manual menang mutlak
     """
-    global _bias_active, _depth_ema, _depth_ema_ts
+    global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
 
     with depth_lock:
         target = depth_target
@@ -345,14 +346,23 @@ def apply_depth_hold_bias(mc, axes):
         target - state["depth"],
         _bias_active
     )
-    bias = depth_hold_bias(target - state["depth"], _bias_active, closing_rate)
+    error = target - state["depth"]
+    bias = depth_hold_bias(error, _bias_active, closing_rate)
     if bias == 0.0:
+        # Beda dari "sudah dekat target, tidak perlu koreksi" (senyap, itu
+        # normal): ini KHUSUS kasus _bias_active True (histeresis bilang mau
+        # mengoreksi) tapi errornya melebihi DEPTH_BIAS_MAX_CORRECTION —
+        # operator perlu tahu kenapa depth-hold terlihat diam, bukan menebak
+        # tombolnya rusak. Lihat catatan DEPTH_BIAS_MAX_CORRECTION di rov_pid.py.
+        if _bias_active and abs(error) > DEPTH_BIAS_MAX_CORRECTION and now - _last_depth_diag >= 1.0:
+            _last_depth_diag = now
+            print(f"[DEPTH] target {target:.2f} m terlalu jauh (error {error:+.2f} m) — "
+                  f"dekati dulu pakai stik, depth-hold cuma menahan trim dekat")
         return mc
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
 
-    global _last_depth_diag
     if now - _last_depth_diag >= 1.0:
         _last_depth_diag = now
         mentok = " MENTOK LIMIT" if abs(bias) >= DEPTH_BIAS_LIMIT - 0.5 else ""
