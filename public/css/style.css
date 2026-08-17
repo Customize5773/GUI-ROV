@@ -914,11 +914,16 @@ body[data-theme="light"] .theme__icon::after {
   color: var(--ink-dim);
   background: rgba(255,255,255,.04);
   font-family: "JetBrains Mono", monospace; letter-spacing: 2px; font-size: 13px;
-  /* #ctrlCamPip cuma nyala (display:block) saat .cam fullscreen dan punya
-     z-index:20 (dari .pip) — tanpa z-index di sini, PiP menimpanya begitu
-     fullscreen aktif meski urutan DOM nosignal ada setelah PiP. */
-  z-index: 25;
 }
+/* Naikkan z-index HANYA di panel Pilot (#camStage): #ctrlCamPip cuma nyala
+   (display:block) saat .cam fullscreen dan punya z-index:20 (dari .pip) —
+   tanpa ini PiP menimpa nosignal begitu fullscreen aktif. TIDAK boleh jadi
+   aturan .cam__nosignal polos — class yang sama dipakai ulang tiap sel di
+   halaman Camera (camera.js, #camNo1/#camNo2 dst.), bertetangga dengan
+   .pip.campip yang bisa diklik/di-drag. z-index global pernah membuat
+   nosignal menimpa & mematikan klik/drag PiP itu di sana — regresi yang
+   sudah terjadi sekali, jangan diulang. */
+#camStage .cam__nosignal { z-index: 25; }
 .cam__nosignal small { font-size: 10px; color: #43586b; letter-spacing: 1px; }
 .cam__bar {
   position: absolute; left: 10px; bottom: 10px; display: flex; gap: 8px;
