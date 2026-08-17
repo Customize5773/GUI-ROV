@@ -625,6 +625,11 @@ body[data-theme="light"] .theme__icon::after {
   display: flex;
   gap: 12px;
   pointer-events: none;
+  /* z-index eksplisit: elemen ini dipindah ke dalam .cam saat kamera fullscreen
+     (lihat toggleMiniInstrumentsHost di app.js), dan .cam__nosignal di sana
+     sudah z-index:25 — tanpa angka di sini instrumen akan terkubur di bawah
+     haze "TIDAK ADA SINYAL" persis bug yang baru diperbaiki di camNoSignal. */
+  z-index: 28;
 }
 /* artificial horizon */
 .attitude__ai {
@@ -909,6 +914,10 @@ body[data-theme="light"] .theme__icon::after {
   color: var(--ink-dim);
   background: rgba(255,255,255,.04);
   font-family: "JetBrains Mono", monospace; letter-spacing: 2px; font-size: 13px;
+  /* #ctrlCamPip cuma nyala (display:block) saat .cam fullscreen dan punya
+     z-index:20 (dari .pip) — tanpa z-index di sini, PiP menimpanya begitu
+     fullscreen aktif meski urutan DOM nosignal ada setelah PiP. */
+  z-index: 25;
 }
 .cam__nosignal small { font-size: 10px; color: #43586b; letter-spacing: 1px; }
 .cam__bar {
@@ -1184,6 +1193,10 @@ body.pseudo-fs-lock { overflow: hidden; }
    resolusi/rec ke bawahnya agar tidak bertumpuk. */
 .cam:fullscreen .cam__overlay,
 .cam.pseudo-fs .cam__overlay { top: 62px; }
+/* Mini AI + kompas dipindah ke sini (bukan diklon) saat kamera fullscreen —
+   lihat toggleMiniInstrumentsHost() di app.js. Turun sedikit dari 14px bawaan
+   supaya tidak bertumpuk dengan chip CAM switch di pojok kanan-atas. */
+.cam .attitude__instruments { top: 62px; right: 14px; }
 /* PiP pilot di kamera Control: kiri-ATAS supaya tidak menutupi tombol
    SNAPSHOT/REC/HUD (.cam__bar di kiri-bawah); overlay resolusi ada di kanan-atas. */
 #ctrlCamPip { left: 18px; top: 18px; right: auto; bottom: auto; }

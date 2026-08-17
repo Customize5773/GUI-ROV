@@ -32,6 +32,7 @@ const els = {
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
+  miniInstruments: $("miniInstruments"),
   miniCompass: $("miniCompass"), miniCompassDial: $("miniCompassDial"),
   miniCompassStatus: $("miniCompassStatus"), miniCompassBug: $("miniCompassBug"),
   miniCompassErr: $("miniCompassErr"),
@@ -924,12 +925,29 @@ function renderControlCamPiP(on) {
   if (!on && no) no.style.display = "none";
 }
 
+/* Pindahkan (bukan klon) mini AI + kompas ke dalam .cam saat kamera
+   fullscreen, lalu kembalikan ke .stage saat keluar. Elemen fisiknya sama,
+   jadi applyTelemetry() yang sudah menulis ke els.miniAIBall/miniCompassDial
+   dst. via id tetap berfungsi tanpa duplikasi — instrumen hanya pindah
+   parent, event listener dan referensi DOM tidak berubah. .stage
+   sudah tersembunyi total begitu .cam fullscreen (beda panel), jadi tidak
+   ada risiko instrumen "tampil dobel" di dua tempat sekaligus. */
+const miniInstrumentsHome = els.miniInstruments && els.miniInstruments.parentElement;
+function toggleMiniInstrumentsHost(fs) {
+  if (!els.miniInstruments) return;
+  const target = fs ? els.camStage : miniInstrumentsHome;
+  if (target && els.miniInstruments.parentElement !== target) {
+    target.appendChild(els.miniInstruments);
+  }
+}
+
 /* Full Screen toggle untuk LIVE CAMERA di halaman Control */
 const camFs = makeFullscreen(els.camStage, {
   onToggle: (fs) => {
     els.camFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
     els.btnCamFull.setAttribute("aria-pressed", String(fs));
     renderControlCamPiP(fs);
+    toggleMiniInstrumentsHost(fs);
   },
 });
 els.btnCamFull.onclick = () => camFs.toggle();
