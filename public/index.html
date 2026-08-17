@@ -173,13 +173,60 @@
                 </div>
                 <div class="cmdlink" id="cmdLinkBanner" hidden>LINK PERINTAH TERPUTUS — THRUSTER NETRAL</div>
 
-                <div class="attitude__compass" id="miniCompass" aria-hidden="true">
-                  <div class="attitude__compass-ring">
-                    <span class="attitude__compass-needle" id="miniCompassNeedle"></span>
+                <div class="attitude__instruments" aria-hidden="true">
+                  <!-- artificial horizon: bola langit/tanah berputar, simbol pesawat diam.
+                       Offset rung ladder = derajat × AI_PX_PER_DEG (app.js) — lihat CSS. -->
+                  <div class="attitude__ai" id="miniAI">
+                    <div class="attitude__ai-ball" id="miniAIBall">
+                      <span class="attitude__ai-ladder attitude__ai-ladder--p20" data-deg="20">20</span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--p15" data-deg="15"></span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--p10" data-deg="10">10</span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--p5" data-deg="5"></span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--m5" data-deg="-5"></span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--m10" data-deg="-10">10</span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--m15" data-deg="-15"></span>
+                      <span class="attitude__ai-ladder attitude__ai-ladder--m20" data-deg="-20">20</span>
+                    </div>
+                    <!-- skala roll DIAM di bezel; pointer di bawah yang berputar -->
+                    <div class="attitude__ai-rollscale">
+                      <span class="attitude__ai-rollmark attitude__ai-rollmark--maj" style="--a:0deg"></span>
+                      <span class="attitude__ai-rollmark" style="--a:-10deg"></span>
+                      <span class="attitude__ai-rollmark" style="--a:10deg"></span>
+                      <span class="attitude__ai-rollmark" style="--a:-20deg"></span>
+                      <span class="attitude__ai-rollmark" style="--a:20deg"></span>
+                      <span class="attitude__ai-rollmark attitude__ai-rollmark--maj" style="--a:-30deg"></span>
+                      <span class="attitude__ai-rollmark attitude__ai-rollmark--maj" style="--a:30deg"></span>
+                      <span class="attitude__ai-rollmark" style="--a:-45deg"></span>
+                      <span class="attitude__ai-rollmark" style="--a:45deg"></span>
+                      <span class="attitude__ai-rollmark attitude__ai-rollmark--maj" style="--a:-60deg"></span>
+                      <span class="attitude__ai-rollmark attitude__ai-rollmark--maj" style="--a:60deg"></span>
+                    </div>
+                    <span class="attitude__ai-rollptr" id="miniAIRollPtr"></span>
+                    <span class="attitude__ai-aircraft"></span>
                   </div>
-                  <div class="attitude__compass-label">
-                    <span class="attitude__compass-dir" id="miniCompassDir">N</span>
-                    <span class="attitude__compass-value" id="miniCompassValue">—°</span>
+
+                  <div class="attitude__compass" id="miniCompass" data-state="off">
+                    <div class="attitude__compass-dial" id="miniCompassDial">
+                      <span class="attitude__compass-cardinal attitude__compass-cardinal--n">N</span>
+                      <span class="attitude__compass-cardinal attitude__compass-cardinal--e">E</span>
+                      <span class="attitude__compass-cardinal attitude__compass-cardinal--s">S</span>
+                      <span class="attitude__compass-cardinal attitude__compass-cardinal--w">W</span>
+                      <!-- angka tiap 30° konvensi HSI: puluhan derajat (3 = 030°) -->
+                      <span class="attitude__compass-grad" style="--a:30deg">3</span>
+                      <span class="attitude__compass-grad" style="--a:60deg">6</span>
+                      <span class="attitude__compass-grad" style="--a:120deg">12</span>
+                      <span class="attitude__compass-grad" style="--a:150deg">15</span>
+                      <span class="attitude__compass-grad" style="--a:210deg">21</span>
+                      <span class="attitude__compass-grad" style="--a:240deg">24</span>
+                      <span class="attitude__compass-grad" style="--a:300deg">30</span>
+                      <span class="attitude__compass-grad" style="--a:330deg">33</span>
+                      <!-- heading bug ikut berputar bersama kartu, jadi otomatis
+                           duduk di bearing sebenarnya -->
+                      <span class="attitude__compass-bug" id="miniCompassBug" hidden></span>
+                    </div>
+                    <span class="attitude__compass-pointer"></span>
+                    <span class="attitude__compass-readout" id="miniCompassStatus">OFF</span>
+                    <span class="attitude__compass-err" id="miniCompassErr" hidden></span>
                   </div>
                 </div>
 

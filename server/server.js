@@ -527,6 +527,16 @@ let simDepthHoldEnabled = false;
    yang direkam tidak akan pernah cocok dengan angka yang dilihat operator.
    Kolam KKI 2026 dangkal (~0.9 m) → depth ~0.1-0.8 m agar ALT & alarm realistis. */
 let simClock = 0;
+// Heading "sungguhan" simulator pada waktu t — sama dengan rumus yang dipakai
+// broadcast telemetri di bawah. Dipakai untuk mengunci heading_target saat
+// POSHOLD baru dinyalakan, bukan angka tetap.
+function simHeadingNow() {
+  return (90 + 45 * Math.sin(simClock * 0.2) + 360) % 360;
+}
+// Heading yang dikunci saat POSHOLD diaktifkan — padanan auto-seed
+// heading_target dari state["heading"] di apply_heading_hold() (rov_agent.py).
+// null selama POSHOLD tidak aktif.
+let simHeadingTarget = null;
 function simDepthNow() {
   return 0.45 + 0.35 * Math.sin(simClock * 0.13);
 }
@@ -747,7 +757,15 @@ function applySimCommand(name, value, msg) {
       simState.pilotMode = mapped;
       // Setiap permintaan mode mematikan overlay lebih dulu, persis seperti
       // handler pilot_mode di rov_agent.py.
+      const enteringPoshold =
+        String(value).toLowerCase() === "poshold" && !simState.poshold;
       simState.poshold = String(value).toLowerCase() === "poshold";
+      // Kunci heading SEKARANG, bukan angka tetap — padanan auto-seed di
+      // apply_heading_hold() (rov_agent.py) saat POSHOLD baru dinyalakan.
+      // Keluar dari POSHOLD melepas target, sama seperti heading_target=None
+      // di sisi Pi ketika overlay berhenti.
+      if (enteringPoshold) simHeadingTarget = simHeadingNow();
+      else if (!simState.poshold) simHeadingTarget = null;
       // Sengaja TIDAK menyentuh depth-set: masuk Alt Hold berarti "tahan
       // kedalaman sekarang" (kerjaan cascade PID ArduSub), bukan "menyelam ke
       // setpoint". Sama seperti handler pilot_mode di rov_agent.py.
@@ -821,7 +839,7 @@ if (SIM) {
         // Overlay heading-hold: tidak terlihat di `mode` (ia berjalan di
         // ALT_HOLD), jadi tab POSHOLD di GUI menyala dari flag ini.
         poshold: simState.poshold,
-        heading_target: simState.poshold ? 90 : null,
+        heading_target: simState.poshold ? simHeadingTarget : null,
         control_mode: simState.controlMode,
         pool_depth: simPoolDepth,
         depth_target: simDepthTarget,

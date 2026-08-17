@@ -16,6 +16,12 @@ import {
   ARDUSUB_MODE_TO_TAB,
   DEPTH_HOLD_MODES,
 } from "/shared/rov-modes.js";
+import { HEADING_DEADBAND_DEG, headingError } from "/shared/rov-heading.js";
+
+// Gain tampilan artificial horizon. Harus cocok dengan offset ladder ±10°
+// di style.css (.attitude__ai-ladder--p10/--m10 = ±15px). Naikkan kalau
+// gerakan pitch terasa terlalu halus di layar kecil.
+const AI_PX_PER_DEG = 1.5;
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -26,8 +32,10 @@ const els = {
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
-  miniCompass: $("miniCompass"), miniCompassNeedle: $("miniCompassNeedle"),
-  miniCompassDir: $("miniCompassDir"), miniCompassValue: $("miniCompassValue"),
+  miniCompass: $("miniCompass"), miniCompassDial: $("miniCompassDial"),
+  miniCompassStatus: $("miniCompassStatus"), miniCompassBug: $("miniCompassBug"),
+  miniCompassErr: $("miniCompassErr"),
+  miniAIBall: $("miniAIBall"), miniAIRollPtr: $("miniAIRollPtr"),
   camRes: $("camRes"), camRecIndicator: $("camRecIndicator"),
   tapeScale: $("tapeScale"), tapeVal: $("tapeVal"),
   camImg: $("camImg"), camNoSignal: $("camNoSignal"), camTag: $("camTag"),
@@ -258,13 +266,53 @@ function applyTelemetry(d) {
   els.hudRoll.textContent = "R " + num(d.roll, 0) + "°";
   els.hudPitch.textContent = "P " + num(d.pitch, 0) + "°";
 
-  // Kompas: heading 0°=N (atas), rotate CW mengikuti arah kompas standar —
-  // transform-origin needle di CSS sudah bottom-center menunjuk ke atas by default.
-  if (heading !== null && els.miniCompassNeedle) {
-    els.miniCompassNeedle.style.transform = `rotate(${heading}deg)`;
-    const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    els.miniCompassDir.textContent = dirs[Math.floor((heading + 22.5) / 45) % 8];
-    els.miniCompassValue.textContent = `${Math.round(heading)}°`;
+  // Kompas gaya QGroundControl: dial berputar berlawanan arah heading,
+  // pointer merah tetap diam di atas menunjukkan heading saat ini.
+  // Tanpa heading valid instrumen HARUS jadi OFF — jangan biarkan dial
+  // membeku di rotasi terakhir seolah datanya masih hidup.
+  if (els.miniCompassDial) {
+    if (heading !== null) {
+      els.miniCompassDial.style.transform = `rotate(${-heading}deg)`;
+      els.miniCompassStatus.textContent = `${Math.round(heading)}°`;
+    } else {
+      els.miniCompassStatus.textContent = "OFF";
+    }
+    els.miniCompass.dataset.state = heading !== null ? "on" : "off";
+
+    // Heading bug: setpoint POSHOLD (d.heading_target) yang selama ini cuma
+    // masuk kolom CSV. Bug adalah anak dial, jadi cukup diputar ke bearing-nya
+    // — rotasi kartu yang menempatkannya di posisi benar secara otomatis.
+    const err = headingError(d.heading_target, heading);
+    if (err === null) {
+      els.miniCompassBug.hidden = true;
+      els.miniCompassErr.hidden = true;
+      els.miniCompass.removeAttribute("data-hold");
+    } else {
+      els.miniCompassBug.hidden = false;
+      els.miniCompassBug.style.setProperty("--a", `${d.heading_target}deg`);
+      // armed = setpoint ada tapi overlay belum mengoreksi; engaged = sedang menahan
+      els.miniCompass.dataset.hold = d.poshold === true ? "engaged" : "armed";
+
+      const onTarget = Math.abs(err) <= HEADING_DEADBAND_DEG;
+      els.miniCompassErr.hidden = false;
+      els.miniCompassErr.textContent = onTarget
+        ? "ON TARGET"
+        : `${err > 0 ? "+" : ""}${Math.round(err)}°`;
+      els.miniCompassErr.classList.toggle("is-ontarget", onTarget);
+    }
+  }
+
+  // Artificial horizon. Urutan transform disengaja: CSS jalan kanan-ke-kiri,
+  // jadi pitch digeser dulu baru diputar roll — ladder ikut sumbu tegak
+  // instrumen yang sudah miring, seperti attitude indicator sungguhan.
+  if (els.miniAIBall) {
+    const roll = Number.isFinite(d.roll) ? d.roll : 0;
+    const pitch = clamp(Number.isFinite(d.pitch) ? d.pitch : 0, -90, 90);
+    els.miniAIBall.style.transform =
+      `rotate(${-roll}deg) translateY(${pitch * AI_PX_PER_DEG}px)`;
+    // pointer roll menunjuk skala yang diam di bezel
+    els.miniAIRollPtr.style.transform =
+      `translate(-50%, -50%) rotate(${-roll}deg) translateY(-51px)`;
   }
 
   if (scene) scene.setAttitude(d.roll, d.pitch, d.heading);
