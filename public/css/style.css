@@ -12,6 +12,8 @@
   --ok:       #37d392;
   --ink:      #eef6ff;
   --ink-dim:  #a1bad1;
+  --ai-sky:    #2f6f9e;
+  --ai-ground: #3f7d46;
 
   --r: 10px;
   --gap: 12px;
@@ -31,6 +33,8 @@ body[data-theme="light"] {
   --ok:       #217d67;
   --ink:      #081a2c;
   --ink-dim:  #5f7f9d;
+  --ai-sky:    #5fa8d8;
+  --ai-ground: #6aa86f;
 }
 
 * { box-sizing: border-box; }
@@ -290,6 +294,8 @@ body[data-theme="light"] .theme__icon::after {
 .readout--danger .readout__v, .readout--danger .readout__u, .readout--danger .readout__k { color: var(--alert) !important; }
 .readout--danger { animation: danger-blink 1s steps(2) infinite; border-radius: 6px; }
 @keyframes danger-blink { 50% { background: rgba(255,90,90,.16); } }
+/* hasil run autonomous terakhir yang ABORT/terpotong — tandai, tanpa kedip */
+.readout__v.is-fault { color: var(--alert); }
 
 /* identitas tim + jam di header (KKI 2026) */
 .ident {
@@ -610,66 +616,271 @@ body[data-theme="light"] .theme__icon::after {
 /* attitude 3D stage */
 .stage { flex: 1; min-height: 220px; position: relative; }
 .stage canvas { display: block; }
-.attitude__compass {
+.attitude__instruments {
+  /* satu-satunya angka untuk ukuran instrumen — detail di dalamnya diskalakan manual */
+  --inst: 140px;
   position: absolute;
   top: 14px;
   right: 14px;
-  width: 96px;
-  padding: 10px;
-  background: rgba(4, 23, 38, .78);
-  border: 1px solid rgba(20, 216, 255, .22);
-  border-radius: 14px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
-  display: grid;
-  gap: 10px;
-  align-items: center;
-  justify-items: center;
+  display: flex;
+  gap: 12px;
   pointer-events: none;
+  /* z-index eksplisit: elemen ini dipindah ke dalam .cam saat kamera fullscreen
+     (lihat toggleMiniInstrumentsHost di app.js), dan .cam__nosignal di sana
+     sudah z-index:25 — tanpa angka di sini instrumen akan terkubur di bawah
+     haze "TIDAK ADA SINYAL" persis bug yang baru diperbaiki di camNoSignal. */
+  z-index: 28;
 }
-.attitude__compass-ring {
+/* artificial horizon */
+.attitude__ai {
   position: relative;
-  width: 60px;
-  height: 60px;
-  border: 1px solid rgba(20, 216, 255, .35);
+  width: var(--inst);
+  height: var(--inst);
   border-radius: 50%;
-  display: grid;
-  place-items: center;
+  border: 1px solid rgba(20, 216, 255, .22);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+  overflow: hidden;
 }
-.attitude__compass-ring::after {
+.attitude__ai-ball {
+  position: absolute;
+  left: -50%;
+  top: -50%;
+  width: 200%;
+  height: 200%;
+  background: linear-gradient(180deg,
+    var(--ai-sky) 0 calc(50% - 1px),
+    rgba(238, 246, 255, .9) calc(50% - 1px) calc(50% + 1px),
+    var(--ai-ground) calc(50% + 1px) 100%);
+  transition: transform .15s linear;
+}
+/* Ladder pitch. Offset tiap rung = derajat × AI_PX_PER_DEG (app.js = 1.75px/°):
+     ±5 -> 8.75px   ±10 -> 17.5px   ±15 -> 26.25px   ±20 -> 35px
+   Kalau AI_PX_PER_DEG diubah, SEMUA offset di bawah ikut berubah — kalau tidak,
+   rung "10" tidak lagi menunjuk 10° dan instrumennya berbohong. */
+.attitude__ai-ladder {
+  position: absolute;
+  left: 50%;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--ink);
+  transform: translate(-50%, -50%);
+  white-space: nowrap;
+}
+.attitude__ai-ladder::before,
+.attitude__ai-ladder::after {
   content: '';
   position: absolute;
-  inset: 10px;
-  border: 1px solid rgba(20, 216, 255, .16);
+  top: 50%;
+  width: 15px;
+  height: 1px;
+  background: rgba(238, 246, 255, .75);
+}
+.attitude__ai-ladder::before { right: 100%; margin-right: 4px; }
+.attitude__ai-ladder::after  { left: 100%;  margin-left: 4px; }
+/* rung minor: tanpa angka, garis lebih pendek & redup */
+.attitude__ai-ladder--p5::before,  .attitude__ai-ladder--p5::after,
+.attitude__ai-ladder--m5::before,  .attitude__ai-ladder--m5::after,
+.attitude__ai-ladder--p15::before, .attitude__ai-ladder--p15::after,
+.attitude__ai-ladder--m15::before, .attitude__ai-ladder--m15::after {
+  width: 7px;
+  background: rgba(238, 246, 255, .5);
+}
+.attitude__ai-ladder--p5::before,  .attitude__ai-ladder--p5::after,
+.attitude__ai-ladder--m5::before,  .attitude__ai-ladder--m5::after,
+.attitude__ai-ladder--p15::before, .attitude__ai-ladder--p15::after,
+.attitude__ai-ladder--m15::before, .attitude__ai-ladder--m15::after { margin: 0; }
+.attitude__ai-ladder--p5  { top: calc(50% - 8.75px); }
+.attitude__ai-ladder--p10 { top: calc(50% - 17.5px); }
+.attitude__ai-ladder--p15 { top: calc(50% - 26.25px); }
+.attitude__ai-ladder--p20 { top: calc(50% - 35px); }
+.attitude__ai-ladder--m5  { top: calc(50% + 8.75px); }
+.attitude__ai-ladder--m10 { top: calc(50% + 17.5px); }
+.attitude__ai-ladder--m15 { top: calc(50% + 26.25px); }
+.attitude__ai-ladder--m20 { top: calc(50% + 35px); }
+/* skala roll: DIAM di bezel, pointer yang bergerak menunjuknya */
+.attitude__ai-rollscale {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.attitude__ai-rollmark {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 1px;
+  height: 5px;
+  background: rgba(238, 246, 255, .7);
+  transform: translate(-50%, -50%) rotate(var(--a)) translateY(-63px);
+}
+.attitude__ai-rollmark--maj { height: 9px; width: 2px; background: var(--ink); }
+.attitude__ai-rollptr {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-bottom: 9px solid var(--sonar);
+  transform: translate(-50%, -50%) rotate(0deg) translateY(-51px);
+  transition: transform .15s linear;
+}
+.attitude__ai-aircraft {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 49px;
+  height: 2px;
+  transform: translate(-50%, -50%);
+  background: var(--amber);
+  box-shadow: 0 0 6px rgba(245, 165, 36, .5);
+}
+.attitude__ai-aircraft::before,
+.attitude__ai-aircraft::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 7px;
+  background: var(--amber);
+}
+.attitude__ai-aircraft::before { left: 0; }
+.attitude__ai-aircraft::after  { right: 0; }
+/* kompas */
+.attitude__compass {
+  position: relative;
+  width: var(--inst);
+  height: var(--inst);
+  background: rgba(4, 23, 38, .78);
+  border: 1px solid rgba(20, 216, 255, .22);
+  border-radius: 50%;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .25);
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+}
+.attitude__compass-dial {
+  position: relative;
+  width: 123px;
+  height: 123px;
+  border-radius: 50%;
+  border: 1px solid rgba(20, 216, 255, .3);
+  transition: transform .2s ease;
+}
+/* Tick HARUS dibatasi jadi cincin tipis di dekat rim. repeating-conic-gradient
+   sendirian melukis juring penuh dari pusat — itu roda berjari-jari, bukan
+   tick. Mask radial-lah yang memotongnya jadi tick; tanpa mask ini tampilannya
+   kembali salah. closest-side dipakai supaya band ikut kalau --inst diubah. */
+.attitude__compass-dial::before,
+.attitude__compass-dial::after {
+  content: '';
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
 }
-.attitude__compass-needle {
+.attitude__compass-dial::before {           /* minor: tiap 5°, pendek */
+  background: repeating-conic-gradient(rgba(20, 216, 255, .3) 0 1deg, transparent 1deg 5deg);
+  -webkit-mask: radial-gradient(closest-side, transparent 0 88%, #000 88%);
+          mask: radial-gradient(closest-side, transparent 0 88%, #000 88%);
+}
+.attitude__compass-dial::after {            /* major: tiap 30°, lebih panjang */
+  background: repeating-conic-gradient(rgba(20, 216, 255, .75) 0 1.6deg, transparent 1.6deg 30deg);
+  -webkit-mask: radial-gradient(closest-side, transparent 0 78%, #000 78%);
+          mask: radial-gradient(closest-side, transparent 0 78%, #000 78%);
+}
+/* z-index: ::after dial adalah anak terakhir, jadi tanpa ini semua label
+   tertimbun di bawah lapisan tick. */
+.attitude__compass-cardinal,
+.attitude__compass-grad,
+.attitude__compass-bug { z-index: 1; }
+.attitude__compass-cardinal {
   position: absolute;
-  width: 2px;
-  height: 24px;
-  background: var(--sonar);
-  top: 8px;
   left: 50%;
-  transform-origin: bottom center;
-  transition: transform .2s ease;
-  box-shadow: 0 0 14px rgba(20, 216, 255, .45);
-}
-.attitude__compass-label {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
+  top: 50%;
   font-family: "JetBrains Mono", monospace;
+  font-size: 14px;
+  font-weight: 700;
   color: var(--ink);
-  font-size: 11px;
-  letter-spacing: .5px;
 }
-.attitude__compass-dir {
+/* angka graduasi tiap 30°, sengaja lebih redup & kecil dari huruf mata angin
+   supaya kartu tetap kebaca sekilas */
+.attitude__compass-grad {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  color: var(--ink-dim);
+  transform: translate(-50%, -50%) rotate(var(--a)) translateY(-50px);
+}
+/* heading bug: penunjuk setpoint d.heading_target. Anak dari dial, jadi ikut
+   berputar dan otomatis duduk di bearing yang benar. */
+.attitude__compass-bug {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 9px solid var(--amber);
+  transform: translate(-50%, -50%) rotate(var(--a, 0deg)) translateY(-58px);
+}
+.attitude__compass-bug[hidden] { display: none; }
+/* poshold benar-benar aktif vs setpoint ada tapi belum mengoreksi */
+.attitude__compass[data-hold="engaged"] .attitude__compass-bug {
+  filter: drop-shadow(0 0 5px rgba(245, 165, 36, .9));
+}
+.attitude__compass[data-hold="armed"] .attitude__compass-bug { opacity: .45; }
+/* error heading, di bawah kotak tengah */
+.attitude__compass-err {
+  position: absolute;
+  top: calc(50% + 18px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--amber);
+  z-index: 1;
+}
+.attitude__compass-err[hidden] { display: none; }
+.attitude__compass-err.is-ontarget { color: var(--ok); }
+.attitude__compass-cardinal--n { transform: translate(-50%, -50%) rotate(0deg) translateY(-50px); color: var(--sonar); }
+.attitude__compass-cardinal--e { transform: translate(-50%, -50%) rotate(90deg) translateY(-50px); }
+.attitude__compass-cardinal--s { transform: translate(-50%, -50%) rotate(180deg) translateY(-50px); }
+.attitude__compass-cardinal--w { transform: translate(-50%, -50%) rotate(270deg) translateY(-50px); }
+.attitude__compass-pointer {
+  position: absolute;
+  top: 5px;
+  left: 50%;
+  width: 0;
+  height: 0;
+  transform: translateX(-50%);
+  border-left: 6px solid transparent;
+  border-right: 6px solid transparent;
+  border-top: 11px solid #ff4d4d;
+  filter: drop-shadow(0 0 4px rgba(255, 77, 77, .6));
+}
+.attitude__compass-readout {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  font-family: "JetBrains Mono", monospace;
   font-size: 13px;
+  font-weight: 700;
   letter-spacing: 1.5px;
   color: var(--sonar);
-  font-weight: 700;
+  background: rgba(4, 23, 38, .9);
+  border: 1px solid var(--sonar);
+  border-radius: 5px;
+  padding: 3px 8px;
 }
-.attitude__compass-value {
+/* tanpa data heading: instrumen diredupkan, kotak tengah jadi OFF */
+.attitude__compass[data-state="off"] .attitude__compass-dial { opacity: .35; }
+.attitude__compass[data-state="off"] .attitude__compass-readout {
   color: var(--ink-dim);
+  border-color: var(--ink-dim);
 }
 .hud {
   position: absolute; left: 12px; top: 12px;
@@ -704,6 +915,15 @@ body[data-theme="light"] .theme__icon::after {
   background: rgba(255,255,255,.04);
   font-family: "JetBrains Mono", monospace; letter-spacing: 2px; font-size: 13px;
 }
+/* Naikkan z-index HANYA di panel Pilot (#camStage): #ctrlCamPip cuma nyala
+   (display:block) saat .cam fullscreen dan punya z-index:20 (dari .pip) —
+   tanpa ini PiP menimpa nosignal begitu fullscreen aktif. TIDAK boleh jadi
+   aturan .cam__nosignal polos — class yang sama dipakai ulang tiap sel di
+   halaman Camera (camera.js, #camNo1/#camNo2 dst.), bertetangga dengan
+   .pip.campip yang bisa diklik/di-drag. z-index global pernah membuat
+   nosignal menimpa & mematikan klik/drag PiP itu di sana — regresi yang
+   sudah terjadi sekali, jangan diulang. */
+#camStage .cam__nosignal { z-index: 25; }
 .cam__nosignal small { font-size: 10px; color: #43586b; letter-spacing: 1px; }
 .cam__bar {
   position: absolute; left: 10px; bottom: 10px; display: flex; gap: 8px;
@@ -978,6 +1198,10 @@ body.pseudo-fs-lock { overflow: hidden; }
    resolusi/rec ke bawahnya agar tidak bertumpuk. */
 .cam:fullscreen .cam__overlay,
 .cam.pseudo-fs .cam__overlay { top: 62px; }
+/* Mini AI + kompas dipindah ke sini (bukan diklon) saat kamera fullscreen —
+   lihat toggleMiniInstrumentsHost() di app.js. Turun sedikit dari 14px bawaan
+   supaya tidak bertumpuk dengan chip CAM switch di pojok kanan-atas. */
+.cam .attitude__instruments { top: 62px; right: 14px; }
 /* PiP pilot di kamera Control: kiri-ATAS supaya tidak menutupi tombol
    SNAPSHOT/REC/HUD (.cam__bar di kiri-bawah); overlay resolusi ada di kanan-atas. */
 #ctrlCamPip { left: 18px; top: 18px; right: auto; bottom: auto; }

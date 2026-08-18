@@ -28,6 +28,13 @@ log = logging.getLogger(__name__)
 # Peta: (path YAML/JSON bertingkat) → nama konstanta modul mission5.py.
 # Tambah baris di sini bila ada konstanta baru yang perlu di-expose ke config.
 _SCALAR_MAP = {
+    # Geometri kolam — sumber turunan kedalaman (lihat mission5.py _derive_depths()).
+    # Dipisah dari `depth:` supaya nilai tuning yang BERPINDAH antar venue (clearance)
+    # terpisah dari nilai yang TIDAK berpindah (kedalaman absolut).
+    ('pool', 'depth'):                  'POOL_DEPTH',
+    ('pool', 'hook_height_from_floor'): 'HOOK_HEIGHT_FROM_FLOOR',
+    ('pool', 'bottom_clearance'):       'BOTTOM_CLEARANCE',
+
     ('depth', 'target_bottom'):   'DEPTH_TARGET_BOTTOM',
     ('depth', 'target_surface'):  'DEPTH_TARGET_SURFACE',
     ('depth', 'tolerance'):       'DEPTH_TOLERANCE',

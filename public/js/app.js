@@ -16,6 +16,12 @@ import {
   ARDUSUB_MODE_TO_TAB,
   DEPTH_HOLD_MODES,
 } from "/shared/rov-modes.js";
+import { HEADING_DEADBAND_DEG, headingError } from "/shared/rov-heading.js";
+
+// Gain tampilan artificial horizon. Harus cocok dengan offset ladder ±10°
+// di style.css (.attitude__ai-ladder--p10/--m10 = ±15px). Naikkan kalau
+// gerakan pitch terasa terlalu halus di layar kecil.
+const AI_PX_PER_DEG = 1.5;
 
 /*  elemen DOM  */
 const $ = (id) => document.getElementById(id);
@@ -26,8 +32,11 @@ const els = {
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
-  miniCompass: $("miniCompass"), miniCompassNeedle: $("miniCompassNeedle"),
-  miniCompassDir: $("miniCompassDir"), miniCompassValue: $("miniCompassValue"),
+  miniInstruments: $("miniInstruments"),
+  miniCompass: $("miniCompass"), miniCompassDial: $("miniCompassDial"),
+  miniCompassStatus: $("miniCompassStatus"), miniCompassBug: $("miniCompassBug"),
+  miniCompassErr: $("miniCompassErr"),
+  miniAIBall: $("miniAIBall"), miniAIRollPtr: $("miniAIRollPtr"),
   camRes: $("camRes"), camRecIndicator: $("camRecIndicator"),
   tapeScale: $("tapeScale"), tapeVal: $("tapeVal"),
   camImg: $("camImg"), camNoSignal: $("camNoSignal"), camTag: $("camTag"),
@@ -45,6 +54,8 @@ const els = {
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
+  runLastFile: $("runLastFile"), runLastResult: $("runLastResult"),
+  runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"),
   btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
@@ -256,13 +267,53 @@ function applyTelemetry(d) {
   els.hudRoll.textContent = "R " + num(d.roll, 0) + "°";
   els.hudPitch.textContent = "P " + num(d.pitch, 0) + "°";
 
-  // Kompas: heading 0°=N (atas), rotate CW mengikuti arah kompas standar —
-  // transform-origin needle di CSS sudah bottom-center menunjuk ke atas by default.
-  if (heading !== null && els.miniCompassNeedle) {
-    els.miniCompassNeedle.style.transform = `rotate(${heading}deg)`;
-    const dirs = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
-    els.miniCompassDir.textContent = dirs[Math.floor((heading + 22.5) / 45) % 8];
-    els.miniCompassValue.textContent = `${Math.round(heading)}°`;
+  // Kompas gaya QGroundControl: dial berputar berlawanan arah heading,
+  // pointer merah tetap diam di atas menunjukkan heading saat ini.
+  // Tanpa heading valid instrumen HARUS jadi OFF — jangan biarkan dial
+  // membeku di rotasi terakhir seolah datanya masih hidup.
+  if (els.miniCompassDial) {
+    if (heading !== null) {
+      els.miniCompassDial.style.transform = `rotate(${-heading}deg)`;
+      els.miniCompassStatus.textContent = `${Math.round(heading)}°`;
+    } else {
+      els.miniCompassStatus.textContent = "OFF";
+    }
+    els.miniCompass.dataset.state = heading !== null ? "on" : "off";
+
+    // Heading bug: setpoint POSHOLD (d.heading_target) yang selama ini cuma
+    // masuk kolom CSV. Bug adalah anak dial, jadi cukup diputar ke bearing-nya
+    // — rotasi kartu yang menempatkannya di posisi benar secara otomatis.
+    const err = headingError(d.heading_target, heading);
+    if (err === null) {
+      els.miniCompassBug.hidden = true;
+      els.miniCompassErr.hidden = true;
+      els.miniCompass.removeAttribute("data-hold");
+    } else {
+      els.miniCompassBug.hidden = false;
+      els.miniCompassBug.style.setProperty("--a", `${d.heading_target}deg`);
+      // armed = setpoint ada tapi overlay belum mengoreksi; engaged = sedang menahan
+      els.miniCompass.dataset.hold = d.poshold === true ? "engaged" : "armed";
+
+      const onTarget = Math.abs(err) <= HEADING_DEADBAND_DEG;
+      els.miniCompassErr.hidden = false;
+      els.miniCompassErr.textContent = onTarget
+        ? "ON TARGET"
+        : `${err > 0 ? "+" : ""}${Math.round(err)}°`;
+      els.miniCompassErr.classList.toggle("is-ontarget", onTarget);
+    }
+  }
+
+  // Artificial horizon. Urutan transform disengaja: CSS jalan kanan-ke-kiri,
+  // jadi pitch digeser dulu baru diputar roll — ladder ikut sumbu tegak
+  // instrumen yang sudah miring, seperti attitude indicator sungguhan.
+  if (els.miniAIBall) {
+    const roll = Number.isFinite(d.roll) ? d.roll : 0;
+    const pitch = clamp(Number.isFinite(d.pitch) ? d.pitch : 0, -90, 90);
+    els.miniAIBall.style.transform =
+      `rotate(${-roll}deg) translateY(${pitch * AI_PX_PER_DEG}px)`;
+    // pointer roll menunjuk skala yang diam di bezel
+    els.miniAIRollPtr.style.transform =
+      `translate(-50%, -50%) rotate(${-roll}deg) translateY(-51px)`;
   }
 
   if (scene) scene.setAttitude(d.roll, d.pitch, d.heading);
@@ -357,6 +408,35 @@ function applyMission5(m5) {
   els.mission5Z.textContent = num(m5.distance_z, 2);
   els.mission5OffX.textContent = num(m5.offset_x, 1);
   els.mission5OffY.textContent = num(m5.offset_y, 1);
+
+  // Run baru saja berakhir → tarik ringkasannya. Ditunda sesaat karena FSM menulis
+  // event `end` setelah state jadi DONE/ABORT (saat proses menutup run log).
+  if ((state === "DONE" || state === "ABORT") && state !== _lastM5State)
+    setTimeout(refreshLastRun, 1500);
+  _lastM5State = state;
+}
+
+/* Ringkasan run autonomous terakhir — historis, jadi lewat HTTP (bukan WS live).
+   Angkanya dihitung tools/analyze_run.py agar identik dgn laporan CLI. */
+let _lastM5State = null;
+
+async function refreshLastRun() {
+  if (!els.runLastFile) return;
+  let r;
+  try {
+    r = (await (await fetch("/api/runs")).json())[0];
+  } catch { return; }               // server tanpa endpoint / offline → biarkan "—"
+  if (!r) return;
+
+  els.runLastFile.textContent = r.file.replace(/^run_|\.jsonl$/g, "");
+  els.runLastFile.title = `config: ${(r.config_files || []).join(", ") || "default"}`;
+  const gagal = r.terpotong || r.state_akhir === "ABORT";
+  els.runLastResult.textContent =
+    r.terpotong ? "TERPOTONG" : `${r.state_akhir}${r.dock_used_fallback ? " (fallback)" : ""}`;
+  els.runLastResult.className = "readout__v readout__v--text" + (gagal ? " is-fault" : "");
+  els.runLastScore.textContent = (r.skor && r.skor.total != null) ? r.skor.total : "—";
+  els.runLastDur.textContent = num(r.durasi_s, 1);
+  els.runLastQr.textContent = num(r.qr_rate_pct, 1);
 }
 
 function reflectArm(on) {
@@ -845,12 +925,29 @@ function renderControlCamPiP(on) {
   if (!on && no) no.style.display = "none";
 }
 
+/* Pindahkan (bukan klon) mini AI + kompas ke dalam .cam saat kamera
+   fullscreen, lalu kembalikan ke .stage saat keluar. Elemen fisiknya sama,
+   jadi applyTelemetry() yang sudah menulis ke els.miniAIBall/miniCompassDial
+   dst. via id tetap berfungsi tanpa duplikasi — instrumen hanya pindah
+   parent, event listener dan referensi DOM tidak berubah. .stage
+   sudah tersembunyi total begitu .cam fullscreen (beda panel), jadi tidak
+   ada risiko instrumen "tampil dobel" di dua tempat sekaligus. */
+const miniInstrumentsHome = els.miniInstruments && els.miniInstruments.parentElement;
+function toggleMiniInstrumentsHost(fs) {
+  if (!els.miniInstruments) return;
+  const target = fs ? els.camStage : miniInstrumentsHome;
+  if (target && els.miniInstruments.parentElement !== target) {
+    target.appendChild(els.miniInstruments);
+  }
+}
+
 /* Full Screen toggle untuk LIVE CAMERA di halaman Control */
 const camFs = makeFullscreen(els.camStage, {
   onToggle: (fs) => {
     els.camFullLabel.textContent = fs ? "Exit Full" : "Full Screen";
     els.btnCamFull.setAttribute("aria-pressed", String(fs));
     renderControlCamPiP(fs);
+    toggleMiniInstrumentsHost(fs);
   },
 });
 els.btnCamFull.onclick = () => camFs.toggle();
@@ -1739,4 +1836,5 @@ setInterval(tickClock, 1000);
 loadTheme();
 initScene();
 connect();
+refreshLastRun();
 maybeDemo();

@@ -1,0 +1,48 @@
+# config/pool_trial.yaml — GEOMETRI KOLAM LATIHAN (2,2 × 4,4 × 0,8 m)
+#
+# Lapisan lokasi. Ditumpuk DI ATAS config/rov_tuned.yaml:
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_trial.yaml \
+#          --start-state M5_REDIVE --run-log
+#
+# Saat lomba, file ini ditukar dengan config/pool_kki.yaml — rov_tuned.yaml tetap.
+
+# ── Geometri kolam → setpoint kedalaman DITURUNKAN (mission5._derive_depths) ──
+pool:
+  depth: 0.80                   # m — kedalaman air kolam latihan
+  # Hook latihan terukur 415 mm DARI PERMUKAAN → 0.80 − 0.415 = 0.385 m dari dasar.
+  # (Arena lomba 0.45 m dari dasar — beda 65 mm, karena itu diturunkan, bukan disalin.)
+  hook_height_from_floor: 0.385
+  # Jarak aman titik-tengah ROV di atas dasar. NILAI AWAL — turunkan bertahap
+  # (0.30 → 0.25 → …) sambil pantau kamera bottom, lalu SALIN hasilnya ke
+  # pool_kki.yaml. Ini satu-satunya angka di file ini yang berpindah ke lomba.
+  bottom_clearance: 0.25
+  # → HOOK_DEPTH = 0.415 m, DEPTH_TARGET_BOTTOM = 0.55 m
+  # Default mission5.py (0.70 m) menyisakan cuma 10 cm di kolam 0,8 m — gripper nabrak dasar.
+
+# ── Heading dinding ───────────────────────────────────────────────────────────
+# Kolam latihan cuma punya hook di SATU sisi. Keempat huruf diisi heading dinding
+# yang sama supaya FSM selalu menuju satu-satunya hook yang ada, apa pun isi QR —
+# tanpa mengubah kode. GANTI 0 dengan hasil baca kompas ROV menghadap dinding itu.
+# CATATAN: konsekuensinya jalur "pilih dinding sesuai QR" TIDAK teruji di sini;
+# uji itu di sim — tests/evaluate_mission5.py --wall A/B/C/D.
+wall_heading:
+  A: 0
+  B: 0
+  C: 0
+  D: 0
+
+# ── Timeout — seberang cuma 2,2 m, bukan 5 m ──────────────────────────────────
+# Timeout panjang di kolam sempit = ROV mendorong dinding belasan detik.
+timeouts:
+  redive: 12.0      # default 15.0
+  m5_dock: 20.0     # default 25.0
+  fallback: 15.0    # default 30.0
+  # m5_engage / unhook / m5_ascend tetap default: durasinya gerak mekanis & vertikal,
+  # tak tergantung luas kolam (kedalaman 0,8 m ≈ arena lomba).
+
+# ── Kecepatan jelajah — ruang pengereman jauh lebih pendek ────────────────────
+speed:
+  surge: 25         # default 35
+
+hook_docking:
+  approach_speed: 14   # default 20

@@ -1,0 +1,43 @@
+# config/pool_kki.yaml — GEOMETRI ARENA LOMBA KKI 2026 (5 × 5 m, dalam 0,7–0,9 m)
+#
+# Pasangan lomba dari config/pool_trial.yaml. Lapisan tuning TIDAK berubah:
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki.yaml \
+#          --start-state M5_REDIVE --run-log
+#
+# ⚠ TIGA ANGKA YANG WAJIB DIISI DI LOKASI sebelum run pertama:
+#     1. pool.depth        — ukur kedalaman air sebenarnya (Guidebook: 0,7–0,9 m)
+#     2. pool.bottom_clearance — SALIN dari hasil trial (pool_trial.yaml)
+#     3. wall_heading A/B/C/D  — kalibrasi kompas ROV di tiap dinding arena
+#   Sisanya sudah benar dari Guidebook dan tak perlu disentuh.
+
+# ── Geometri kolam → setpoint kedalaman DITURUNKAN ────────────────────────────
+pool:
+  depth: 0.90                  # ⚠ UKUR DI LOKASI. Guidebook L43: 0,7–0,9 m.
+  hook_height_from_floor: 0.45 # Guidebook L46 — hook 0,45 m DARI DASAR. Tetap.
+  bottom_clearance: 0.25       # ⚠ SALIN hasil trial (angka yang berpindah)
+  # depth 0.90 → HOOK_DEPTH 0.45, DEPTH_TARGET_BOTTOM 0.65
+  # depth 0.70 → HOOK_DEPTH 0.25, DEPTH_TARGET_BOTTOM 0.45
+  # Inilah gunanya diturunkan: kedalaman arena baru diketahui hari-H.
+
+# ── Heading tiap sisi kolam ───────────────────────────────────────────────────
+# ⚠ KALIBRASI DI ARENA. Hook diacak ke sisi A/B/C/D (Guidebook L46), jadi keempatnya
+# harus benar — beda dgn kolam latihan yang cuma punya satu sisi.
+# Nilai di bawah = default mission5.py, hampir pasti bukan orientasi arena.
+wall_heading:
+  A: 270
+  B: 90
+  C: 0
+  D: 180
+
+# ── Timeout — kembali ke jarak 5 m (default mission5.py) ──────────────────────
+timeouts:
+  redive: 15.0
+  m5_dock: 25.0
+  fallback: 30.0
+
+# ── Kecepatan jelajah — ruang penuh, kembali ke default ───────────────────────
+speed:
+  surge: 35
+
+hook_docking:
+  approach_speed: 20

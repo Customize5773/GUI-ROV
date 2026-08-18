@@ -48,7 +48,19 @@ log = logging.getLogger(__name__)
 DEPTH_TARGET_BOTTOM   = 0.70   # m — target depth ke dasar (0.7-0.9m pool)
 DEPTH_TARGET_SURFACE  = 0.05   # m — threshold "di permukaan"
 DEPTH_TOLERANCE       = 0.05   # m — toleransi depth
-HOOK_DEPTH            = 0.45   # m — kedalaman hook DARI PERMUKAAN (tip 0.45m dari dasar, kolam 0.9m; Panduan hal.52)
+HOOK_DEPTH            = 0.45   # m — kedalaman hook DARI PERMUKAAN. Lihat _derive_depths():
+                               #     hook_depth = kedalaman_kolam − tinggi_hook_dari_dasar.
+                               #     Guidebook L46 mengukur hook 0.45 m DARI DASAR, jadi 0.45
+                               #     di sini hanya benar bila kolam persis 0.9 m.
+
+# ── Geometri kolam (opsional, via config `pool:`) ─────────────────────────────
+# Diisi dari file config lokasi (pool_trial.yaml / pool_kki.yaml). Bila terisi,
+# _derive_depths() menghitung HOOK_DEPTH & DEPTH_TARGET_BOTTOM dari sini — supaya
+# hasil tuning di kolam latihan bisa dipindah ke arena lomba cukup dgn menukar
+# angka kedalaman kolam, tanpa menghitung ulang setpoint absolut.
+POOL_DEPTH             = None  # m — kedalaman air kolam (ukur di lokasi)
+HOOK_HEIGHT_FROM_FLOOR = None  # m — tinggi ujung hook dari DASAR (KKI 2026 = 0.45)
+BOTTOM_CLEARANCE       = None  # m — jarak aman titik-tengah ROV di atas dasar (BERPINDAH antar venue)
 
 DIVE_SPEED            = 30     # % thruster vertikal saat menyelam
 ASCEND_SPEED          = 30     # % thruster vertikal saat naik
@@ -239,10 +251,12 @@ class Mission5FSM:
     """
 
     def __init__(self, cmd: CommandSender, telem: TelemetryReceiver,
-                 vision: VisionPipeline):
+                 vision: VisionPipeline, runlog=None):
         self.cmd    = cmd
         self.telem  = telem
         self.vision = vision
+        self.runlog = runlog        # tools.run_log.RunLogger | None (None = tak merekam)
+        self._sample_t = 0.0        # timestamp sample JSONL terakhir (throttle ~2 Hz)
         # Servo docking ke QR payload (IBVS piksel / PBVS meter). Arah sumbu = SERVO_INVERT.
         self.servo      = VisualServo(target_area=SERVO_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
                                       kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
@@ -381,10 +395,29 @@ class Mission5FSM:
             elif self._state == State.M5_FALLBACK:
                 self._state_m5_fallback(telem)
 
+            self._log_sample(telem)
             time.sleep(0.1)
 
         self.cmd.stop_all()
         self._print_score()
+
+    def _log_sample(self, telem):
+        """Cuplik telemetri ke run log ~2 Hz (loop jalan 10 Hz — merekam tiap iterasi
+        bikin file 5x lebih besar tanpa menambah info; dinamika ROV jauh lebih lambat)."""
+        if not self.runlog:
+            return
+        now = time.time()
+        if now - self._sample_t < 0.5:
+            return
+        self._sample_t = now
+        t = self.telemetry_out
+        self.runlog.event('sample',
+                          state=t['state'], active_cam=t['active_cam'],
+                          depth=telem.get('depth'), heading=telem.get('heading'),
+                          distance_z=t['distance_z'],
+                          offset_x=t['offset_x'], offset_y=t['offset_y'],
+                          qr_data=t['qr_data'], qr_wall=t['qr_wall'],
+                          target_wall=self._target_wall)
 
     # ── State handlers ────────────────────────────────────────────────────────
 
@@ -911,6 +944,9 @@ class Mission5FSM:
 
     def _transition(self, new_state: State):
         log.info("[FSM] %s → %s", self._state.name, new_state.name)
+        if self.runlog:
+            self.runlog.event('transition', frm=self._state.name, to=new_state.name,
+                              lama_state_s=round(time.time() - self._state_t, 2))
         self._state   = new_state
         self._state_t = time.time()
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
@@ -983,6 +1019,42 @@ class Mission5FSM:
         log.info("[FSM]  TOTAL               : %d/100", sc['total'])
 
 
+# ── Turunan geometri kolam ────────────────────────────────────────────────────
+def _derive_depths(explicit: set):
+    """Hitung setpoint kedalaman dari geometri kolam (`pool:` di config).
+
+    Setpoint absolut TIDAK berpindah antar venue — kolam latihan 0.8 m dan arena
+    KKI 0.7–0.9 m memberi angka berbeda. Yang berpindah adalah geometrinya:
+    tinggi hook dari dasar (0.45 m per Guidebook) dan clearance aman hasil trial.
+    Jadi keduanya diturunkan, bukan disalin:
+
+        HOOK_DEPTH          = POOL_DEPTH − HOOK_HEIGHT_FROM_FLOOR
+        DEPTH_TARGET_BOTTOM = POOL_DEPTH − BOTTOM_CLEARANCE
+
+    `explicit` = nama konstanta yang sudah diset langsung oleh file config; nilai
+    eksplisit selalu menang (jalan keluar bila kedalaman diukur langsung di lokasi).
+    """
+    g = globals()
+    if POOL_DEPTH is None:
+        return
+    for attr, part, label in (('HOOK_DEPTH', HOOK_HEIGHT_FROM_FLOOR, 'hook_height_from_floor'),
+                              ('DEPTH_TARGET_BOTTOM', BOTTOM_CLEARANCE, 'bottom_clearance')):
+        if part is None:
+            continue
+        if attr in explicit:
+            log.info("[main] %s diset eksplisit di config — turunan pool.%s diabaikan",
+                     attr, label)
+            continue
+        val = round(POOL_DEPTH - part, 4)
+        if val <= 0:
+            raise ValueError(
+                f"pool.{label} ({part} m) >= pool.depth ({POOL_DEPTH} m) → {attr}={val}. "
+                "Periksa ukuran kolam di config.")
+        log.info("[main] %s = %.3f m (turunan: pool.depth %.3f − pool.%s %.3f)",
+                 attr, val, POOL_DEPTH, label, part)
+        g[attr] = val
+
+
 # ── Entry point ────────────────────────────────────────────────────────────────
 def main():
     # Logging sementara (agar log pra-parse config di bawah ini tampil) — direkonfigurasi
@@ -994,16 +1066,21 @@ def main():
     # (globals() modul ini) SEBELUM argparse penuh dibangun, supaya default flag
     # lain (mis. --calib, --qr-size) memakai nilai config yang sudah dioverride.
     pre = argparse.ArgumentParser(add_help=False)
-    pre.add_argument('--config', default=None,
+    pre.add_argument('--config', action='append', default=None, metavar='FILE',
                      help='path config tuning .yaml/.yml/.json — pindahkan gain PID, '
                           'target docking, depth, timing, WALL_HEADING, invert_* KELUAR '
-                          'dari kode (lihat config/mission5.example.yaml)')
+                          'dari kode (lihat config/mission5.example.yaml). BOLEH DIULANG: '
+                          'file belakangan menang, mis. --config config/rov_tuned.yaml '
+                          '--config config/pool_trial.yaml (tuning ROV + geometri lokasi)')
     pre_args, _ = pre.parse_known_args()
-    if pre_args.config:
+    cfg_files = pre_args.config or []
+    cfg_keys = set()          # nama konstanta yg dioverride EKSPLISIT oleh config
+    for path in cfg_files:
         from config.loader import load_config, apply_config
-        applied = apply_config(globals(), load_config(pre_args.config))
-        log.info("[main] Config tuning dimuat: %s (%d nilai dioverride)",
-                 pre_args.config, len(applied))
+        applied = apply_config(globals(), load_config(path))
+        cfg_keys.update(name for name, _old, _new in applied)
+        log.info("[main] Config tuning dimuat: %s (%d nilai dioverride)", path, len(applied))
+    _derive_depths(cfg_keys)
 
     ap = argparse.ArgumentParser(description='Mission 5 FSM — KKI 2026 ROV', parents=[pre])
     ap.add_argument('--server', default='127.0.0.1', help='IP rov_link')
@@ -1042,7 +1119,11 @@ def main():
                     help='langsung jalan tanpa menunggu toggle GUI mode=autonomous (uji SITL/mock)')
     ap.add_argument('--loglevel', default='INFO')
     ap.add_argument('--log-file', default=None,
-                    help='arsipkan log run ke file (mis. utk analisis pasca-trial)')
+                    help='arsipkan log TEKS run ke file')
+    ap.add_argument('--run-log', nargs='?', const='auto', default=None, metavar='FILE.jsonl',
+                    help='rekam run terstruktur ke JSONL utk analisis pasca-trial '
+                         '(tools/analyze_run.py + panel "Run terakhir" di GUI). '
+                         'Tanpa nilai → logs/run_YYYYmmdd_HHMMSS.jsonl')
     args = ap.parse_args()
 
     logging.basicConfig(
@@ -1055,6 +1136,21 @@ def main():
         fh = logging.FileHandler(args.log_file)
         fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)-8s %(message)s', datefmt='%H:%M:%S'))
         logging.getLogger().addHandler(fh)
+
+    runlog = None
+    if args.run_log:
+        from tools.run_log import RunLogger
+        path = args.run_log
+        if path == 'auto':
+            path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                                'logs', time.strftime('run_%Y%m%d_%H%M%S.jsonl'))
+        runlog = RunLogger(path)
+        # Kaitkan run ini ke nilai tuning yang menghasilkannya — tanpa ini tabel
+        # agregat antar-trial tak bisa dipakai mengambil keputusan.
+        runlog.event('config', files=cfg_files, start_state=args.start_state,
+                     nilai={k: globals().get(k) for k in sorted(
+                         cfg_keys | {'HOOK_DEPTH', 'DEPTH_TARGET_BOTTOM'})})
+        log.info("[main] Run log: %s", path)
 
     log.info("[main] Inisialisasi komponen...")
 
@@ -1078,15 +1174,22 @@ def main():
     log.info("[main] Mulai setelah 3 detik... (Ctrl+C untuk abort)")
     time.sleep(3)
 
-    fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam)
+    fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam, runlog=runlog)
+    alasan = 'selesai'
     try:
         fsm.start(start_state=State[args.start_state], wait_mode=not args.no_wait_autonomous)
     except KeyboardInterrupt:
+        alasan = 'ctrl-c'
         fsm.abort()
     finally:
         cam.stop()
         telem.stop()
         cmd.close()
+        if runlog:
+            runlog.close(alasan=alasan, state_akhir=fsm._state.name, skor=fsm.score(),
+                         target_wall=fsm._target_wall,
+                         hang_used_fallback=fsm._hang_used_fallback,
+                         dock_used_fallback=fsm._dock_used_fallback)
         log.info("[main] Selesai. Skor: %s", fsm.score())
 
 

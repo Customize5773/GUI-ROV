@@ -16,6 +16,7 @@ const https = require("https");
 const dgram = require("dgram");
 const fs = require("fs");
 const path = require("path");
+const { execFile } = require("child_process");
 const { WebSocketServer } = require("ws");
 const recording = require("./recording");
 const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
@@ -26,6 +27,7 @@ const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
 const SHARED_ROOT = path.join(__dirname, "..", "shared");
+const AUTONOMY = path.join(__dirname, "..", "autonomy");
 
 const MOTION_AXES = new Set([
     "surge",
@@ -139,6 +141,27 @@ const httpServer = http.createServer((req, res) => {
     const list = recording.listSessions();
     res.writeHead(200, { "Content-Type": "application/json" });
     return res.end(JSON.stringify(list));
+  }
+
+  // Ringkasan run misi autonomous (JSONL dari fsm/mission5.py --run-log).
+  // Ringkasannya DIHITUNG oleh tools/analyze_run.py, bukan di-parse ulang di sini —
+  // supaya angka di panel GUI persis sama dgn laporan CLI yang dibaca saat analisis
+  // trial. Run jarang & filenya kecil, jadi spawn per-request cukup murah.
+  if (urlPath === "/api/runs") {
+    return execFile("python3",
+      [path.join(AUTONOMY, "tools", "analyze_run.py"),
+       path.join(AUTONOMY, "logs", "*.jsonl"), "--json"],
+      { maxBuffer: 8 * 1024 * 1024 },
+      (err, stdout) => {
+        res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+        if (err) return res.end("[]");   // belum ada run / python3 tak tersedia
+        let list;
+        try { list = JSON.parse(stdout); } catch { return res.end("[]"); }
+        // analyze_run.py mengeluarkan object tunggal bila cuma ada 1 run.
+        if (!Array.isArray(list)) list = [list];
+        list.reverse();                  // terbaru dulu (nama file berurut waktu)
+        res.end(JSON.stringify(list));
+      });
   }
 
   // Satu frame JPEG dari sesi: /replay/frame?session=<id>&cam=<bottom|wall>&i=<idx>
@@ -504,6 +527,16 @@ let simDepthHoldEnabled = false;
    yang direkam tidak akan pernah cocok dengan angka yang dilihat operator.
    Kolam KKI 2026 dangkal (~0.9 m) → depth ~0.1-0.8 m agar ALT & alarm realistis. */
 let simClock = 0;
+// Heading "sungguhan" simulator pada waktu t — sama dengan rumus yang dipakai
+// broadcast telemetri di bawah. Dipakai untuk mengunci heading_target saat
+// POSHOLD baru dinyalakan, bukan angka tetap.
+function simHeadingNow() {
+  return (90 + 45 * Math.sin(simClock * 0.2) + 360) % 360;
+}
+// Heading yang dikunci saat POSHOLD diaktifkan — padanan auto-seed
+// heading_target dari state["heading"] di apply_heading_hold() (rov_agent.py).
+// null selama POSHOLD tidak aktif.
+let simHeadingTarget = null;
 function simDepthNow() {
   return 0.45 + 0.35 * Math.sin(simClock * 0.13);
 }
@@ -724,7 +757,15 @@ function applySimCommand(name, value, msg) {
       simState.pilotMode = mapped;
       // Setiap permintaan mode mematikan overlay lebih dulu, persis seperti
       // handler pilot_mode di rov_agent.py.
+      const enteringPoshold =
+        String(value).toLowerCase() === "poshold" && !simState.poshold;
       simState.poshold = String(value).toLowerCase() === "poshold";
+      // Kunci heading SEKARANG, bukan angka tetap — padanan auto-seed di
+      // apply_heading_hold() (rov_agent.py) saat POSHOLD baru dinyalakan.
+      // Keluar dari POSHOLD melepas target, sama seperti heading_target=None
+      // di sisi Pi ketika overlay berhenti.
+      if (enteringPoshold) simHeadingTarget = simHeadingNow();
+      else if (!simState.poshold) simHeadingTarget = null;
       // Sengaja TIDAK menyentuh depth-set: masuk Alt Hold berarti "tahan
       // kedalaman sekarang" (kerjaan cascade PID ArduSub), bukan "menyelam ke
       // setpoint". Sama seperti handler pilot_mode di rov_agent.py.
@@ -798,7 +839,7 @@ if (SIM) {
         // Overlay heading-hold: tidak terlihat di `mode` (ia berjalan di
         // ALT_HOLD), jadi tab POSHOLD di GUI menyala dari flag ini.
         poshold: simState.poshold,
-        heading_target: simState.poshold ? 90 : null,
+        heading_target: simState.poshold ? simHeadingTarget : null,
         control_mode: simState.controlMode,
         pool_depth: simPoolDepth,
         depth_target: simDepthTarget,
