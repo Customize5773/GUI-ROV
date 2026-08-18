@@ -358,10 +358,9 @@ export const vehiclePage = {
     const rounded = INTEGER_TYPES.has(p.ptype) ? Math.round(next) : next;
     if (rounded === p.value) { this._render(); return; }
 
-    // Gerbang konfirmasi. Sengaja confirm() bawaan browser, sama seperti
-    // gerbang mode ACRO di app.js — repo ini tidak punya utilitas modal, dan
-    // menambah satu di sini berarti dua mekanisme konfirmasi yang berbeda
-    // untuk dua hal yang sama-sama berisiko.
+    // Gerbang konfirmasi. Sengaja confirm() bawaan browser — repo ini tidak
+    // punya utilitas modal, dan menambah satu di sini berarti dua mekanisme
+    // konfirmasi yang berbeda untuk dua hal yang sama-sama berisiko.
     const note = riskyNote(name);
     const pesan =
       `Ubah parameter ${name}\n\n` +

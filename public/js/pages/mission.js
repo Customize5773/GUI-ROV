@@ -18,6 +18,10 @@ export const missionPage = {
   pos: new THREE.Vector3(0, 0, 0),
   heading: 0,
   depth: 0,
+  posN: null,
+  posE: null,
+  originN: 0,
+  originE: 0,
   attitude: { roll: 0, pitch: 0 },
   points: null,             // Float32Array
   count: 0,
@@ -40,6 +44,7 @@ export const missionPage = {
             <span>Y <b id="msY">0.00</b></span>
             <span>Depth <b id="msD">0.00</b> m</span>
             <span>Dist <b id="msDist">0.00</b> m</span>
+            <span>Sumber <b id="msSrc">—</b></span>
           </div>
         </div>
         <div class="mission__stage" id="missionStage">
@@ -59,6 +64,7 @@ export const missionPage = {
     this.els.y = root.querySelector("#msY");
     this.els.d = root.querySelector("#msD");
     this.els.dist = root.querySelector("#msDist");
+    this.els.src = root.querySelector("#msSrc");
     this.els.hint = root.querySelector("#msHint");
 
     root.querySelector("#msStart").onclick = () => this._start();
@@ -201,25 +207,36 @@ export const missionPage = {
     if (Number.isFinite(d.depth)) this.depth = d.depth;
     this.attitude.roll = d.roll || 0;
     this.attitude.pitch = d.pitch || 0;
+    this.posN = Number.isFinite(d.pos_n) ? d.pos_n : null;
+    this.posE = Number.isFinite(d.pos_e) ? d.pos_e : null;
   },
 
   _loop() {
     this.raf = requestAnimationFrame(() => this._loop());
     if (!this.visible || !this.three) return;
     const dt = Math.min(this.clock.getDelta(), 0.1);
-
-    // integrasi posisi (dead-reckoning)
-    let surge = pilotAxes.surge, sway = pilotAxes.sway;
-    if (this.recording && this.autoCruise && Math.abs(surge) < 1) surge = CRUISE_SURGE;
     const hr = THREE.MathUtils.degToRad(this.heading);
     // heading 0 = utara (-Z); timur = +X
-    const fwd = new THREE.Vector3(Math.sin(hr), 0, -Math.cos(hr));
-    const right = new THREE.Vector3(Math.cos(hr), 0, Math.sin(hr));
-    const vel = fwd.multiplyScalar(surge * VEL_SCALE).add(right.multiplyScalar(sway * VEL_SCALE));
+
     if (this.recording) {
-      const step = vel.clone().multiplyScalar(dt);
-      this.pos.add(step);
-      this.distance += step.length();
+      let newX, newZ;
+      if (this.posN != null && this.posE != null) {
+        // posisi sungguhan dari EKF ArduSub (LOCAL_POSITION_NED), relatif ke titik Start
+        newX = this.posE - this.originE;
+        newZ = -(this.posN - this.originN);
+      } else {
+        // EKF belum mengirim data: fallback dead-reckoning dari command
+        let surge = pilotAxes.surge, sway = pilotAxes.sway;
+        if (this.autoCruise && Math.abs(surge) < 1) surge = CRUISE_SURGE;
+        const fwd = new THREE.Vector3(Math.sin(hr), 0, -Math.cos(hr));
+        const right = new THREE.Vector3(Math.cos(hr), 0, Math.sin(hr));
+        const step = fwd.multiplyScalar(surge * VEL_SCALE).add(right.multiplyScalar(sway * VEL_SCALE)).multiplyScalar(dt);
+        newX = this.pos.x + step.x;
+        newZ = this.pos.z + step.z;
+      }
+      this.distance += Math.hypot(newX - this.pos.x, newZ - this.pos.z);
+      this.pos.x = newX;
+      this.pos.z = newZ;
     }
     this.pos.y = -this.depth * DEPTH_SCALE;
 
@@ -255,6 +272,7 @@ export const missionPage = {
     this.els.y.textContent = num(this.pos.z, 2);
     this.els.d.textContent = num(this.depth, 2);
     this.els.dist.textContent = num(this.distance, 2);
+    this.els.src.textContent = (this.posN != null && this.posE != null) ? "EKF" : "Estimasi";
   },
 
   _maybeAddPoint() {
@@ -277,6 +295,12 @@ export const missionPage = {
 
   _start() {
     if (!this.recording && this.count === 0) {
+      // titik nol sesi: posisi EKF saat ini jadi origin agar lintasan mulai
+      // dari sekitar (0,0), bukan meloncat ke koordinat NED absolut
+      if (this.posN != null && this.posE != null) {
+        this.originN = this.posN;
+        this.originE = this.posE;
+      }
       // tandai titik Start di posisi saat ini
       this.three.sMark.visible = true;
       this.three.sMark.position.copy(this.pos).setY(this.pos.y + 0.6);

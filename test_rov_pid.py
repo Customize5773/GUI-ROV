@@ -10,6 +10,7 @@ from rov_pid import (
     DEPTH_BIAS_ENGAGE,
     DEPTH_BIAS_GAIN,
     DEPTH_BIAS_LIMIT,
+    DEPTH_BIAS_MAX_CORRECTION,
     DEPTH_BIAS_RELEASE,
     PARAM_TO_PID,
     PID_PARAM_MAP,
@@ -261,15 +262,24 @@ class TestDepthHoldBias(unittest.TestCase):
 
     def test_arah_error(self):
         # error positif = target lebih dalam dari posisi = perlu TURUN.
-        self.assertGreater(depth_hold_bias(0.2), 0)
-        self.assertLess(depth_hold_bias(-0.2), 0)
-        self.assertEqual(depth_hold_bias(0.2), -depth_hold_bias(-0.2))
+        # 0.1 m -- dalam jangkauan DEPTH_BIAS_MAX_CORRECTION default, ini
+        # murni menguji tanda, bukan batas jangkauan (lihat test terpisah).
+        self.assertGreater(depth_hold_bias(0.1), 0)
+        self.assertLess(depth_hold_bias(-0.1), 0)
+        self.assertEqual(depth_hold_bias(0.1), -depth_hold_bias(-0.1))
 
     def test_naik_monoton_lalu_saturasi(self):
-        self.assertGreater(depth_hold_bias(0.3), depth_hold_bias(0.1))
+        # max_correction di-override besar: test ini murni tentang bentuk
+        # kurva (naik lalu mentok LIMIT), bukan tentang jangkauan koreksi --
+        # itu punya test sendiri (TestDepthHoldBiasMaxCorrection).
+        JAUH = 1000.0
+        self.assertGreater(
+            depth_hold_bias(0.3, max_correction=JAUH),
+            depth_hold_bias(0.1, max_correction=JAUH),
+        )
         for error in (0.5, 2.0, 50.0):
-            self.assertEqual(depth_hold_bias(error), DEPTH_BIAS_LIMIT, msg=error)
-            self.assertEqual(depth_hold_bias(-error), -DEPTH_BIAS_LIMIT, msg=error)
+            self.assertEqual(depth_hold_bias(error, max_correction=JAUH), DEPTH_BIAS_LIMIT, msg=error)
+            self.assertEqual(depth_hold_bias(-error, max_correction=JAUH), -DEPTH_BIAS_LIMIT, msg=error)
 
     def test_limit_lebih_besar_dari_deadzone(self):
         # Regresi bug LIMIT=80: kalau limit <= deadzone THR_DZ, bias maksimum
@@ -281,6 +291,40 @@ class TestDepthHoldBias(unittest.TestCase):
         # Bias digeser dari Z_NEUTRAL=500 pada rentang 0..1000, jadi limit harus
         # menyisakan ruang: operator selalu bisa menang dengan stik heave.
         self.assertLess(DEPTH_BIAS_LIMIT, 500)
+
+
+class TestDepthHoldBiasMaxCorrection(unittest.TestCase):
+    """Bias diam di luar DEPTH_BIAS_MAX_CORRECTION -- ArduSub ALT_HOLD native
+    (bukan Python) yang menahan di luar jangkauan trim ini.
+
+    Ditambahkan 16 Agu 2026: trial membuktikan ALT_HOLD native (bias OFF,
+    stik netral) menahan rapat (sd 0,007 m, 130+ detik) -- persis rasa
+    BlueOS/Cockpit -- sementara bias mengejar target JAUH (0,15-0,4 m) malah
+    drift arah terbalik dan berosilasi tanpa henti. Operator memutuskan: SET
+    jadi trim dekat saja, bukan navigasi otomatis jarak jauh.
+    """
+
+    def test_dalam_jangkauan_tetap_aktif(self):
+        tepat_di_batas = DEPTH_BIAS_MAX_CORRECTION - 0.001
+        self.assertNotEqual(depth_hold_bias(tepat_di_batas, was_active=True), 0.0)
+
+    def test_di_luar_jangkauan_diam(self):
+        for error in (DEPTH_BIAS_MAX_CORRECTION + 0.001, 0.3, 1.0, 10.0):
+            self.assertEqual(depth_hold_bias(error, was_active=True), 0.0, msg=error)
+            self.assertEqual(depth_hold_bias(-error, was_active=True), 0.0, msg=error)
+
+    def test_kembali_dalam_jangkauan_aktif_lagi(self):
+        # Tidak butuh "reset" apa pun -- histeresis (was_active) dan batas
+        # jangkauan adalah dua gerbang independen, dicek ulang tiap panggilan.
+        self.assertEqual(depth_hold_bias(0.3, was_active=True), 0.0)
+        self.assertNotEqual(depth_hold_bias(0.1, was_active=True), 0.0)
+
+    def test_override_max_correction_dihormati(self):
+        # Caller boleh menimpa nilai default -- dipakai test lain untuk
+        # mengisolasi perilaku saturasi dari batas jangkauan.
+        self.assertNotEqual(
+            depth_hold_bias(0.3, was_active=True, max_correction=1.0), 0.0
+        )
 
 
 class TestDepthHoldBiasDamping(unittest.TestCase):
@@ -300,15 +344,16 @@ class TestDepthHoldBiasDamping(unittest.TestCase):
                               depth_hold_bias(error, was_active=True, closing_rate=0.0))
 
     def test_rate_mendekat_mengurangi_magnitude(self):
-        tanpa_rate = depth_hold_bias(0.2, was_active=True, closing_rate=0.0)
-        dengan_rate = depth_hold_bias(0.2, was_active=True, closing_rate=0.3)
+        # 0.1 m -- dalam jangkauan DEPTH_BIAS_MAX_CORRECTION default.
+        tanpa_rate = depth_hold_bias(0.1, was_active=True, closing_rate=0.0)
+        dengan_rate = depth_hold_bias(0.1, was_active=True, closing_rate=0.3)
         self.assertLess(abs(dengan_rate), abs(tanpa_rate))
 
     def test_rate_menjauh_tidak_menambah_magnitude(self):
         # closing_rate NEGATIF (menjauh dari target) bukan tugas redaman --
         # itu tugas GAIN*err. max(0, ...) di dalam depth_hold_bias menjamin ini.
-        diam = depth_hold_bias(0.2, was_active=True, closing_rate=0.0)
-        menjauh = depth_hold_bias(0.2, was_active=True, closing_rate=-0.3)
+        diam = depth_hold_bias(0.1, was_active=True, closing_rate=0.0)
+        menjauh = depth_hold_bias(0.1, was_active=True, closing_rate=-0.3)
         self.assertEqual(diam, menjauh)
 
     def test_tidak_pernah_membalik_arah(self):
@@ -318,12 +363,14 @@ class TestDepthHoldBiasDamping(unittest.TestCase):
             self.assertGreaterEqual(bias, 0.0, msg=rate)
 
     def test_tetap_dijepit_limit(self):
-        bias = depth_hold_bias(50.0, was_active=True, closing_rate=0.0)
+        # max_correction di-override -- lihat alasan sama seperti
+        # test_naik_monoton_lalu_saturasi di TestDepthHoldBias.
+        bias = depth_hold_bias(50.0, was_active=True, closing_rate=0.0, max_correction=1000.0)
         self.assertEqual(bias, DEPTH_BIAS_LIMIT)
 
     def test_arah_error_tetap_konsisten_dengan_redaman(self):
-        pos = depth_hold_bias(0.2, was_active=True, closing_rate=0.3)
-        neg = depth_hold_bias(-0.2, was_active=True, closing_rate=0.3)
+        pos = depth_hold_bias(0.1, was_active=True, closing_rate=0.3)
+        neg = depth_hold_bias(-0.1, was_active=True, closing_rate=0.3)
         self.assertGreaterEqual(pos, 0.0)
         self.assertLessEqual(neg, 0.0)
 

@@ -13,6 +13,9 @@ from rov_axes import (
     apply_shape_updates,
     axes_to_manual_control,
     clamp_axis,
+    heave_skip_deadzone,
+    HEAVE_SKIP_ALT_HOLD,
+    HEAVE_SKIP_MANUAL,
     resolve_manual_packet,
     shape_axes,
 )
@@ -20,9 +23,7 @@ from rov_modes import (
     depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
-    is_risky_mode,
     resolve_pilot_mode,
-    warning_for_mode,
 )
 from rov_heading import heading_bias, operator_holding_yaw
 from rov_motor_test import validate_motor_test
@@ -37,6 +38,7 @@ from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from rov_pid import (
     DEPTH_BIAS_ENGAGE,
     DEPTH_BIAS_LIMIT,
+    DEPTH_BIAS_MAX_CORRECTION,
     DEPTH_BIAS_RELEASE,
     clamp_depth_target,
     depth_bias_active,
@@ -115,6 +117,11 @@ state = {
     "pid_pitch_p_out": 0.0,
     "pid_pitch_i_out": 0.0,
     "pid_pitch_d_out": 0.0,
+    # Posisi lokal dari EKF ArduSub (LOCAL_POSITION_NED, meter, utara/timur+).
+    # None selama pesan itu belum pernah diterima, supaya frontend bisa
+    # membedakan "belum ada data" dari "posisi 0,0" dan jatuh ke fallback.
+    "pos_n": None,
+    "pos_e": None,
 }
 
 master = None
@@ -259,6 +266,15 @@ def _effective_requested_mode():
     return requested_mode
 
 
+def _current_pixhawk_mode():
+    """Mode ArduSub efektif saat ini: requested_mode selama belum kedaluwarsa
+    (lihat _effective_requested_mode), else state["mode"] yang benar-benar
+    terkonfirmasi HEARTBEAT. Tanpa fallback requested_mode, sesuatu yang
+    di-ON-kan tepat setelah ganti mode akan diam selama satu-dua tick pertama.
+    """
+    return _effective_requested_mode() or state["mode"]
+
+
 def depth_hold_mode_ok():
     """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
 
@@ -266,16 +282,10 @@ def depth_hold_mode_ok():
     depth_hold_enabled, dan keduanya sengaja terpisah: mode tidak pernah
     menyalakan depth-set, depth-set tidak pernah memindahkan mode.
 
-    requested_mode ikut dipakai (selama belum kedaluwarsa, lihat
-    _effective_requested_mode) karena state["mode"] baru ter-update saat
-    HEARTBEAT berikutnya datang. Tanpa itu, depth-set yang di-ON-kan tepat
-    setelah ganti mode akan diam selama satu-dua tick pertama.
-
-    ACRO sengaja TIDAK termasuk: di sana throttle netral bukan berarti tahan
-    kedalaman, jadi bias depth-set hanya akan mendorong wahana tanpa umpan
-    balik apa pun yang menstabilkannya.
+    MANUAL/ALT_HOLD/POSHOLD sengaja TIDAK termasuk — lihat DEPTH_HOLD_MODES
+    di rov_modes.py untuk mode mana yang jadi syaratnya sekarang.
     """
-    return depth_hold_allowed(_effective_requested_mode() or state["mode"])
+    return depth_hold_allowed(_current_pixhawk_mode())
 
 
 def apply_depth_hold_bias(mc, axes):
@@ -285,11 +295,11 @@ def apply_depth_hold_bias(mc, axes):
     rov_modes.py untuk aturannya dalam bentuk yang bisa diuji):
       1. operator sudah menekan SET  -> depth_target bukan None
       2. operator sudah meng-ON-kan  -> depth_hold_enabled
-      3. mode ArduSub = ALT_HOLD     -> ada cascade PID kedalaman yang dikoreksi
+      3. mode ArduSub ada di DEPTH_HOLD_MODES (rov_modes.py)
       4. stik heave netral           -> begitu operator menyentuh stik, input
                                         manual menang mutlak
     """
-    global _bias_active, _depth_ema, _depth_ema_ts
+    global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
 
     with depth_lock:
         target = depth_target
@@ -345,14 +355,23 @@ def apply_depth_hold_bias(mc, axes):
         target - state["depth"],
         _bias_active
     )
-    bias = depth_hold_bias(target - state["depth"], _bias_active, closing_rate)
+    error = target - state["depth"]
+    bias = depth_hold_bias(error, _bias_active, closing_rate)
     if bias == 0.0:
+        # Beda dari "sudah dekat target, tidak perlu koreksi" (senyap, itu
+        # normal): ini KHUSUS kasus _bias_active True (histeresis bilang mau
+        # mengoreksi) tapi errornya melebihi DEPTH_BIAS_MAX_CORRECTION —
+        # operator perlu tahu kenapa depth-hold terlihat diam, bukan menebak
+        # tombolnya rusak. Lihat catatan DEPTH_BIAS_MAX_CORRECTION di rov_pid.py.
+        if _bias_active and abs(error) > DEPTH_BIAS_MAX_CORRECTION and now - _last_depth_diag >= 1.0:
+            _last_depth_diag = now
+            print(f"[DEPTH] target {target:.2f} m terlalu jauh (error {error:+.2f} m) — "
+                  f"dekati dulu pakai stik, depth-hold cuma menahan trim dekat")
         return mc
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
 
-    global _last_depth_diag
     if now - _last_depth_diag >= 1.0:
         _last_depth_diag = now
         mentok = " MENTOK LIMIT" if abs(bias) >= DEPTH_BIAS_LIMIT - 0.5 else ""
@@ -689,9 +708,9 @@ def command_listener():
                     print(f"[PILOT] Unknown mode: {value}")
                     continue
 
-                # ACRO tidak ada di semua build/frame ArduSub. mode_mapping()
-                # berasal dari firmware yang benar-benar terpasang, jadi ini
-                # satu-satunya cek yang bisa dipercaya.
+                # Tidak semua mode ada di semua build/frame ArduSub.
+                # mode_mapping() berasal dari firmware yang benar-benar
+                # terpasang, jadi ini satu-satunya cek yang bisa dipercaya.
                 mode_mapping = master.mode_mapping() or {}
 
                 if pixhawk_mode not in mode_mapping:
@@ -717,12 +736,10 @@ def command_listener():
                     heading_target = None
 
                 # CATATAN: perpindahan mode sengaja TIDAK menyentuh depth_target
-                # maupun depth_hold_enabled. Dulu masuk ALT_HOLD memasang
-                # setpoint tetap 0.30 m, sehingga menekan tombol mode berarti
-                # "menyelam ke kedalaman kerja" — padahal esensi ALT_HOLD adalah
-                # menahan kedalaman TEMPAT WAHANA BERADA SEKARANG lewat cascade
-                # PID ArduSub. Menuju setpoint tersimpan kini fitur terpisah
-                # (command depth_set / depth_hold) yang di-arm operator sendiri.
+                # maupun depth_hold_enabled. Menuju setpoint tersimpan adalah
+                # fitur terpisah (command depth_set / depth_hold) yang di-arm
+                # operator sendiri — lihat DEPTH_HOLD_MODES di rov_modes.py
+                # untuk mode mana yang jadi syarat bias-nya sekarang.
 
                 if depth_hold_allowed(pixhawk_mode):
                     was_depth_hold = (
@@ -783,10 +800,6 @@ def command_listener():
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if poshold_active:
                     print(" POSHOLD    : heading hold AKTIF (posisi x/y TIDAK ditahan)")
-                if is_risky_mode(pixhawk_mode):
-                    msg = warning_for_mode(pixhawk_mode)
-                    if msg:
-                        print(f" !! {msg}")
                 print("====================================")
 
             elif name == "stop":
@@ -1097,8 +1110,8 @@ def command_listener():
 
             elif name == "param_set":
                 # value = {"name": ..., "value": ..., "type": <MAV_PARAM_TYPE>}
-                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle), sama
-                # seperti gerbang ACRO — di sini yang dijaga hanya validitas.
+                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle) — di
+                # sini yang dijaga hanya validitas.
                 if not isinstance(value, dict):
                     print(f"[PARAM] payload param_set tidak valid: {value!r}")
                     continue
@@ -1490,31 +1503,13 @@ def joystick_sender():
         # benar-benar diperintahkan ke thruster, bukan niat mentahnya.
 
         eff_axes = AXIS_NEUTRAL if stale else shaped
+        mc = apply_depth_hold_bias(mc, eff_axes)
 
-        # =========================
-        # THRUSTER GAIN
-        # =========================
-        gain = thruster_gain
-
-        scaled_axes = {
-            "surge": int(round(eff_axes.get("surge", 0) * gain)),
-            "sway": int(round(eff_axes.get("sway", 0) * gain)),
-            "heave": int(round(eff_axes.get("heave", 0) * gain)),
-            "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
-        }
-
-        # Buat ulang MANUAL_CONTROL berdasarkan axis
-        # yang sudah dikalikan thruster gain.
-        mc = axes_to_manual_control(
-            surge=scaled_axes["surge"],
-            sway=scaled_axes["sway"],
-            yaw=scaled_axes["yaw"],
-            heave=scaled_axes["heave"],
-        )
-
-        # Depth hold dan heading hold bekerja SETELAH gain.
-        mc = apply_depth_hold_bias(mc, scaled_axes)
-        mc = apply_heading_hold(mc, scaled_axes)
+        # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
+        # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
+        # mudah dibaca. Saat stale, axes netral yang dipakai sehingga overlay
+        # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
+        mc = apply_heading_hold(mc, eff_axes)
 
         try:
             with master_lock:
@@ -1742,6 +1737,14 @@ def main():
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
             prev_attitude_ts = now_ts
+
+        # --------------------------------
+        # LOCAL_POSITION_NED: estimasi posisi EKF (utara/timur, meter).
+        # Sudah mengalir lewat MAV_DATA_STREAM_ALL, cuma belum pernah dibaca.
+        # --------------------------------
+        elif mtype == "LOCAL_POSITION_NED":
+            state["pos_n"] = float(msg.x)
+            state["pos_e"] = float(msg.y)
 
         # --------------------------------
         # PARAM_VALUE: tabel param (halaman Vehicle) + verifikasi param_set.

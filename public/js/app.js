@@ -10,14 +10,11 @@ import { setupPage, loadSetup } from "./pages/setup.js";
 import { vehiclePage } from "./pages/vehicle.js";
 import { analyzePage } from "./pages/analyze.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
-import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,getButtonPressed,} from "./joystick-state.js";
+import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
 import {
-  ACRO_CONFIRM,
-  ACTUAL_MODE_WARNINGS,
   ARDUSUB_MODE_TO_TAB,
   DEPTH_HOLD_MODES,
-  RISKY_ARDUSUB_MODES,
 } from "/shared/rov-modes.js";
 
 /*  elemen DOM  */
@@ -49,10 +46,9 @@ const els = {
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   depthTarget: $("vDepthTarget"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"),
   btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
-  modeActual: $("modeActual"), modeWarn: $("modeWarn"),
-  acroModal: $("acroModal"), acroModalBody: $("acroModalBody"),
-  acroModalConfirm: $("acroModalConfirm"), acroModalCancel: $("acroModalCancel"),
+  modeActual: $("modeActual"),
 };
 
 /* ====================== PAGE NAVIGATION ====================== */
@@ -296,7 +292,7 @@ function applyTelemetry(d) {
   if (typeof d.mode === "string") {
     if (d.mode !== lastPilotMode) {
       lastPilotMode = d.mode;
-      log(`Mode pilot aktif: ${d.mode}`, ACTUAL_MODE_WARNINGS[d.mode] ? "warn" : "ok");
+      log(`Mode pilot aktif: ${d.mode}`, "ok");
     }
     syncModeTabs(d.mode, lastPosHold);
   }
@@ -337,6 +333,10 @@ function applyDepthHold(d) {
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
+  _pyQrData = (m5 && m5.qr_data) || null;
+  _pyQrAt = Date.now();
+  renderQrReadout();
+
   if (!els.mission5State) return;
   if (!m5) {
     els.mission5State.textContent = "IDLE";
@@ -412,6 +412,52 @@ setInterval(() => {
     }
   }
 }, 500);
+
+/* indikasi QR di strip Control. Dua sumber, pipeline Python (mission5.py,
+   dibaca via applyMission5 di bawah) diutamakan selama masih segar (misi
+   autonomous jalan) karena itu deteksi ROV sungguhan; scan jsQR lokal
+   terhadap #camImg (sama seperti halaman Camera) jadi fallback saat FSM
+   Python belum/tidak aktif, supaya operator tetap lihat indikasi saat manual. */
+const qrScanCanvas = document.createElement("canvas");
+let _lastQrScan = 0;
+let _pyQrData = null, _pyQrAt = 0;
+let _clientQrData = null;
+const PY_QR_FRESH_MS = 3000;
+
+function renderQrReadout() {
+  if (!els.vQR) return;
+  const pyFresh = _pyQrData && (Date.now() - _pyQrAt < PY_QR_FRESH_MS);
+  const val = pyFresh ? _pyQrData : _clientQrData;
+  if (val) {
+    els.vQR.textContent = val;
+    els.vQR.title = val;
+    els.qrReadout.classList.add("is-ok");
+  } else {
+    els.vQR.textContent = "—";
+    els.vQR.removeAttribute("title");
+    els.qrReadout.classList.remove("is-ok");
+  }
+}
+
+function scanControlQR() {
+  if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
+  const now = performance.now();
+  if (now - _lastQrScan < 200) return;
+  _lastQrScan = now;
+  const sw = els.camImg.naturalWidth, sh = els.camImg.naturalHeight;
+  const scale = Math.min(1, 640 / Math.max(sw, sh));
+  const cw = Math.max(1, Math.round(sw * scale)), ch = Math.max(1, Math.round(sh * scale));
+  qrScanCanvas.width = cw; qrScanCanvas.height = ch;
+  const ctx = qrScanCanvas.getContext("2d", { willReadFrequently: true });
+  try {
+    ctx.drawImage(els.camImg, 0, 0, cw, ch);
+    const img = ctx.getImageData(0, 0, cw, ch);
+    const code = window.jsQR(img.data, cw, ch);
+    _clientQrData = code ? code.data : null;
+    renderQrReadout();
+  } catch (e) { /* frame belum siap / cross-origin, lewati */ }
+}
+setInterval(scanControlQR, 200);
 
 /*  WebSocket  */
 let ws = null, demo = null, pingT = 0, linkStale = false;
@@ -809,7 +855,7 @@ const camFs = makeFullscreen(els.camStage, {
 });
 els.btnCamFull.onclick = () => camFs.toggle();
 
-/* pilot mode tabs: Manual | Stabilize | Depth Hold | Acro
+/* pilot mode tabs: Manual | Stabilize | Alt Hold | Pos Hold
  *
  * Sorotan tab TIDAK diset saat diklik. Klik hanya MEMINTA mode; yang menyorot
  * adalah syncModeTabs() dari HEARTBEAT Pixhawk (lihat applyTelemetry). Dengan
@@ -821,26 +867,6 @@ requestPilotMode.pending = null;
 requestPilotMode.pendingSince = 0;
 
 function requestPilotMode(mode, label) {
-  // ACRO: tanpa stabilisasi attitude dan throttle netral TIDAK menahan
-  // kedalaman — di kolam dangkal ini paling mudah membuat ROV terguling.
-  // Berlaku untuk SEMUA jalur input (tab GUI maupun tombol gamepad) — lihat
-  // case "mode_acro" di executeJoystickAction, yang memanggil fungsi ini
-  // juga supaya gerbang konfirmasi konsisten di kedua sisi.
-  //
-  // Konfirmasi dipecah jadi async (confirmAcroEntry) karena salah satu
-  // jalurnya (modal gamepad) TIDAK BOLEH memblokir thread — beda dari
-  // confirm() bawaan browser yang sinkron.
-  if (mode === "acro") {
-    confirmAcroEntry((ok) => {
-      if (!ok) { log("Mode ACRO dibatalkan", "warn"); return; }
-      doRequestPilotMode(mode, label);
-    });
-    return;
-  }
-  doRequestPilotMode(mode, label);
-}
-
-function doRequestPilotMode(mode, label) {
   requestPilotMode.pending = mode;
   requestPilotMode.pendingSince = performance.now();
   sendCmd("pilot_mode", mode);
@@ -848,38 +874,8 @@ function doRequestPilotMode(mode, label) {
   syncModeTabs(lastPilotMode, lastPosHold);
 }
 
-/* Gerbang konfirmasi ACRO. Modal DOM kustom (bukan confirm() bawaan) HANYA
-   dipakai saat operator benar-benar mengendalikan lewat gamepad yang
-   tersambung — supaya tombol X/B pad bisa menutupnya tanpa mengunci thread
-   JS (confirm() memblokir pollGamepad(), lihat sana). Kalau tab "Gamepad"
-   dipilih tapi belum ada pad tersambung, modal itu tidak bisa ditutup lewat
-   apa pun selain mouse — jadi tetap jatuh ke confirm() native di kasus itu. */
-let acroModalCallback = null; // null = modal tertutup
-
-function confirmAcroEntry(callback) {
-  if (activeController !== "Gamepad" || !joystickState.connected) {
-    callback(confirm(ACRO_CONFIRM));
-    return;
-  }
-  els.acroModalBody.textContent = ACRO_CONFIRM;
-  els.acroModal.hidden = false;
-  acroModalCallback = callback;
-  acroModalPrevX = false; // reset edge detector supaya X yang masih ditahan
-  acroModalPrevB = false; // dari aksi SEBELUMNYA tidak langsung memicu modal
-}
-
-function closeAcroModal(result) {
-  els.acroModal.hidden = true;
-  const cb = acroModalCallback;
-  acroModalCallback = null;
-  if (cb) cb(result);
-}
-
-els.acroModalConfirm.onclick = () => closeAcroModal(true);
-els.acroModalCancel.onclick = () => closeAcroModal(false);
-
-// ARDUSUB_MODE_TO_TAB / RISKY_ARDUSUB_MODES / ACRO_CONFIRM sekarang di
-// shared/rov-modes.js (padanan rov_modes.py sisi Python), diimpor di atas.
+// ARDUSUB_MODE_TO_TAB sekarang di shared/rov-modes.js (padanan rov_modes.py
+// sisi Python), diimpor di atas.
 
 // Pixhawk tidak menerima mode yang diminta dalam waktu ini -> beri peringatan.
 const MODE_CONFIRM_TIMEOUT_MS = 2000;
@@ -920,21 +916,12 @@ function syncModeTabs(actualMode, posholdActive) {
     else b.removeAttribute("aria-selected");
   });
 
-  // Mode aktual apa adanya — termasuk mode di luar keempat tab (SURFACE,
+  // Mode aktual apa adanya — termasuk mode di luar tab yang ada (SURFACE,
   // POSHOLD, ...) yang memang tidak punya tab sendiri.
   if (els.modeActual) els.modeActual.textContent = actual || "—";
 
-  if (els.modeWarn) {
-    // Lebih luas dari RISKY_ARDUSUB_MODES: STABILIZE tidak bisa diminta dari
-    // GUI lagi, tapi wahana masih bisa berada di sana lewat saklar RC / GCS
-    // lain — dan justru saat itulah operator perlu tahu depth hold tidak jalan.
-    const warn = actual ? ACTUAL_MODE_WARNINGS[actual] : null;
-    els.modeWarn.hidden = !warn;
-    if (warn) els.modeWarn.textContent = `⚠ ${actual} — ${warn}`;
-  }
-
   // Diminta tapi tak kunjung dikonfirmasi: kemungkinan firmware menolak
-  // (mis. ACRO tidak tersedia di build ini) atau link command putus.
+  // atau link command putus.
   if (
     requestPilotMode.pending &&
     !modeTimeoutWarned &&
@@ -1206,10 +1193,11 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    // Keduanya berujung di ALT_HOLD. "stabilize" dipertahankan sebagai alias
-    // supaya profil joystick tersimpan operator tetap bekerja setelah tab
-    // STABILIZE dihapus — lihat PILOT_MODE_MAP di shared/rov-modes.js.
-    case "mode_stabilize":
+    case "mode_stabilize": {
+      requestPilotMode("stabilize", "STABILIZE");
+      return;
+    }
+
     case "mode_depth_hold": {
       requestPilotMode("depth_hold", "ALT HOLD");
       return;
@@ -1217,13 +1205,6 @@ function executeJoystickAction(action, mode = "toggle") {
 
     case "mode_poshold": {
       requestPilotMode("poshold", "POS HOLD");
-      return;
-    }
-
-    case "mode_acro": {
-      // Sama seperti tab GUI: lewat requestPilotMode() supaya dialog
-      // konfirmasi ACRO konsisten di semua jalur input, bukan hanya tab.
-      requestPilotMode("acro", "ACRO");
       return;
     }
 
@@ -1490,12 +1471,6 @@ function warnNonStandardOnce() {
 
 window.addEventListener("gamepaddisconnected", () => { warnedNonStandard = false; });
 
-/* Edge detector tombol X (index 2) / B (index 1) untuk modal ACRO — state
-   lokal terpisah dari gpBtnPrev supaya tidak ikut ter-commit oleh
-   commitButtonCache() (lihat komentar di processMappedGamepadButtons). */
-let acroModalPrevX = false;
-let acroModalPrevB = false;
-
 function pollGamepad() {
   requestAnimationFrame(pollGamepad);
 
@@ -1505,24 +1480,6 @@ function pollGamepad() {
 
   // update state gamepad dulu supaya panel joystick + runtime pakai data yang sama
   updateJoystickStateFromGamepad();
-
-  if (acroModalCallback) {
-    // Modal ACRO terbuka: HANYA X (OK) / B (Batal) yang berfungsi, dibaca
-    // LANGSUNG dari tombol mentah — bukan lewat buttonConfig — supaya tetap
-    // bekerja walau operator sudah memetakan ulang tombol 1/2 ke aksi lain.
-    // Semua aksi lain (axis, mode lain, gain, dll) sengaja tidak diproses
-    // selama modal terbuka: mencegah input tak sengaja saat operator masih
-    // membaca peringatan. Ini TIDAK berkaitan dengan kemampuan pindah mode
-    // setelah ACRO benar-benar aktif — itu alur terpisah lewat
-    // requestPilotMode() yang berjalan normal setelah modal ini ditutup.
-    const x = getButtonPressed(2);
-    const b = getButtonPressed(1);
-    if (x && !acroModalPrevX) closeAcroModal(true);
-    else if (b && !acroModalPrevB) closeAcroModal(false);
-    acroModalPrevX = x;
-    acroModalPrevB = b;
-    return;
-  }
 
   if (!joystickState.connected) return;
   if (!joystickState.enabled) return;
@@ -1608,10 +1565,6 @@ window.addEventListener("gamepaddisconnected", (e) => {
   if (activeController === "Gamepad") {
     neutralizeGamepadAxes();
   }
-
-  // Failsafe: tanpa ini modal ACRO menggantung selamanya kalau pad putus
-  // (baterai habis, kabel lepas) tepat saat operator sedang memutuskan.
-  if (acroModalCallback) closeAcroModal(false);
 });
 
 /* Satu loop saja: pollGamepad menyegarkan joystickState (dipakai badge,

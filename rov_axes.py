@@ -288,3 +288,74 @@ def resolve_manual_packet(axes, last_update, now, timeout=IDLE_TIMEOUT):
         yaw=axes.get("yaw", 0),
         heave=axes.get("heave", 0),
     ), False
+
+
+# ---------------------------------------------------------------------------
+# Heave: lompati deadzone, lalu petakan sisa travel secara penuh
+# ---------------------------------------------------------------------------
+
+# Trial 16 Agu 2026: operator melaporkan heave "baru terasa di ±600". Bukan
+# soal gain PID — soal DUA dead band bertumpuk yang memakan travel stik:
+#
+#   1. THR_DZ = 100 PWM (hanya di mode depth-hold). MANUAL_CONTROL.z 0..1000
+#      dipetakan ke 1100..1900 PWM, jadi 1 unit z = 0,8 PWM dan 1 unit heave
+#      = 0,4 PWM. 100 PWM = 250 unit heave DIBUANG SEBELUM controller melihat
+#      apa pun. Ini deadzone INPUT PILOT: di dalamnya ArduSub mengartikan
+#      "tahan kedalaman sekarang", bukan "naik/turun pelan".
+#   2. MOT_SPIN_MIN = 0,15 -> ~60 PWM = ~150 unit heave dead band di sisi
+#      MOTOR, berlaku di SEMUA mode termasuk MANUAL.
+#
+# Akibatnya di ALT_HOLD hanya ~40% travel stik yang berarti apa-apa, dan 40%
+# itu langsung dimulai dari perintah laju yang sudah lumayan besar — persis
+# kebalikan dari yang dibutuhkan untuk naik-turun presisi.
+#
+# Solusinya sama dengan DEPTH_BIAS_DEADZONE di rov_pid.py: jangan naik landai
+# dari nol (habis ditelan), tapi LOMPAT melewati dead band begitu stik
+# disentuh, lalu petakan |heave| 0..1000 ke seluruh sisa rentang. Dead band
+# jadi tidak terlihat oleh operator dan resolusi stik naik ~2,5x.
+#
+# NAIKKAN kalau THR_DZ / MOT_SPIN_MIN di FC dinaikkan — angka ini pasangan
+# dari param FC, bukan preferensi rasa.
+HEAVE_SKIP_ALT_HOLD = 260   # unit heave (= 104 PWM, margin kecil atas THR_DZ)
+HEAVE_SKIP_MANUAL = 150     # unit heave (= 60 PWM, sebesar MOT_SPIN_MIN)
+
+# SENGAJA TIDAK ADA expo di sini. Halaman Joystick sudah punya knob `expo`
+# per-axis di profil operator (default 1,6), dan itu satu-satunya tempat kurva
+# rasa stik boleh diatur. Menambahkan expo kedua di sini berarti dua kurva
+# bertumpuk yang tidak kelihatan di UI mana pun: operator menurunkan expo di
+# profil, stik tetap terasa lembek, dan tidak ada cara menebak kenapa.
+#
+# Tugas fungsi di bawah cuma satu: menghapus dead band FC supaya SELURUH travel
+# stik berarti gerakan. Bentuk kurvanya urusan profil.
+
+
+def heave_skip_deadzone(heave, skip, epsilon=20):
+    """Petakan heave stik -> heave efektif yang melewati dead band FC.
+
+    Fungsi MURNI supaya bisa diuji tanpa MAVLink; pemanggil
+    (joystick_sender di rov_agent.py) yang memilih `skip` sesuai mode aktif.
+
+    heave   : -1000..1000 dari stik (sudah lewat shaping + thruster_gain).
+    skip    : dead band yang harus dilompati, dalam unit heave.
+    epsilon : di bawah ini stik dianggap NETRAL dan hasilnya 0 PERSIS.
+
+              Wajib sama dengan HEAVE_MANUAL_EPSILON di rov_agent.py. Kalau
+              lebih kecil, ada celah |heave| di antara keduanya tempat bias
+              depth-hold masih mengira stik netral (jadi ikut mendorong)
+              sementara fungsi ini sudah melompat penuh — dua dorongan
+              bertumpuk ke arah yang bisa berlawanan.
+    Netral -> 0 persis dipertahankan: itu yang membuat "diam" berarti tahan
+    kedalaman, dan itu pula yang dipakai jalur E-Stop/fail-safe.
+    """
+    h = clamp_axis("heave", heave)
+    if abs(h) <= epsilon:
+        return 0
+
+    # Normalisasi travel yang TERSISA di atas epsilon, supaya tidak ada lompatan
+    # kedua saat stik melewati epsilon.
+    span = 1000 - epsilon
+    c = min(1.0, (abs(h) - epsilon) / span) if span > 0 else 1.0
+
+    magnitude = skip + c * (1000 - skip)
+    magnitude = min(1000.0, magnitude)
+    return int(round(magnitude)) if h > 0 else -int(round(magnitude))

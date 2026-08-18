@@ -282,6 +282,9 @@ class Mission5FSM:
         self.telemetry_out = {
             'state': self._state.name, 'active_cam': None,
             'distance_z': None, 'offset_x': None, 'offset_y': None,
+            # Hasil decode QR terakhir dari pipeline vision Python (bukan scan
+            # jsQR di browser) — dibaca readout QR di halaman Control.
+            'qr_data': None, 'qr_wall': None,
         }
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -337,6 +340,12 @@ class Mission5FSM:
         while self._running and self._state not in (State.DONE, State.ABORT):
             telem = self.telem.get()
             self.telemetry_out['state'] = self._state.name
+
+            # QR terakhir yang masih segar, independen dari state saat ini —
+            # supaya operator lihat hasil scan pipeline vision di GUI kapan pun.
+            qr = self.vision.latest_qr(max_age=2.0)
+            self.telemetry_out['qr_data'] = qr['data'] if qr else None
+            self.telemetry_out['qr_wall'] = qr['wall'] if qr else None
 
             # Handoff GUI: bila operator kembalikan ke MANUAL saat autonomous → abort.
             if self._require_auto and telem.get('mode') == 'manual':
