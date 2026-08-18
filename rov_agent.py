@@ -1880,6 +1880,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[EXIT] rov_agent stopped by user")
+        print("\n[EXIT] rov_agent stoppedqq by user")
     except Exception as e:
         print("[FATAL]", e)
