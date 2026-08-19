@@ -168,6 +168,15 @@ state = {
     # ACCZ). Tetap 0 kalau FC tidak mengirim pesan itu (mis. PID_TUNING_MASK
     # belum diset) — bukan error, hanya kolom kosong di CSV.
     "thruster_vertical_pwm": 0,
+    # PWM per-thruster horizontal, TIDAK dirata-rata: T6 adalah satu-satunya
+    # thruster lateral, dan di frame BlueROV1 ArduSub ikut memakainya untuk ROLL
+    # (faktor roll -0,25, lihat CONTROL-MAPPING.md). Jadi koreksi roll bocor
+    # keluar sebagai gaya menyamping, dan T6 sendirian adalah satu-satunya
+    # pengukuran yang memisahkan "FC memerintahkan dorongan lateral" dari
+    # "air/tether mendorong lambung". Merata-ratakannya dengan T1/T2 akan
+    # menghapus persis angka yang dicari.
+    "thruster_lateral_pwm": 0,
+    "thruster_surge_pwm": [0, 0],
     "pid_p_out": 0.0,
     "pid_i_out": 0.0,
     "pid_d_out": 0.0,
@@ -1932,6 +1941,19 @@ def main():
             vals = [v for v in (msg.servo3_raw, msg.servo4_raw, msg.servo5_raw) if v]
             if vals:
                 state["thruster_vertical_pwm"] = int(sum(vals) / len(vals))
+
+            # T6 = lateral/sway, T1/T2 = surge+yaw. Dulu dibuang di sini padahal
+            # SERVO_OUTPUT_RAW sudah diminta 10 Hz (lihat connect_pixhawk) —
+            # akibatnya tidak ada satu pun catatan PWM thruster horizontal di
+            # disk, dan drift menyamping saat stik netral jadi tidak bisa
+            # didiagnosis sama sekali. Ikut mengalir ke baris [SEND] 1 Hz.
+            #
+            # 0 berarti "FC tidak mengirim channel itu", bukan "thruster diam":
+            # thruster yang diam ada di sekitar SERVOn_TRIM (1500), bukan 0.
+            state["thruster_lateral_pwm"] = int(msg.servo6_raw or 0)
+            state["thruster_surge_pwm"] = [
+                int(msg.servo1_raw or 0), int(msg.servo2_raw or 0),
+            ]
 
         # --------------------------------
         # PID_TUNING: P/I/D per axis untuk CSV tuning + diagnosa offline.
