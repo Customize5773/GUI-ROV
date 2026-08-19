@@ -97,6 +97,9 @@ function isAllowedCamHost(host) {
 // N koneksi ke kamera (kamera murah/mjpg-streamer berat kalau harus
 // re-encode per klien, itu penyebab lag saat Start Stream diklik).
 const camStreams = new Map(); // key -> { clients: Set<res>, statusCode, headers, up }
+// Client yang lambat baca (res.write() balik false) di-skip sampai 'drain',
+// supaya buffer Node untuk dia tidak numpuk tak terbatas dan menyeret klien lain.
+const pausedCamClients = new WeakSet();
 
 function camStreamKey(target) {
   const t = new URL(target);
@@ -147,7 +150,13 @@ const httpServer = http.createServer((req, res) => {
         for (const c of entry.clients) if (!c.writableEnded) c.writeHead(entry.statusCode, entry.headers);
 
         upRes.on("data", (chunk) => {
-          for (const c of entry.clients) if (!c.writableEnded) c.write(chunk);
+          for (const c of entry.clients) {
+            if (c.writableEnded || pausedCamClients.has(c)) continue;
+            if (!c.write(chunk)) {
+              pausedCamClients.add(c);
+              c.once("drain", () => pausedCamClients.delete(c));
+            }
+          }
         });
         upRes.on("end", () => {
           for (const c of entry.clients) if (!c.writableEnded) c.end();

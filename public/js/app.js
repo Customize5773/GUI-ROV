@@ -90,8 +90,10 @@ const pageModules = {
 };
 const initedModules = new Set();
 let activeModule = null;
+let currentPageName = "control";
 
 function showPage(pageName) {
+  currentPageName = pageName;
   // Hide all pages
   Object.values(pages).forEach(page => {
     if (page) page.style.display = "none";
@@ -520,6 +522,7 @@ function renderQrReadout() {
 }
 
 function scanControlQR() {
+  if (currentPageName !== "control") return;
   if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
   const now = performance.now();
   if (now - _lastQrScan < 200) return;

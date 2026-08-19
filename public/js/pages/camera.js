@@ -581,6 +581,10 @@ export const cameraPage = {
 
   onTelemetry(d) {
 
+    if (!this.visible) {
+      return;
+    }
+
     const alt =
       Number.isFinite(d.depth)
         ? Math.max(
@@ -997,15 +1001,20 @@ export const cameraPage = {
         return;
       }
 
+      // maksimum 320px — PiP tampil kecil, tak perlu backing store 1080p
+      const scale = Math.min(
+        1,
+        320 / Math.max(src.naturalWidth, src.naturalHeight)
+      );
+      const cw = Math.max(1, Math.round(src.naturalWidth * scale));
+      const ch = Math.max(1, Math.round(src.naturalHeight * scale));
+
       const cv = cell.pipImg;
-      if (
-        cv.width !== src.naturalWidth ||
-        cv.height !== src.naturalHeight
-      ) {
-        cv.width = src.naturalWidth;
-        cv.height = src.naturalHeight;
+      if (cv.width !== cw || cv.height !== ch) {
+        cv.width = cw;
+        cv.height = ch;
       }
-      cv.getContext("2d").drawImage(src, 0, 0);
+      cv.getContext("2d").drawImage(src, 0, 0, cw, ch);
 
       cv.style.display = "";
       cell.pipNo.style.display = "none";
@@ -1154,10 +1163,15 @@ export const cameraPage = {
       );
     const cv =
       this.scanCanvas;
-    cv.width =
-      cw;
-    cv.height =
-      ch;
+    if (
+      cv.width !== cw ||
+      cv.height !== ch
+    ) {
+      cv.width =
+        cw;
+      cv.height =
+        ch;
+    }
 
     const ctx =
       cv.getContext(
