@@ -15,9 +15,9 @@ GRIPPER_PWM_CLOSE = 1410
 # (CH7) secara mekanik — memakai clamp_pwm() (rentang gripper) di sini akan
 # membiarkan perintah rotate melewati batas fisiknya. Dikalibrasi terpisah
 # hasil trial kolam.
-ROTATE_PWM_FORWARD = 1520  # mount tilt down
+ROTATE_PWM_FORWARD = 1505 # mount tilt down
 ROTATE_PWM_STOP = 1500
-ROTATE_PWM_REVERSE = 1410  # mount tilt up
+ROTATE_PWM_REVERSE = 1450  # mount tilt up
 
 # Axis gamepad dikirim di rentang kira-kira -1000..1000 (lihat joystick-state.js).
 GRIPPER_AXIS_DEADZONE = 100

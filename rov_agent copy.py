@@ -9,17 +9,22 @@ from pymavlink import mavutil
 from rov_axes import (
     AXIS_NEUTRAL,
     AXIS_RANGE,
-    clamp_axis,
-    resolve_manual_packet,
+    AXIS_SHAPE,
+    apply_shape_updates,
     axes_to_manual_control,
+    clamp_axis,
+    heave_skip_deadzone,
+    HEAVE_SKIP_ALT_HOLD,
+    HEAVE_SKIP_MANUAL,
+    resolve_manual_packet,
+    shape_axes,
 )
-
 from rov_modes import (
+    depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
-    is_risky_mode,
+    poshold_mode_ok,
     resolve_pilot_mode,
-    warning_for_mode,
 )
 from rov_heading import heading_bias, operator_holding_yaw
 from rov_motor_test import validate_motor_test
@@ -32,10 +37,15 @@ from rov_params import (
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
 from rov_pid import (
-    DEFAULT_DEPTH_TARGET,
+    DEPTH_BIAS_ENGAGE,
+    DEPTH_BIAS_LIMIT,
+    DEPTH_BIAS_MAX_CORRECTION,
+    DEPTH_BIAS_RELEASE,
     clamp_depth_target,
+    depth_bias_active,
+    depth_hold_bias,
     resolve_pid_writes,
-    valid_depth_target,
+    smooth_depth,
     valid_pool_depth,
 )
 
@@ -51,6 +61,16 @@ LAPTOP_IP = os.environ.get("LAPTOP_IP", "192.168.2.1")   # IP laptop / ground st
 UDP_TELEM_PORT = int(os.environ.get("UDP_IN", "14551"))  # telemetry ke laptop (sesuai server.js)
 UDP_CMD_PORT = int(os.environ.get("UDP_OUT", "14550"))   # command dari laptop ke Pi
 
+# Jembatan QGroundControl: semua MAVLink dari Pixhawk diteruskan ke QGC, dan
+# perintah dari QGC diteruskan balik ke Pixhawk. Terpisah dari port telemetri
+# dashboard (14551) supaya keduanya bisa hidup bersamaan.
+#
+# Kode ini SEMPAT hanya ada di salinan Pi dan hilang saat deploy 19 Agu 2026 —
+# dimasukkan ke git supaya tidak terulang.
+QGC_IP = os.environ.get("QGC_IP", "192.168.2.1")
+QGC_PORT = int(os.environ.get("QGC_PORT", "14561"))       # MAVLink Pi -> QGC
+QGC_IN_PORT = int(os.environ.get("QGC_IN_PORT", "14560"))  # MAVLink QGC -> Pi
+
 # =========================
 # Konfigurasi Pixhawk
 # =========================
@@ -60,8 +80,6 @@ PIXHAWK_BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 # Tidak ada satu pun pesan MAVLink selama ini -> link dianggap mati dan
 # disambungkan ulang (USB lepas / Pixhawk re-enumerate).
 LINK_TIMEOUT = 3.0
-
-
 thruster_gain = 1.0
 
 # =========================
@@ -71,6 +89,57 @@ telem_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.bind(("0.0.0.0", UDP_CMD_PORT))
 cmd_sock.settimeout(0.2)
+
+qgc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+qgc_addr = (QGC_IP, QGC_PORT)
+
+
+def forward_mavlink_to_qgc(msg):
+    """Teruskan satu pesan MAVLink mentah ke QGC. Kegagalan TIDAK boleh
+    menghentikan loop RX: QGC cuma pemantau, wahana harus tetap jalan tanpanya."""
+    try:
+        data = msg.get_msgbuf()
+        if data:
+            qgc_sock.sendto(data, qgc_addr)
+    except Exception as e:
+        print(f"[QGC] MAVLink forward error: {e}")
+
+
+def qgc_command_receiver():
+    """Terima MAVLink dari QGC lalu teruskan apa adanya ke Pixhawk.
+
+    Sengaja tanpa filter: QGC dipakai untuk kalibrasi/param/uji motor, dan
+    memilah pesan mana yang boleh lewat berarti memelihara daftar putih yang
+    pasti ketinggalan. Konsekuensinya QGC punya otoritas penuh atas wahana —
+    perlakukan seperti GCS kedua, bukan alat pantau pasif.
+    """
+    qgc_in = mavutil.mavlink_connection(f"udpin:0.0.0.0:{QGC_IN_PORT}")
+
+    print(f"[QGC] Listening MAVLink commands on UDP :{QGC_IN_PORT}")
+
+    while True:
+        try:
+            msg = qgc_in.recv_match(blocking=True, timeout=1)
+
+            if msg is None:
+                continue
+
+            if msg.get_type() == "MANUAL_CONTROL":
+                print(
+                    f"[QGC RX] MANUAL_CONTROL "
+                    f"x={msg.x} y={msg.y} z={msg.z} r={msg.r}"
+                )
+            else:
+                print(f"[QGC RX] {msg.get_type()}")
+
+            if master is None:
+                continue
+            with master_lock:
+                master.mav.send(msg)
+
+        except Exception as e:
+            print(f"[QGC] command receive error: {e}")
+            time.sleep(1)
 
 # =========================
 # Status telemetry lokal
@@ -84,7 +153,11 @@ state = {
     "voltage": 0.0,
     "armed": False,
     "light": False,
-    "mode": "unknown",
+    "mode": "manual",
+    # Gate otoritas GUI ("manual"|"autonomous"). SENGAJA kunci sendiri, BUKAN
+    # "mode" di atas — yang itu pilot mode ArduSub dari HEARTBEAT. Pernah
+    # ditimpa di send_telemetry() dan itu mematikan seluruh gerbang depth-hold.
+    "control_mode": "manual",
     # "ok" selama axis dari GUI masih mengalir, "stale" saat fail-safe idle
     # aktif dan Pi mengirim netral sendiri. Sengaja BUKAN "link": sisi browser
     # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
@@ -95,9 +168,31 @@ state = {
     # ACCZ). Tetap 0 kalau FC tidak mengirim pesan itu (mis. PID_TUNING_MASK
     # belum diset) — bukan error, hanya kolom kosong di CSV.
     "thruster_vertical_pwm": 0,
+    # PWM per-thruster horizontal, TIDAK dirata-rata: T6 adalah satu-satunya
+    # thruster lateral, dan di frame BlueROV1 ArduSub ikut memakainya untuk ROLL
+    # (faktor roll -0,25, lihat CONTROL-MAPPING.md). Jadi koreksi roll bocor
+    # keluar sebagai gaya menyamping, dan T6 sendirian adalah satu-satunya
+    # pengukuran yang memisahkan "FC memerintahkan dorongan lateral" dari
+    # "air/tether mendorong lambung". Merata-ratakannya dengan T1/T2 akan
+    # menghapus persis angka yang dicari.
+    "thruster_lateral_pwm": 0,
+    "thruster_surge_pwm": [0, 0],
     "pid_p_out": 0.0,
     "pid_i_out": 0.0,
     "pid_d_out": 0.0,
+    # Sama seperti di atas tapi axis ROLL/PITCH — lihat handler PID_TUNING.
+    # Butuh GCS_PID_MASK menyalakan bit roll/pitch di FC (bukan cuma ACCZ).
+    "pid_roll_p_out": 0.0,
+    "pid_roll_i_out": 0.0,
+    "pid_roll_d_out": 0.0,
+    "pid_pitch_p_out": 0.0,
+    "pid_pitch_i_out": 0.0,
+    "pid_pitch_d_out": 0.0,
+    # Posisi lokal dari EKF ArduSub (LOCAL_POSITION_NED, meter, utara/timur+).
+    # None selama pesan itu belum pernah diterima, supaya frontend bisa
+    # membedakan "belum ada data" dari "posisi 0,0" dan jatuh ke fallback.
+    "pos_n": None,
+    "pos_e": None,
 }
 
 master = None
@@ -114,6 +209,12 @@ master_lock = threading.Lock()
 # bukan hukum kendali apa yang dipakai wahana.
 current_control_mode = "manual"
 
+# Diset E-Stop, dikonsumsi joystick_sender: buang state ramp axis SEKETIKA
+# alih-alih membiarkannya meluncur turun. Boolean biasa sudah cukup — hanya
+# satu penulis (command listener) dan satu pembaca (joystick_sender), dan
+# kehilangan satu edge tidak mungkin karena penulisnya selalu True.
+shape_reset_requested = False
+
 # Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
 attitude_filter = AttitudeFilter()
@@ -126,8 +227,19 @@ joystick = {
     "yaw": 0,
 }
 
-last_joystick_update = time.time()
-depth_target = 0.0
+# Setpoint kedalaman, meter, positif ke bawah. None = BELUM PERNAH DI-SET.
+#
+# None sengaja dibedakan dari 0.0: 0.0 adalah setpoint yang sah ("tahan di
+# permukaan"), jadi memakai 0.0 sebagai "belum ada" membuat depth-set tidak
+# bisa membedakan operator yang menekan SET tepat di permukaan dari operator
+# yang belum menekan SET sama sekali — yang pertama harus menahan, yang kedua
+# tidak boleh mengirim bias apa pun.
+depth_target = None
+
+# Saklar depth-set dari operator (tombol ON/OFF di GUI atau gamepad). Depth-set
+# TIDAK pernah menyala sendiri: masuk ALT_HOLD/POSHOLD tidak menyentuhnya.
+# Lihat apply_depth_hold_bias() untuk gerbang lengkapnya.
+depth_hold_enabled = False
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
@@ -143,24 +255,44 @@ depth_offset = 0.0
 # mentah SAAT ITU, bukan state["depth"] yang sudah ditare sebelumnya.
 _raw_depth = 0.0
 
-# Setpoint yang dipasang otomatis setiap kali masuk mode depth hold. Nilai awal
-# dari rov_pid.DEFAULT_DEPTH_TARGET, bisa diubah operator lewat command
-# `depth_default` (halaman Setup) tanpa mengubah kode.
-default_depth_target = DEFAULT_DEPTH_TARGET
-
-# Langkah geser setpoint per penekanan D-pad ↑/↓ (atau Arrow ↑/↓ di keyboard).
-# 0.05 m dipilih terhadap kolam uji ~0.9 m: cukup halus untuk membidik, dan
-# penekanan beruntun (auto-repeat sisi GUI) menutup jarak besar dengan cepat.
-DEPTH_STEP = 0.05
 depth_lock = threading.Lock()
 
-# Defense-in-depth: GUI sudah membatasi auto-repeat gain_inc/gain_dec ke
-# REPEAT_INTERVAL_MS=150 (app.js), tapi backend tidak boleh percaya penuh
-# pada klien. Batas di sini sama, ~6.7 Hz, supaya klien rusak/nakal yang
-# mengirim command lebih cepat tidak bisa menggeser depth_target lebih
-# cepat dari yang GUI sendiri izinkan.
-_GAIN_RATE_HZ = 1.0 / 0.15
-_gain_rate = RateLimiter(_GAIN_RATE_HZ)
+# Buffer sampel kedalaman untuk smoothing saat SET. Baro bergetar ±0.02–0.05 m,
+# dan SET yang merekam satu sampel bisa meleset. Rata-rata 1 detik membersihkan
+# noise itu. Diisi setiap kali AHRS2 datang, dibaca + direset saat SET ditekan.
+# Ringkas: sampel di sini hanya 10 poin terakhir (0.1 s @ 10 Hz), cukup untuk
+# smoothing. Buffer penuh 1 detik tidak perlu — depth hold bisa mulai bekerja
+# segera sesudah SET.
+_depth_samples = []
+_DEPTH_SAMPLE_BUFFER_SIZE = 10  # 0.1 s @ 10 Hz
+
+# State histeresis untuk depth_hold_bias(). Diperbarui tiap kali bias dihitung.
+# Perlu memisahkan "bias sedang mengalir?" dari "bias boleh mengalir untuk error
+# ini?" supaya histeresis bekerja.
+_bias_active = False
+
+# EMA depth untuk estimasi laju (rate) — dipakai meredam bias saat vehicle
+# sudah bergerak cepat menuju target, lihat DEPTH_BIAS_DAMPING di rov_pid.py.
+# Alpha lebih rendah dari smooth_depth() (0,5-0,7): turunan memperkuat noise
+# baro lebih dari posisi mentah, meniru pola AttitudeFilter (attitude_filter.py).
+_DEPTH_RATE_ALPHA = 0.3
+_depth_ema = None
+_depth_ema_ts = None
+
+# Throttle log diagnostik depth-hold ke 1 Hz — sama seperti _last_telem_log.
+# Ditambahkan setelah trial 15 Agu 2026 menunjukkan bias TERHITUNG besar
+# (z~660) tapi PWM thruster vertikal nyaris tidak bergerak saat surge/yaw
+# aktif bersamaan. Log ini menjawab langsung: apakah z yang dihitung memang
+# yang dikirim, dan apakah sempat mentok DEPTH_BIAS_LIMIT — tanpa itu,
+# "depth-hold tidak respons" cuma bisa direkonstruksi manual dari state SEND.
+_last_depth_diag = 0.0
+
+# Tombol SET (dan toggle ON/OFF) sifatnya sekali-pencet, tapi backend tidak
+# boleh percaya penuh pada klien: gamepad yang ter-bounce atau klien nakal bisa
+# mengirim puluhan `depth_set` per detik dan membanjiri log + event GUI. 2 Hz
+# jauh di atas kecepatan jempol manusia, jadi tidak pernah terasa oleh operator.
+_DEPTH_CMD_RATE_HZ = 2.0
+_depth_cmd_rate = RateLimiter(_DEPTH_CMD_RATE_HZ)
 
 # manual_control_send() gagal di 20 Hz -> tanpa throttle satu link serial
 # yang goyah bisa membanjiri GUI dengan event beruntun. 1 Hz cukup untuk
@@ -170,75 +302,26 @@ _joy_send_err_rate = RateLimiter(1.0)
 # Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
 # None = belum diberi tahu -> depth_target hanya dibatasi di permukaan, persis
 # perilaku sebelumnya. Begitu diisi, jadi batas bawah depth_target (lihat
-# rov_pid.clamp_depth_target): di kolam 0.9 m, menahan gain_inc tanpa batas ini
-# menyetel target belasan meter dan menekan ROV ke dasar tanpa henti.
+# rov_pid.clamp_depth_target): menekan SET di dekat dasar kolam yang keruh bisa
+# merekam pembacaan baro yang meleset dan menekan ROV ke dasar tanpa henti.
 pool_depth = None
 
 # Mode yang TERAKHIR DIMINTA lewat set_mode. state["mode"] hanya ter-update saat
-# HEARTBEAT datang, jadi tanpa ini gain_inc/gain_dec yang ditekan tepat setelah
-# ganti mode akan diabaikan diam-diam.
+# HEARTBEAT datang, jadi tanpa ini depth-set yang di-ON-kan tepat setelah ganti
+# mode akan diam saja selama satu-dua tick pertama.
 requested_mode = None
 
 # Kapan requested_mode di-set (time.time()). Kalau FC MENOLAK perpindahan mode
 # (pre-arm check gagal, EKF belum siap, dsb.) HEARTBEAT tidak pernah membawa
 # state["mode"] == requested_mode, jadi tanpa batas waktu requested_mode akan
-# dipercaya SELAMANYA dan gain_inc/gain_dec terus "berhasil" walau wahana
+# dipercaya SELAMANYA dan depth-set terus mengirim bias walau wahana
 # sebenarnya masih di mode lama. REQUESTED_MODE_TIMEOUT membatasi jendela
-# percaya-optimistis ini; sesudahnya depth_hold_active() jatuh balik ke
+# percaya-optimistis ini; sesudahnya depth_hold_mode_ok() jatuh balik ke
 # state["mode"] yang benar-benar terkonfirmasi.
 requested_mode_ts = 0.0
 REQUESTED_MODE_TIMEOUT = 3.0
 
-# Depth hold didelegasikan ke ALT_HOLD ArduSub; depth_target hanya menggeser
-# setpoint lewat bias pada throttle. Dibatasi supaya tidak pernah bisa melawan
-# operator atau menyelam tak terkendali di kolam dangkal.
-#
-# ALT_HOLD ArduSub punya DEADZONE throttle (param THR_DZ, saat ini 100 PWM):
-# input dalam +-THR_DZ dari netral diartikan "tahan kedalaman sekarang", BUKAN
-# perintah naik/turun. MANUAL_CONTROL.z 0..1000 dipetakan ke 1100..1900 PWM,
-# jadi 1 unit z = 0.8 PWM dan deadzone 100 PWM = 125 unit z.
-#
-# Trial kolam 2026-08-08 membuktikan konsekuensinya: dengan LIMIT lama = 80
-# (setara HANYA 64 PWM), bias maksimum pun masih tenggelam di dalam deadzone,
-# sehingga perintah kedalaman TIDAK PERNAH sampai ke controller ALT_HOLD.
-# Di CSV terlihat error -1.74 m (4x titik saturasi) selama >1 detik dengan
-# depth rata sempurna di 1.89 m — wahana tidak bergerak sama sekali.
-#
-# Karena itu bias TIDAK naik proporsional dari nol, melainkan langsung
-# di-offset melewati deadzone begitu error melewati DEPTH_BIAS_EPSILON (lihat
-# apply_depth_hold_bias). Error nol tetap menghasilkan netral persis.
-DEPTH_BIAS_GAIN = 200.0   # unit z per meter error, DI ATAS offset deadzone
-DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
-
-# Offset minimum supaya perintah benar-benar keluar dari deadzone ALT_HOLD.
-# 130 > 125 (THR_DZ=100 PWM) dengan margin kecil terhadap pembulatan.
-# NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
-DEPTH_BIAS_DEADZONE = 130
-
-# Di bawah error ini bias dimatikan total (netral persis = ALT_HOLD menahan
-# kedalaman dengan PID-nya sendiri). Tanpa ambang ini, offset deadzone yang
-# besar akan membuat wahana terus bolak-balik melewati setpoint. Setengah
-# DEPTH_STEP: operator tidak akan pernah membidik lebih halus dari itu.
-DEPTH_BIAS_EPSILON = DEPTH_STEP / 2.0
-
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
-
-def update_depth_target_from_manual_heave(axes):
-    """Saat operator menggerakkan heave di depth-hold,
-    target depth mengikuti depth aktual sampai joystick dilepas.
-    """
-    global depth_target
-
-    if not depth_hold_active():
-        return
-
-    if abs(axes.get("heave", 0)) <= HEAVE_MANUAL_EPSILON:
-        return
-
-    current_depth = state["depth"]
-
-    with depth_lock:
-        depth_target = clamp_depth_target(current_depth, pool_depth)
 
 def _effective_requested_mode():
     """requested_mode kalau masih dalam jendela REQUESTED_MODE_TIMEOUT, else None.
@@ -254,63 +337,119 @@ def _effective_requested_mode():
     return requested_mode
 
 
-def depth_hold_active():
+def _current_pixhawk_mode():
+    """Mode ArduSub efektif saat ini: requested_mode selama belum kedaluwarsa
+    (lihat _effective_requested_mode), else state["mode"] yang benar-benar
+    terkonfirmasi HEARTBEAT. Tanpa fallback requested_mode, sesuatu yang
+    di-ON-kan tepat setelah ganti mode akan diam selama satu-dua tick pertama.
+    """
+    return _effective_requested_mode() or state["mode"]
+
+
+def depth_hold_mode_ok():
     """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
 
-    requested_mode ikut dipakai (selama belum kedaluwarsa, lihat
-    _effective_requested_mode) karena state["mode"] baru ter-update saat
-    HEARTBEAT berikutnya datang. Tanpa itu, penekanan gain_inc/gain_dec tepat
-    setelah ganti mode akan diabaikan diam-diam.
+    HANYA soal mode — bukan "depth-set sedang aktif". Saklar operator ada di
+    depth_hold_enabled, dan keduanya sengaja terpisah: mode tidak pernah
+    menyalakan depth-set, depth-set tidak pernah memindahkan mode.
 
-    ACRO sengaja TIDAK termasuk: di sana throttle netral bukan berarti tahan
-    kedalaman, jadi bias depth-hold hanya akan mendorong wahana tanpa umpan
-    balik apa pun yang menstabilkannya.
+    MANUAL/ALT_HOLD/POSHOLD sengaja TIDAK termasuk — lihat DEPTH_HOLD_MODES
+    di rov_modes.py untuk mode mana yang jadi syaratnya sekarang.
     """
-    return depth_hold_allowed(_effective_requested_mode() or state["mode"])
-
-
-def depth_hold_bias(error):
-    """Bias z untuk satu nilai error kedalaman (meter, positif = perlu turun).
-
-    Dipisah dari apply_depth_hold_bias() supaya bisa diuji tanpa state global.
-
-    Bentuknya BUKAN proporsional murni: ALT_HOLD ArduSub mengabaikan input di
-    dalam deadzone THR_DZ, jadi bias proporsional dari nol berarti semua error
-    kecil hilang tanpa jejak (dan error besar pun hilang kalau limit-nya lebih
-    kecil dari deadzone — persis bug trial 2026-08-08). Maka: di bawah
-    DEPTH_BIAS_EPSILON bias nol persis, di atasnya langsung melompat ke
-    DEPTH_BIAS_DEADZONE lalu bertambah proporsional.
-    """
-    if abs(error) < DEPTH_BIAS_EPSILON:
-        return 0.0
-
-    magnitude = DEPTH_BIAS_DEADZONE + abs(error) * DEPTH_BIAS_GAIN
-    magnitude = min(magnitude, DEPTH_BIAS_LIMIT)
-    return magnitude if error > 0 else -magnitude
+    return depth_hold_allowed(_current_pixhawk_mode())
 
 
 def apply_depth_hold_bias(mc, axes):
-    """Geser MANUAL_CONTROL.z ke arah depth_target saat ALT_HOLD.
+    """Geser MANUAL_CONTROL.z ke arah depth_target saat depth-set aktif.
 
-    Hanya berlaku kalau stik heave benar-benar netral — begitu operator
-    menyentuh stik, input manual menang mutlak. Di MANUAL/ACRO fungsi ini
-    selalu mengembalikan `mc` apa adanya.
+    Empat gerbang, semuanya harus terbuka (lihat depth_bias_engaged di
+    rov_modes.py untuk aturannya dalam bentuk yang bisa diuji):
+      1. operator sudah menekan SET  -> depth_target bukan None
+      2. operator sudah meng-ON-kan  -> depth_hold_enabled
+      3. mode ArduSub ada di DEPTH_HOLD_MODES (rov_modes.py)
+      4. stik heave netral           -> begitu operator menyentuh stik, input
+                                        manual menang mutlak
     """
-    if not depth_hold_active():
-        return mc
-    if abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON:
-        return mc
+    global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
 
     with depth_lock:
         target = depth_target
+        enabled = depth_hold_enabled
+
+    if not depth_bias_engaged(
+        enabled,
+        target,
+        _effective_requested_mode() or state["mode"],
+        axes.get("heave", 0),
+        HEAVE_MANUAL_EPSILON,
+    ):
+        _bias_active = False
+        # Buang EMA saat gerbang tertutup: begitu bias hidup lagi nanti
+        # (mis. depth-set di-ON-kan ulang), rate tidak boleh dihitung dari
+        # depth yang mungkin sudah lama dan sangat berbeda.
+        _depth_ema = None
+        _depth_ema_ts = None
+        return mc
+
+    now = time.time()
+    depth_now = state["depth"]
+
+    # EMA + turunan waktu untuk closing_rate (lihat DEPTH_BIAS_DAMPING di
+    # rov_pid.py). Sampel pertama sejak gerbang terbuka: seed EMA, rate=0 —
+    # tidak ada dt yang valid untuk diturunkan.
+    closing_rate = 0.0
+    if _depth_ema is None:
+        _depth_ema = depth_now
+        _depth_ema_ts = now
+    else:
+        dt = now - _depth_ema_ts
+        ema_lama = _depth_ema
+        _depth_ema += _DEPTH_RATE_ALPHA * (depth_now - _depth_ema)
+        _depth_ema_ts = now
+        if dt > 0:
+            rate = (_depth_ema - ema_lama) / dt
+            err_lama = target - ema_lama
+            # Mendekat = |error| mengecil = closing_rate POSITIF, terlepas
+            # dari arah target ada di atas atau di bawah depth sekarang.
+            if err_lama > 0:
+                closing_rate = rate
+            elif err_lama < 0:
+                closing_rate = -rate
 
     # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
-    bias = depth_hold_bias(target - state["depth"])
+    # HISTERESIS untuk menghindari limit cycle (naik-turun terus di sekitar
+    # setpoint). depth_bias_active() memakai _bias_active yang diperbarui di
+    # sini: begitu error kecil (< RELEASE) bias berhenti, dan bias-nya hanya
+    # menyala kembali saat error membesar (>= ENGAGE). Selisih antara keduanya
+    # adalah zona tenang tempat noise baro tidak lagi bisa trigger osilasi.
+    _bias_active = depth_bias_active(
+        target - state["depth"],
+        _bias_active
+    )
+    error = target - state["depth"]
+    bias = depth_hold_bias(error, _bias_active, closing_rate)
     if bias == 0.0:
+        # Beda dari "sudah dekat target, tidak perlu koreksi" (senyap, itu
+        # normal): ini KHUSUS kasus _bias_active True (histeresis bilang mau
+        # mengoreksi) tapi errornya melebihi DEPTH_BIAS_MAX_CORRECTION —
+        # operator perlu tahu kenapa depth-hold terlihat diam, bukan menebak
+        # tombolnya rusak. Lihat catatan DEPTH_BIAS_MAX_CORRECTION di rov_pid.py.
+        if _bias_active and abs(error) > DEPTH_BIAS_MAX_CORRECTION and now - _last_depth_diag >= 1.0:
+            _last_depth_diag = now
+            print(f"[DEPTH] target {target:.2f} m terlalu jauh (error {error:+.2f} m) — "
+                  f"dekati dulu pakai stik, depth-hold cuma menahan trim dekat")
         return mc
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
+
+    if now - _last_depth_diag >= 1.0:
+        _last_depth_diag = now
+        mentok = " MENTOK LIMIT" if abs(bias) >= DEPTH_BIAS_LIMIT - 0.5 else ""
+        print(f"[DEPTH] diag target={target:.2f} depth={state['depth']:.2f} "
+              f"err={target - state['depth']:+.3f} rate={closing_rate:+.3f} "
+              f"bias={bias:+.1f} z={out['z']}{mentok}")
+
     return out
 
 
@@ -337,12 +476,16 @@ heading_lock = threading.Lock()
 def poshold_engaged():
     """True kalau overlay heading-hold benar-benar boleh menulis ke r.
 
-    Syaratnya dua: operator memang meminta POSHOLD, DAN wahana ada di mode yang
-    menahan kedalaman. Kalau wahana ditarik keluar ALT_HOLD lewat saklar RC atau
-    GCS lain, overlay ikut mati sendiri — bukan diam-diam terus mengoreksi yaw
-    di MANUAL.
+    Syaratnya dua: operator memang meminta POSHOLD, DAN wahana ada di ALT_HOLD
+    (POSHOLD_BASE_MODE di rov_modes.py). Kalau wahana ditarik keluar ALT_HOLD
+    lewat saklar RC atau GCS lain, overlay ikut mati sendiri — bukan diam-diam
+    terus mengoreksi yaw di MANUAL.
+
+    Gerbangnya poshold_mode_ok(), BUKAN depth_hold_allowed(): yang kedua adalah
+    syarat bias depth-set (STABILIZE) dan tidak ada hubungannya dengan mode
+    dasar overlay ini.
     """
-    return poshold_active and depth_hold_allowed(_effective_requested_mode() or state["mode"])
+    return poshold_active and poshold_mode_ok(_current_pixhawk_mode())
 
 
 def apply_heading_hold(mc, axes):
@@ -391,6 +534,7 @@ def apply_heading_hold(mc, axes):
 # lebih bisa diprediksi: diam di tempat, dan di ALT_HOLD berarti tahan
 # kedalaman.
 JOYSTICK_SEND_INTERVAL = 0.05   # 20 Hz
+last_joystick_update = 0.0
 joystick_lock = threading.Lock()
 
 # Log axis per-iterasi membanjiri console Pi (20 baris/detik) dan memakan CPU
@@ -483,7 +627,10 @@ def send_telemetry():
     global _last_telem_log
 
     with depth_lock:
+        # null = operator belum menekan SET. GUI menampilkannya sebagai "—",
+        # bukan 0.00 m, supaya tidak terbaca seolah setpoint permukaan aktif.
         state["depth_target"] = depth_target
+        state["depth_hold"] = depth_hold_enabled
 
     # POSHOLD tidak terlihat di HEARTBEAT (ia berjalan di ALT_HOLD), jadi
     # INILAH satu-satunya cara GUI tahu overlay sedang hidup dan tab mana yang
@@ -497,10 +644,14 @@ def send_telemetry():
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
 
-    # Ikut dipantulkan supaya halaman Setup menampilkan nilai yang benar-benar
-    # aktif di wahana, bukan sekadar isi localStorage browser.
-    state["depth_default"] = default_depth_target
-    
+    # Gate otoritas untuk mission5 FSM (toggle autonomous/manual di GUI).
+    # HARUS kunci sendiri: dulu ini menulis ke state["mode"] dan menimpa pilot
+    # mode ArduSub dari HEARTBEAT 10x/detik. Akibatnya requested_mode tak pernah
+    # terkonfirmasi, dan sesudah REQUESTED_MODE_TIMEOUT semua gerbang
+    # depth_hold_allowed() jatuh ke "manual" — depth-set dan overlay POSHOLD
+    # berhenti diam-diam persis 3 detik setelah masuk ALT_HOLD.
+    # Pola yang sama dipakai autonomy/rov_link.py dan server/server.js.
+    state["control_mode"] = current_control_mode
     state["thruster_gain"] = thruster_gain * 100.0
     send_to_gui(state)
 
@@ -556,9 +707,10 @@ def command_listener():
     global mavlink_stream_requested_at
     global pool_depth
     global depth_offset
-    global default_depth_target
+    global depth_hold_enabled
     global poshold_active
     global heading_target
+    global shape_reset_requested
     global thruster_gain
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
@@ -631,9 +783,9 @@ def command_listener():
                     print(f"[PILOT] Unknown mode: {value}")
                     continue
 
-                # ACRO tidak ada di semua build/frame ArduSub. mode_mapping()
-                # berasal dari firmware yang benar-benar terpasang, jadi ini
-                # satu-satunya cek yang bisa dipercaya.
+                # Tidak semua mode ada di semua build/frame ArduSub.
+                # mode_mapping() berasal dari firmware yang benar-benar
+                # terpasang, jadi ini satu-satunya cek yang bisa dipercaya.
                 mode_mapping = master.mode_mapping() or {}
 
                 if pixhawk_mode not in mode_mapping:
@@ -658,15 +810,11 @@ def command_listener():
                 with heading_lock:
                     heading_target = None
 
-                # Hanya mode yang benar-benar menahan kedalaman yang perlu
-                # setpoint awal. Di MANUAL/ACRO depth_target tidak dipakai.
-                #
-                # Setpoint-nya nilai TETAP (default_depth_target), bukan
-                # kedalaman saat ini: menekan tombol mode = "turun ke kedalaman
-                # kerja", perilaku yang sama tiap kali. Konsekuensinya kalau
-                # ditekan saat mengapung di permukaan wahana langsung menyelam —
-                # itu memang yang diinginkan, tapi berarti tombol ini tidak
-                # boleh ditekan di darat.
+                # CATATAN: perpindahan mode sengaja TIDAK menyentuh depth_target
+                # maupun depth_hold_enabled. Menuju setpoint tersimpan adalah
+                # fitur terpisah (command depth_set / depth_hold) yang di-arm
+                # operator sendiri — lihat DEPTH_HOLD_MODES di rov_modes.py
+                # untuk mode mana yang jadi syarat bias-nya sekarang.
 
                 if depth_hold_allowed(pixhawk_mode):
                     was_depth_hold = (
@@ -696,14 +844,37 @@ def command_listener():
                             f"[DEPTH] Hold target dipertahankan = "
                             f"{depth_target:.2f} m"
                         )
+                # Pindah ke depth-hold dengan error BESAR + depth-set ON =
+                # penyelaman mendadak. Peringatkan ke operator dan matikan saklar.
+                # Ini mencegah kejutan: operator pindah balik dari Manual ke Alt
+                # Hold saat wahana di permukaan, saklar masih ON dari kedalaman
+                # kerja sebelumnya (0.5 m) → bias langsung dorong penuh tanpa
+                # orang menekan apa pun.
+                if (
+                    depth_hold_mode_ok() and
+                    depth_hold_enabled and
+                    depth_target is not None and
+                    abs(depth_target - state["depth"]) > 0.3
+                ):
+                    with depth_lock:
+                        depth_hold_enabled = False
+                    send_to_gui({
+                        "type": "event",
+                        "text": (
+                            f"Depth-set OFF — error {abs(depth_target - state['depth']):.2f} m "
+                            f"terlalu besar, tahan dulu dengan stik"
+                        ),
+                        "level": "warn",
+                    })
+                    print(
+                        f"[DEPTH] Depth-set OFF — error besar saat pindah "
+                        f"ke depth-hold"
+                    )
+
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if poshold_active:
                     print(" POSHOLD    : heading hold AKTIF (posisi x/y TIDAK ditahan)")
-                if is_risky_mode(pixhawk_mode):
-                    msg = warning_for_mode(pixhawk_mode)
-                    if msg:
-                        print(f" !! {msg}")
                 print("====================================")
 
             elif name == "stop":
@@ -711,12 +882,23 @@ def command_listener():
                 print("[MAV] STOP -> DISARM")
                 with joystick_lock:
                     joystick.update(AXIS_NEUTRAL)
+                # Axis mentah sudah netral, tapi joystick_sender menyimpan
+                # nilai TER-SHAPE sendiri yang masih akan melandai turun.
+                # E-Stop harus memotongnya, bukan menunggu ramp selesai.
+                shape_reset_requested = True
                 # E-Stop tidak boleh meninggalkan overlay yang masih menulis ke
                 # r: axis dinetralkan di sini, dan koreksi heading akan
                 # mengisinya kembali pada tick berikutnya.
                 poshold_active = False
                 with heading_lock:
                     heading_target = None
+                # Depth-set juga dimatikan: E-Stop berarti operator ingin semua
+                # yang menulis ke thruster berhenti, dan setelah re-arm wahana
+                # tidak boleh langsung berenang sendiri ke setpoint lama.
+                # depth_target sengaja DIPERTAHANKAN — kedalaman kerja yang
+                # sudah direkam masih berguna, operator tinggal menekan ON lagi.
+                with depth_lock:
+                    depth_hold_enabled = False
                 send_arm_disarm(False)
 
             elif name == "light":
@@ -739,42 +921,107 @@ def command_listener():
                     "level": "ok",
                 })
 
-            elif name in ("gain_inc", "gain_dec"):
+            elif name == "depth_set":
+
+                # Tombol SET: rekam kedalaman SAAT INI sebagai setpoint.
+                #
+                # Sengaja tidak menuntut armed maupun mode tertentu — merekam
+                # sebuah angka tidak menggerakkan apa pun, dan operator memang
+                # sering ingin mengunci kedalaman kerja dulu (mis. saat masih
+                # meluncur di MANUAL) baru menyalakannya belakangan.
+                if not _depth_cmd_rate.allow("depth_set", time.time()):
+                    continue
+
+                # Smoothing: sampel baro bergetar ±0.02–0.05 m. Rata-rata
+                # menghilangkan noise tanpa lag berarti (buffer 0.1 s). Operator
+                # akan melihat angka yang stabil di GUI sebelum tekan SET.
+                global _depth_samples
+                smoothed = smooth_depth(_depth_samples, alpha=0.7)
+
+                with depth_lock:
+                    # Dijepit ke [0, pool_depth]: pembacaan baro bisa meleset di
+                    # dekat dasar, dan setpoint di luar kolam membuat bias
+                    # menekan wahana ke dasar tanpa henti.
+                    depth_target = clamp_depth_target(smoothed, pool_depth)
+                    shown = depth_target
+                    global _bias_active
+                    _bias_active = False  # Reset histeresis saat SET
+                print(f"[DEPTH] Set = {shown:.2f} m")
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Depth di-set = {shown:.2f} m",
+                    "level": "ok",
+                })
+
+            elif name == "depth_hold":
+
+                # Saklar ON/OFF depth-set. value bool eksplisit dari tombol GUI,
+                # atau None dari tombol gamepad (= toggle).
+                #
+                # OFF adalah operasi yang WAJIB berhasil — mematikan sesuatu tidak
+                # boleh pernah tertahan rate limiter. Rate limit hanya untuk ON,
+                # yang memicu aksi penting. OFF hanya membaca dan matikan state.
+                with depth_lock:
+                    want = (not depth_hold_enabled) if value is None else bool(value)
+                    target_now = depth_target
+
+                # OFF selalu diterima tanpa syarat.
+                if not want:
+                    with depth_lock:
+                        depth_hold_enabled = False
+                    print("[DEPTH] Depth-set OFF")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth-set OFF",
+                        "level": "ok",
+                    })
+                    continue
+
+                # ON saja yang dikontrol rate limiter.
+                if not _depth_cmd_rate.allow("depth_hold", time.time()):
+                    continue
+
+                if target_now is None:
+                    print("[DEPTH] ON diabaikan — belum ada setpoint")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth-set belum di-set — tekan SET dulu",
+                        "level": "warn",
+                    })
+                    continue
 
                 # Disarmed -> ArduSub mengabaikan MANUAL_CONTROL sepenuhnya,
-                # jadi menggeser depth_target di sini hanya membuat GUI
-                # terlihat "aman" padahal wahana tidak akan bergerak sama
-                # sekali. Dicek terpisah dari depth_hold_active() supaya
-                # pesannya jelas: masalahnya arming, bukan mode.
+                # jadi menyalakan depth-set di sini hanya membuat GUI terlihat
+                # "menahan" padahal wahana tidak menerima apa pun.
                 if not state.get("armed"):
-                    print(f"[DEPTH] {name} diabaikan — vehicle belum armed")
+                    print("[DEPTH] ON diabaikan — vehicle belum armed")
                     send_to_gui({
                         "type": "event",
-                        "text": "Depth set diabaikan — vehicle belum armed",
+                        "text": "Depth-set diabaikan — vehicle belum armed",
                         "level": "warn",
                     })
                     continue
 
-                # Pakai requested_mode juga: state["mode"] baru ter-update saat
-                # HEARTBEAT berikutnya, jadi kalau hanya mengandalkan itu maka
-                # penekanan tepat setelah ganti mode hilang tanpa jejak.
-                if not depth_hold_active():
-                    print(f"[DEPTH] {name} diabaikan — mode bukan depth hold")
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth set diabaikan — vehicle tidak dalam mode depth hold",
-                        "level": "warn",
-                    })
-                    continue
-
-                if not _gain_rate.allow("depth_target", time.time()):
-                    continue
-
-                step = DEPTH_STEP if name == "gain_inc" else -DEPTH_STEP
                 with depth_lock:
-                    depth_target = clamp_depth_target(depth_target + step, pool_depth)
-                    shown = depth_target
-                print(f"[DEPTH] Target = {shown:.2f} m")
+                    depth_hold_enabled = True
+                print(f"[DEPTH] Depth-set ON -> {target_now:.2f} m")
+
+                # Mode yang salah TIDAK menolak permintaan, hanya memperingatkan:
+                # inilah yang membuat depth-set benar-benar lepas dari mode.
+                # Saklarnya tetap menyala, dan begitu operator pindah ke Alt Hold
+                # bias langsung bekerja tanpa perlu menekan ON lagi.
+                if depth_hold_mode_ok():
+                    send_to_gui({
+                        "type": "event",
+                        "text": f"Depth-set ON — menahan {target_now:.2f} m",
+                        "level": "ok",
+                    })
+                else:
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Depth-set ON tapi mode bukan Alt Hold — belum akan menahan",
+                        "level": "warn",
+                    })
 
             elif name == "pool_depth":
 
@@ -789,29 +1036,64 @@ def command_listener():
 
                 # Jepit ULANG target yang sedang berjalan. Kalau operator
                 # memperkecil pool depth saat target sudah lebih dalam, target
-                # harus ikut turun sekarang — bukan menunggu penekanan
-                # gain_inc/gain_dec berikutnya.
+                # harus ikut turun sekarang — bukan menunggu penekanan SET
+                # berikutnya. None dibiarkan None: "belum di-set" tidak boleh
+                # berubah jadi setpoint 0 m gara-gara halaman Setup disimpan.
                 with depth_lock:
-                    depth_target = clamp_depth_target(depth_target, pool_depth)
+                    if depth_target is not None:
+                        depth_target = clamp_depth_target(depth_target, pool_depth)
                     shown = depth_target
+                shown_txt = "belum di-set" if shown is None else f"{shown:.2f} m"
                 print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
-                      f"(target dijepit ke {shown:.2f} m)")
+                      f"(target: {shown_txt})")
 
-            elif name == "depth_default":
+            elif name == "axis_shape":
 
-                # Setpoint yang dipasang otomatis saat MASUK depth hold.
-                # Sengaja TIDAK menggeser depth_target yang sedang berjalan:
-                # mengubah angka di halaman Setup tidak boleh memindahkan
-                # wahana yang sedang menyelam. Berlaku pada perpindahan mode
-                # berikutnya.
-                depth_m = valid_depth_target(value)
-                if depth_m is None:
-                    print(f"[DEPTH] nilai depth_default tidak valid: {value!r}")
-                    continue
+                # Tuning live skala/laju axis tanpa SSH + restart. Tidak ada UI
+                # untuk ini; dipakai dari terminal laptop saat trial kolam,
+                # memakai pola nc yang sudah didokumentasikan di SETUP.md:
+                #
+                #   echo '{"name":"axis_shape","value":{"sway":{"scale":0.5}}}' \
+                #     | nc -u -w1 192.168.2.2 14550
+                #
+                # Update PARSIAL: field yang tidak disebut dibiarkan apa adanya.
+                applied, rejects = apply_shape_updates(value)
 
-                default_depth_target = depth_m
-                print(f"[DEPTH] Target default = {default_depth_target:.2f} m "
-                      f"(berlaku saat masuk depth hold berikutnya)")
+                for field, reason in rejects:
+                    print(f"[SHAPE] DITOLAK {field}: {reason}")
+
+                for axis, (rise, fall, scale) in applied.items():
+                    print(f"[SHAPE] {axis}: rise={rise:.0f}/s fall={fall:.0f}/s "
+                          f"scale={scale:.2f}")
+
+                if not applied and not rejects:
+                    print(f"[SHAPE] tidak ada yang diubah: {value!r}")
+
+            elif name == "thruster_gain_inc":
+
+                gain = min(100.0, thruster_gain * 100.0 + 10.0)
+                thruster_gain = gain / 100.0
+
+                print(f"[THRUSTER GAIN] +10% -> {gain:.0f}%")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Thruster Gain = {gain:.0f}%",
+                    "level": "ok",
+                })
+
+            elif name == "thruster_gain_dec":
+
+                gain = max(0.0, thruster_gain * 100.0 - 10.0)
+                thruster_gain = gain / 100.0
+
+                print(f"[THRUSTER GAIN] -10% -> {gain:.0f}%")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Thruster Gain = {gain:.0f}%",
+                    "level": "ok",
+                })
 
             elif name == "pid":
 
@@ -837,30 +1119,6 @@ def command_listener():
                         target=apply_pid_gains, args=(writes,), daemon=True
                     ).start()
 
-            elif name == "thruster_gain_inc":
-                gain = min(100.0, thruster_gain * 100.0 + 10.0)
-                thruster_gain = gain / 100.0
-
-                print(f"[THRUSTER GAIN] +10% -> {gain:.0f}%")
-
-                send_to_gui({
-                    "type": "event",
-                    "text": f"Thruster Gain = {gain:.0f}%",
-                    "level": "ok",
-                })
-
-            elif name == "thruster_gain_dec":
-                gain = max(0.0, thruster_gain * 100.0 - 10.0)
-                thruster_gain = gain / 100.0
-
-                print(f"[THRUSTER GAIN] -10% -> {gain:.0f}%")
-
-                send_to_gui({
-                    "type": "event",
-                    "text": f"Thruster Gain = {gain:.0f}%",
-                    "level": "ok",
-                })
-
             elif name == "thruster_config":
 
                 motors = msg.get("motors", {})
@@ -882,6 +1140,7 @@ def command_listener():
                     args=(motors,),
                     daemon=True
                 ).start()
+
             elif name == "motor_test":
                 # server.js kirim motor/throttle/duration/direction sebagai
                 # field top-level (bukan di dalam "value" — motor_test tidak
@@ -926,8 +1185,8 @@ def command_listener():
 
             elif name == "param_set":
                 # value = {"name": ..., "value": ..., "type": <MAV_PARAM_TYPE>}
-                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle), sama
-                # seperti gerbang ACRO — di sini yang dijaga hanya validitas.
+                # Gerbang konfirmasi ada di sisi GUI (halaman Vehicle) — di
+                # sini yang dijaga hanya validitas.
                 if not isinstance(value, dict):
                     print(f"[PARAM] payload param_set tidak valid: {value!r}")
                     continue
@@ -1011,14 +1270,6 @@ def command_listener():
                     joystick[name] = new_value
                     last_joystick_update = time.time()
 
-                # Saat operator menggerakkan heave di ALT_HOLD/POSHOLD,
-                # target mengikuti depth aktual ROV.
-                if name == "heave":
-                    with joystick_lock:
-                        current_axes = dict(joystick)
-
-                    update_depth_target_from_manual_heave(current_axes)
-                    
             elif name in GUI_ONLY_COMMANDS:
                 # Murni urusan dashboard, tidak ada padanannya di wahana.
                 pass
@@ -1276,7 +1527,15 @@ def joystick_sender():
     axis, sedangkan ArduSub mengharapkan z pada 0..1000 dengan 500 = netral.
     Mengirim heave mentah sebagai z membuat "diam" berarti MENYELAM PENUH —
     termasuk saat E-Stop dan saat link GUI putus.
+
+    Loop ini juga pemegang STATE shaping (lihat shape_axes di rov_axes.py):
+    modul itu sengaja murni, jadi nilai axis ter-shape sebelumnya disimpan di
+    sini — sejajar dengan last_joystick_update yang sudah ada.
     """
+    global shape_reset_requested
+
+    shaped = dict(AXIS_NEUTRAL)
+
     while True:
         # Link Pixhawk sedang putus/menyambung ulang — tidak ada tujuan kirim.
         if master is None:
@@ -1287,49 +1546,98 @@ def joystick_sender():
             axes = dict(joystick)
             last_update = last_joystick_update
 
+        # Ramp TIDAK BOLEH menunda perintah berhenti. E-Stop menetralkan axis
+        # lalu disarm; tanpa reset di sini, nilai ter-shape masih meluncur
+        # turun selama ~0,2 detik sesudahnya. Disarm memang sudah mematikan
+        # thruster, tapi keselamatan tidak boleh bergantung pada satu lapis.
+        if shape_reset_requested:
+            shape_reset_requested = False
+            shaped = dict(AXIS_NEUTRAL)
+
+        shaped = shape_axes(shaped, axes, JOYSTICK_SEND_INTERVAL)
+
         # Fail-safe: GUI diam terlalu lama (crash / joystick dicabut / link
         # putus) -> tahan posisi netral, jangan ulangi input terakhir.
-        mc, stale = resolve_manual_packet(axes, last_update, time.time())
+        mc, stale = resolve_manual_packet(shaped, last_update, time.time())
 
         # Beri tahu dashboard bahwa yang mengalir sekarang adalah netral buatan
         # Pi, bukan perintah operator.
         state["cmd_link"] = "stale" if stale else "ok"
 
+        # Alasan yang sama seperti E-Stop: saat fail-safe, netral harus SEKETIKA.
+        # resolve_manual_packet sudah mengirim netral ke FC, reset di sini
+        # menjaga agar tick berikutnya juga tidak melanjutkan ramp dari nilai
+        # lama begitu link kembali.
+        if stale:
+            shaped = dict(AXIS_NEUTRAL)
+
         # Saat stale, axes yang dipakai juga harus netral supaya bias
-        # depth-hold tidak dihitung dari input basi.
-        eff_axes = AXIS_NEUTRAL if stale else axes
+        # depth-hold tidak dihitung dari input basi. Saat tidak stale yang
+        # dipakai nilai TER-SHAPE, bukan mentah: gerbang "operator sedang
+        # memegang stik" (HEAVE/YAW_MANUAL_EPSILON) harus menilai apa yang
+        # benar-benar diperintahkan ke thruster, bukan niat mentahnya.
 
-        # Terapkan Thruster Gain hanya pada perintah manual joystick.
-        # Gain 0-100% -> faktor 0.0-1.0.
+        eff_axes = AXIS_NEUTRAL if stale else shaped
+
+        # =========================
+        # THRUSTER GAIN
+        # =========================
         gain = thruster_gain
-        
-
 
         scaled_axes = {
             "surge": int(round(eff_axes.get("surge", 0) * gain)),
             "sway": int(round(eff_axes.get("sway", 0) * gain)),
-            "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
             "heave": int(round(eff_axes.get("heave", 0) * gain)),
+            "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
         }
 
-        print(
-            f"[GAIN DEBUG] gain={gain:.2f} "
-            f"axes={eff_axes} "
-            f"scaled={scaled_axes}"
+        # Heave dipetakan ulang supaya melewati dead band FC (lihat
+        # heave_skip_deadzone di rov_axes.py). Besar lompatannya tergantung MODE:
+        # di ALT_HOLD ada THR_DZ (deadzone input pilot) DI ATAS dead band motor,
+        # di mode lain hanya dead band motor. Memakai angka ALT_HOLD di MANUAL
+        # berarti sentuhan stik sekecil apa pun langsung ~20% dorongan.
+        #
+        # Gerbangnya poshold_mode_ok() (= mode ArduSub ALT_HOLD), BUKAN
+        # depth_hold_mode_ok(): yang terakhir sekarang berarti STABILIZE, dan
+        # THR_DZ tidak berlaku di sana.
+        #
+        # Konsekuensi yang disengaja: thruster_gain jadi kurang berpengaruh pada
+        # heave, karena bagian travel yang dulu dipotong gain justru bagian yang
+        # memang tidak pernah sampai ke FC. Gain kecil sekarang berarti "naik
+        # turun pelan", bukan lagi "naik turun tidak sama sekali".
+        skip = (
+            HEAVE_SKIP_ALT_HOLD
+            if poshold_mode_ok(_current_pixhawk_mode())
+            else HEAVE_SKIP_MANUAL
+        )
+        heave_out = heave_skip_deadzone(
+            scaled_axes["heave"], skip, epsilon=HEAVE_MANUAL_EPSILON,
         )
 
-        # Buat ulang MANUAL_CONTROL dari axis yang sudah dikalikan gain.
-        # Heave tetap dikonversi oleh rov_axes.py:
-        # heave 0 -> z 500 (netral).
+        # Buat ulang MANUAL_CONTROL berdasarkan axis
+        # yang sudah dikalikan thruster gain.
         mc = axes_to_manual_control(
             surge=scaled_axes["surge"],
             sway=scaled_axes["sway"],
             yaw=scaled_axes["yaw"],
-            heave=scaled_axes["heave"],
+            heave=heave_out,
         )
 
-        mc = apply_depth_hold_bias(mc, scaled_axes)
-        mc = apply_heading_hold(mc, scaled_axes)
+        # Depth hold dan heading hold bekerja SETELAH gain untuk `mc` (dorongan
+        # nyata ke thruster) — TAPI gerbang "operator sedang memegang stik" di
+        # kedua fungsi itu (HEAVE_MANUAL_EPSILON/YAW_MANUAL_EPSILON) sengaja
+        # diberi `eff_axes`, BUKAN `scaled_axes`. Itu niat pilot, bukan
+        # kekuatan aktual ke thruster: kalau thruster_gain diturunkan jauh
+        # (mis. 20%), stik yang didorong penuh (100) jadi cuma 20 setelah
+        # dikalikan gain — pas di ambang epsilon atau di bawahnya — dan
+        # gerbang bisa gagal mendeteksi stik yang sebenarnya sedang dipegang.
+        mc = apply_depth_hold_bias(mc, eff_axes)
+
+        # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
+        # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
+        # mudah dibaca. Saat stale, axes netral yang dipakai sehingga overlay
+        # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
+        mc = apply_heading_hold(mc, eff_axes)
 
         try:
             with master_lock:
@@ -1471,6 +1779,7 @@ def main():
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
+    threading.Thread(target=qgc_command_receiver, daemon=True).start()
 
     last_send = 0
     last_hb = 0
@@ -1518,6 +1827,7 @@ def main():
 
         last_rx = now
         mtype = msg.get_type()
+        forward_mavlink_to_qgc(msg)
 
         # MAVLink Inspector (halaman Analyze). Sengaja PALING ATAS supaya
         # Inspector melihat message apa adanya — termasuk yang tidak punya
@@ -1557,6 +1867,14 @@ def main():
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
             prev_attitude_ts = now_ts
+
+        # --------------------------------
+        # LOCAL_POSITION_NED: estimasi posisi EKF (utara/timur, meter).
+        # Sudah mengalir lewat MAV_DATA_STREAM_ALL, cuma belum pernah dibaca.
+        # --------------------------------
+        elif mtype == "LOCAL_POSITION_NED":
+            state["pos_n"] = float(msg.x)
+            state["pos_e"] = float(msg.y)
 
         # --------------------------------
         # PARAM_VALUE: tabel param (halaman Vehicle) + verifikasi param_set.
@@ -1609,6 +1927,12 @@ def main():
                 # 0 saat ROV di-arm.
                 state["depth"] = max(0.0, _raw_depth - depth_offset)
 
+                # Isi buffer sampel untuk SET smoothing (lihat depth_set handler).
+                global _depth_samples
+                _depth_samples.append(state["depth"])
+                if len(_depth_samples) > _DEPTH_SAMPLE_BUFFER_SIZE:
+                    _depth_samples.pop(0)
+
         # --------------------------------
         # SERVO_OUTPUT_RAW: PWM thruster vertikal (T3/T4/T5 = heave)
         # untuk CSV tuning depth-hold di halaman Telemetry.
@@ -1618,16 +1942,46 @@ def main():
             if vals:
                 state["thruster_vertical_pwm"] = int(sum(vals) / len(vals))
 
+            # T6 = lateral/sway, T1/T2 = surge+yaw. Dulu dibuang di sini padahal
+            # SERVO_OUTPUT_RAW sudah diminta 10 Hz (lihat connect_pixhawk) —
+            # akibatnya tidak ada satu pun catatan PWM thruster horizontal di
+            # disk, dan drift menyamping saat stik netral jadi tidak bisa
+            # didiagnosis sama sekali. Ikut mengalir ke baris [SEND] 1 Hz.
+            #
+            # 0 berarti "FC tidak mengirim channel itu", bukan "thruster diam":
+            # thruster yang diam ada di sekitar SERVOn_TRIM (1500), bukan 0.
+            state["thruster_lateral_pwm"] = int(msg.servo6_raw or 0)
+            state["thruster_surge_pwm"] = [
+                int(msg.servo1_raw or 0), int(msg.servo2_raw or 0),
+            ]
+
         # --------------------------------
-        # PID_TUNING: P/I/D depth-hold (axis ACCZ = PSC_ACCZ, controller
-        # vertikal ArduSub) untuk CSV tuning. Diam kalau PID_TUNING_MASK
-        # belum menyalakan bit ACCZ di FC — bukan error, state tetap 0.0.
+        # PID_TUNING: P/I/D per axis untuk CSV tuning + diagnosa offline.
+        # Diam per axis kalau bit-nya di GCS_PID_MASK belum menyala di FC —
+        # bukan error, field itu tetap 0.0.
+        #
+        # ROLL/PITCH ditambahkan setelah trial 15 Agu 2026 (GCS_PID_MASK
+        # dinaikkan dari 8 ke 15): sebelumnya attitude loop cuma terlihat
+        # LIVE di halaman Analyze (maybe_stream_mavlink), tidak pernah masuk
+        # hydroships*.log — jadi tidak bisa dianalisis offline setelah trial
+        # selesai. ACCZ tetap dipetakan ke pid_p_out/i/d_out (nama lama,
+        # dipakai CSV tuning depth-hold yang sudah ada); ROLL/PITCH dapat
+        # field terpisah supaya tidak menimpa itu.
         # --------------------------------
         elif mtype == "PID_TUNING":
-            if getattr(msg, "axis", None) == mavutil.mavlink.PID_TUNING_ACCZ:
+            axis = getattr(msg, "axis", None)
+            if axis == mavutil.mavlink.PID_TUNING_ACCZ:
                 state["pid_p_out"] = float(msg.P)
                 state["pid_i_out"] = float(msg.I)
                 state["pid_d_out"] = float(msg.D)
+            elif axis == mavutil.mavlink.PID_TUNING_ROLL:
+                state["pid_roll_p_out"] = float(msg.P)
+                state["pid_roll_i_out"] = float(msg.I)
+                state["pid_roll_d_out"] = float(msg.D)
+            elif axis == mavutil.mavlink.PID_TUNING_PITCH:
+                state["pid_pitch_p_out"] = float(msg.P)
+                state["pid_pitch_i_out"] = float(msg.I)
+                state["pid_pitch_d_out"] = float(msg.D)
 
         # --------------------------------
         # HEARTBEAT: mode dan armed
@@ -1639,7 +1993,25 @@ def main():
                 pass
 
             base_mode = msg.base_mode
+            was_armed = state["armed"]
             state["armed"] = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+            # Disarm dari JALUR MANA PUN mematikan depth-set: tombol DISARM,
+            # failsafe FC, saklar RC, atau GCS lain. Handler `stop` sudah
+            # menanganinya untuk E-Stop, tapi tanpa cek transisi di sini
+            # depth_hold_enabled tetap True selama wahana disarm — dan begitu
+            # di-arm ulang wahana langsung berenang sendiri ke setpoint lama
+            # tanpa operator menekan apa pun. Itu persis kejutan yang hendak
+            # dihilangkan oleh tombol ON/OFF ini.
+            #
+            # depth_target sengaja DIPERTAHANKAN (sama seperti handler `stop`):
+            # kedalaman kerja yang sudah direkam masih berguna, operator tinggal
+            # menekan ON lagi setelah re-arm.
+            if was_armed and not state["armed"]:
+                with depth_lock:
+                    if depth_hold_enabled:
+                        globals()["depth_hold_enabled"] = False
+                        print("[DEPTH] Depth-set OFF — vehicle disarm")
 
             # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
             if requested_mode is not None and state["mode"] == requested_mode:

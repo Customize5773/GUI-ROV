@@ -667,10 +667,12 @@ function send(obj) {
   log(`Tidak terkirim (koneksi terputus): ${obj.name || obj.type}`, "err");
   return false;
 }
+
 function sendCmd(name, value, quiet = false) {
   send({ type: "cmd", name, value });
   if (!quiet) log(`CMD ${name} = ${value}`);
 }
+
 function sendPacket(packet, quiet = false) {
   if (!packet) return;
 

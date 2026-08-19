@@ -10,6 +10,7 @@ export function setServices({ log, sendCmd, send }) {
   if (send) _send = send;
 }
 export function log(msg, level = "") { _log(msg, level); }
+
 export function sendCmd(name, value) { _sendCmd(name, value); }
 /* kirim pesan WebSocket mentah (mis. {type:"record_start"}). Berbeda dari sendCmd:
    TIDAK dibungkus type:"cmd", jadi tidak pernah diteruskan ke UDP/ROV. */
