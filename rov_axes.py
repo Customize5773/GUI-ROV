@@ -112,7 +112,11 @@ NEUTRAL = axes_to_manual_control(**AXIS_NEUTRAL)
 AXIS_SHAPE = {
     "surge": (1400.0, 2800.0, 1.0),
     "sway": (850.0, 2800.0, 0.6),
-    "yaw": (1400.0, 2800.0, 1.0),
+    # yaw naik secepat turunnya: trial 19 Agu 2026 melaporkan "yaw respon
+    # delay". 1400/s = 0,71 detik ke penuh, dan yaw bukan penyumbang goyang
+    # roll/pitch (itu sway dan surge), jadi ramp lambat di sini membeli
+    # kenyamanan yang tidak dibutuhkan sambil membayar rasa delay.
+    "yaw": (2800.0, 2800.0, 1.0),
     "heave": (1800.0, 3000.0, 1.0),
 }
 

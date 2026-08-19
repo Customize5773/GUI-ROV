@@ -78,6 +78,12 @@ POSHOLD_MODE = "poshold"
 # ArduSub sendiri di mode itu, depth-set kini dipasangkan ke STABILIZE.
 DEPTH_HOLD_MODES = frozenset({"STABILIZE"})
 
+# Mode ArduSub tempat overlay POSHOLD menumpang. SENGAJA BUKAN DEPTH_HOLD_MODES:
+# itu syarat bias depth-set (kini STABILIZE), ini syarat overlay heading-hold
+# (ALT_HOLD). Dulu keduanya dipakai lewat satu predikat yang sama, jadi begitu
+# DEPTH_HOLD_MODES dipersempit ke STABILIZE, gerbang POSHOLD ikut mati diam-diam.
+POSHOLD_BASE_MODE = PILOT_MODE_MAP[POSHOLD_MODE]
+
 
 def resolve_pilot_mode(name):
     """Terjemahkan nama mode dari GUI ke nama mode ArduSub.
@@ -110,6 +116,15 @@ def depth_hold_allowed(mode):
     `mode` adalah nama ArduSub (mis. dari HEARTBEAT atau requested_mode).
     """
     return mode in DEPTH_HOLD_MODES
+
+
+def poshold_mode_ok(mode):
+    """True kalau overlay heading-hold boleh menulis ke MANUAL_CONTROL.r di `mode`.
+
+    Syarat MODE saja — permintaan operator diperiksa poshold_active di agent.
+    Sengaja terpisah dari depth_hold_allowed(): lihat POSHOLD_BASE_MODE.
+    """
+    return mode == POSHOLD_BASE_MODE
 
 
 def depth_bias_engaged(enabled, target, mode, heave, heave_epsilon):
