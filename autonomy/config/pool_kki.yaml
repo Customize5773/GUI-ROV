@@ -19,6 +19,11 @@ pool:
   # depth 0.70 → HOOK_DEPTH 0.25, DEPTH_TARGET_BOTTOM 0.45
   # Inilah gunanya diturunkan: kedalaman arena baru diketahui hari-H.
 
+# ⚠ ARENA BELUM PASTI 5×5 vs 10×10 — cek grup peserta/panitia sebelum lomba.
+# Diagram panitia melabeli sisi kolam "10m (5m)"; teks Guidebook L43 cuma bilang
+# 5×5 m. Timeout & speed di bawah SUDAH dilonggarkan supaya aman dipakai di
+# kedua kemungkinan sampai ada konfirmasi resmi — sempitkan lagi begitu pasti.
+
 # ── Heading tiap sisi kolam ───────────────────────────────────────────────────
 # ⚠ KALIBRASI DI ARENA. Hook diacak ke sisi A/B/C/D (Guidebook L46), jadi keempatnya
 # harus benar — beda dgn kolam latihan yang cuma punya satu sisi.
@@ -29,15 +34,15 @@ wall_heading:
   C: 0
   D: 180
 
-# ── Timeout — kembali ke jarak 5 m (default mission5.py) ──────────────────────
+# ── Timeout — dilonggarkan, aman utk transit 5 m ATAU 10 m (lihat ⚠ di atas) ──
 timeouts:
-  redive: 15.0
-  m5_dock: 25.0
-  fallback: 30.0
+  redive: 20.0      # default mission5.py 15.0
+  m5_dock: 35.0     # default mission5.py 25.0
+  fallback: 40.0    # default mission5.py 30.0
 
-# ── Kecepatan jelajah — ruang penuh, kembali ke default ───────────────────────
+# ── Kecepatan jelajah — sedikit lebih pelan, jaga ruang pengereman di kedua kemungkinan ─
 speed:
-  surge: 35
+  surge: 30         # default mission5.py 35
 
 hook_docking:
-  approach_speed: 20
+  approach_speed: 17   # default mission5.py 20

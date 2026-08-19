@@ -92,6 +92,18 @@ function isAllowedCamHost(host) {
   return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
+// Satu koneksi upstream per URL kamera fisik, di-share ke semua klien yang
+// memintanya (halaman Control, kedua cell Camera, dst) — mencegah N klien =
+// N koneksi ke kamera (kamera murah/mjpg-streamer berat kalau harus
+// re-encode per klien, itu penyebab lag saat Start Stream diklik).
+const camStreams = new Map(); // key -> { clients: Set<res>, statusCode, headers, up }
+
+function camStreamKey(target) {
+  const t = new URL(target);
+  t.searchParams.delete("_t"); // satu-satunya cache-bust param yang dipakai client
+  return t.toString();
+}
+
 const httpServer = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split("?")[0]);
 
@@ -115,18 +127,53 @@ const httpServer = http.createServer((req, res) => {
       return res.end("host kamera tidak diizinkan");
     }
 
-    const mod = t.protocol === "https:" ? https : http;
-    const up = mod.get(target, (upRes) => {
-      res.writeHead(upRes.statusCode || 502, upRes.headers);
-      upRes.pipe(res);
-    });
+    const key = camStreamKey(target);
+    let entry = camStreams.get(key);
 
-    up.on("error", (e) => {
-      if (!res.headersSent) res.writeHead(502);
-      res.end("kamera upstream error: " + e.message);
-    });
+    if (entry) {
+      // Headers upstream sudah datang → langsung writeHead. Kalau belum
+      // (masih connecting), biarkan callback upRes di bawah yang writeHead
+      // untuk semua client di entry.clients sekaligus.
+      if (entry.statusCode) res.writeHead(entry.statusCode, entry.headers);
+      entry.clients.add(res);
+    } else {
+      entry = { clients: new Set(), statusCode: null, headers: null, up: null };
+      camStreams.set(key, entry);
 
-    req.on("close", () => up.destroy());
+      const mod = t.protocol === "https:" ? https : http;
+      entry.up = mod.get(target, (upRes) => {
+        entry.statusCode = upRes.statusCode || 502;
+        entry.headers = upRes.headers;
+        for (const c of entry.clients) if (!c.writableEnded) c.writeHead(entry.statusCode, entry.headers);
+
+        upRes.on("data", (chunk) => {
+          for (const c of entry.clients) if (!c.writableEnded) c.write(chunk);
+        });
+        upRes.on("end", () => {
+          for (const c of entry.clients) if (!c.writableEnded) c.end();
+          camStreams.delete(key);
+        });
+      });
+
+      entry.up.on("error", (e) => {
+        for (const c of entry.clients) {
+          if (c.writableEnded) continue;
+          if (!c.headersSent) c.writeHead(502);
+          c.end("kamera upstream error: " + e.message);
+        }
+        camStreams.delete(key);
+      });
+
+      entry.clients.add(res);
+    }
+
+    req.on("close", () => {
+      entry.clients.delete(res);
+      if (entry.clients.size === 0 && camStreams.get(key) === entry) {
+        entry.up.destroy();
+        camStreams.delete(key);
+      }
+    });
     return;
   }
 

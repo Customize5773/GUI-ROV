@@ -207,10 +207,9 @@ export const cameraPage = {
               title="Tarik untuk ubah ukuran"
             ></div>
 
-            <img
+            <canvas
               class="campip__img"
-              alt="kamera lain"
-            />
+            ></canvas>
 
             <div class="pip__nosignal">
               NO CAM
@@ -258,18 +257,6 @@ export const cameraPage = {
 
       const pipLabel =
         pip.querySelector(".pip__label");
-
-
-      pipImg.onerror = () => {
-        pipImg.style.display = "none";
-        pipNo.style.display = "flex";
-      };
-
-
-      pipImg.onload = () => {
-        pipImg.style.display = "";
-        pipNo.style.display = "none";
-      };
 
 
       // fullscreen
@@ -968,29 +955,60 @@ export const cameraPage = {
         );
       }
 
-      // PiP
+      // PiP — digambar dari <img> sel sebelah lewat canvas (lihat _scanLoop),
+      // bukan koneksi MJPEG baru, supaya klik Start Stream tidak menggandakan
+      // jumlah koneksi ke kamera fisik.
       const other =
         cams[
           (i + 1) %
           cams.length
         ];
 
-      if (
+      cell.pipActive =
         this.streaming &&
-        other &&
-        other.url
-      ) {
+        !!(other && other.url);
 
-        cell.pipImg.src =
-          camProxy(
-            other.url
-          );
-
-      } else {
-        cell.pipImg.removeAttribute(
-          "src"
-        );
+      if (!cell.pipActive) {
+        const ctx = cell.pipImg.getContext("2d");
+        ctx.clearRect(0, 0, cell.pipImg.width, cell.pipImg.height);
+        cell.pipNo.style.display = "flex";
       }
+    });
+  },
+
+  // =========================================================
+  // GAMBAR PiP — mirror <img> sel sebelah ke canvas, tanpa
+  // koneksi MJPEG baru (throttle ±20x/detik, cukup untuk thumbnail kecil)
+  // =========================================================
+  _drawPips() {
+    const now = performance.now();
+    if (this._lastPip && now - this._lastPip < 50) {
+      return;
+    }
+    this._lastPip = now;
+
+    const cells = this.els.cells || [];
+    cells.forEach((cell, i) => {
+      if (!cell.pipActive) {
+        return;
+      }
+      const src = cells[(i + 1) % cells.length]?.img;
+      if (!src || !src.naturalWidth) {
+        return;
+      }
+
+      const cv = cell.pipImg;
+      if (
+        cv.width !== src.naturalWidth ||
+        cv.height !== src.naturalHeight
+      ) {
+        cv.width = src.naturalWidth;
+        cv.height = src.naturalHeight;
+      }
+      cv.getContext("2d").drawImage(src, 0, 0);
+
+      cv.style.display = "";
+      cell.pipNo.style.display = "none";
     });
   },
 
@@ -1005,10 +1023,14 @@ export const cameraPage = {
           this._scanLoop()
       );
 
-    if (
-      !this.visible ||
-      !window.jsQR
-    ) {
+    if (!this.visible) {
+      return;
+    }
+
+    // PiP digambar terus (termasuk saat fullscreen), lepas dari status jsQR
+    this._drawPips();
+
+    if (!window.jsQR) {
       return;
     }
     // jangan scan ketika fullscreen
