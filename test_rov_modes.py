@@ -11,6 +11,7 @@ from rov_modes import (
     depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
+    poshold_mode_ok,
     resolve_pilot_mode,
 )
 
@@ -48,7 +49,22 @@ class TestPoshold(unittest.TestCase):
         # Bias depth-set sekarang dipasangkan ke STABILIZE (lihat
         # DEPTH_HOLD_MODES), bukan ALT_HOLD/POSHOLD lagi — kedalaman di
         # Alt Hold/Pos Hold sudah ditahan cascade PID ArduSub sendiri.
+        #
+        # CATATAN: ini TIDAK berarti overlay POSHOLD ikut mati di ALT_HOLD —
+        # gerbangnya poshold_mode_ok(), predikat yang berbeda. Menyatukan
+        # keduanya persis itulah yang dulu mematikan POSHOLD diam-diam.
         self.assertFalse(depth_hold_allowed(resolve_pilot_mode("poshold")))
+
+    def test_gerbang_overlay_poshold_lepas_dari_depth_hold_modes(self):
+        # Overlay hidup di mode dasarnya (ALT_HOLD), dan HANYA di sana.
+        self.assertTrue(poshold_mode_ok(resolve_pilot_mode("poshold")))
+        self.assertTrue(poshold_mode_ok("ALT_HOLD"))
+        for other in ("STABILIZE", "MANUAL", "ACRO", "", None):
+            self.assertFalse(poshold_mode_ok(other), msg=repr(other))
+
+        # Regresi yang sebenarnya terjadi: DEPTH_HOLD_MODES dipersempit ke
+        # STABILIZE dan gerbang overlay ikut mati karena memakai predikat itu.
+        self.assertNotIn(resolve_pilot_mode("poshold"), DEPTH_HOLD_MODES)
 
     def test_is_poshold_request_membedakan_yang_resolve_tidak_bisa(self):
         # Keduanya berujung di ALT_HOLD, jadi hasil resolve_pilot_mode TIDAK

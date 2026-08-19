@@ -23,6 +23,7 @@ from rov_modes import (
     depth_bias_engaged,
     depth_hold_allowed,
     is_poshold_request,
+    poshold_mode_ok,
     resolve_pilot_mode,
 )
 from rov_heading import heading_bias, operator_holding_yaw
@@ -60,6 +61,16 @@ LAPTOP_IP = os.environ.get("LAPTOP_IP", "192.168.2.1")   # IP laptop / ground st
 UDP_TELEM_PORT = int(os.environ.get("UDP_IN", "14551"))  # telemetry ke laptop (sesuai server.js)
 UDP_CMD_PORT = int(os.environ.get("UDP_OUT", "14550"))   # command dari laptop ke Pi
 
+# Jembatan QGroundControl: semua MAVLink dari Pixhawk diteruskan ke QGC, dan
+# perintah dari QGC diteruskan balik ke Pixhawk. Terpisah dari port telemetri
+# dashboard (14551) supaya keduanya bisa hidup bersamaan.
+#
+# Kode ini SEMPAT hanya ada di salinan Pi dan hilang saat deploy 19 Agu 2026 —
+# dimasukkan ke git supaya tidak terulang.
+QGC_IP = os.environ.get("QGC_IP", "192.168.2.1")
+QGC_PORT = int(os.environ.get("QGC_PORT", "14561"))       # MAVLink Pi -> QGC
+QGC_IN_PORT = int(os.environ.get("QGC_IN_PORT", "14560"))  # MAVLink QGC -> Pi
+
 # =========================
 # Konfigurasi Pixhawk
 # =========================
@@ -78,6 +89,57 @@ telem_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 cmd_sock.bind(("0.0.0.0", UDP_CMD_PORT))
 cmd_sock.settimeout(0.2)
+
+qgc_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+qgc_addr = (QGC_IP, QGC_PORT)
+
+
+def forward_mavlink_to_qgc(msg):
+    """Teruskan satu pesan MAVLink mentah ke QGC. Kegagalan TIDAK boleh
+    menghentikan loop RX: QGC cuma pemantau, wahana harus tetap jalan tanpanya."""
+    try:
+        data = msg.get_msgbuf()
+        if data:
+            qgc_sock.sendto(data, qgc_addr)
+    except Exception as e:
+        print(f"[QGC] MAVLink forward error: {e}")
+
+
+def qgc_command_receiver():
+    """Terima MAVLink dari QGC lalu teruskan apa adanya ke Pixhawk.
+
+    Sengaja tanpa filter: QGC dipakai untuk kalibrasi/param/uji motor, dan
+    memilah pesan mana yang boleh lewat berarti memelihara daftar putih yang
+    pasti ketinggalan. Konsekuensinya QGC punya otoritas penuh atas wahana —
+    perlakukan seperti GCS kedua, bukan alat pantau pasif.
+    """
+    qgc_in = mavutil.mavlink_connection(f"udpin:0.0.0.0:{QGC_IN_PORT}")
+
+    print(f"[QGC] Listening MAVLink commands on UDP :{QGC_IN_PORT}")
+
+    while True:
+        try:
+            msg = qgc_in.recv_match(blocking=True, timeout=1)
+
+            if msg is None:
+                continue
+
+            if msg.get_type() == "MANUAL_CONTROL":
+                print(
+                    f"[QGC RX] MANUAL_CONTROL "
+                    f"x={msg.x} y={msg.y} z={msg.z} r={msg.r}"
+                )
+            else:
+                print(f"[QGC RX] {msg.get_type()}")
+
+            if master is None:
+                continue
+            with master_lock:
+                master.mav.send(msg)
+
+        except Exception as e:
+            print(f"[QGC] command receive error: {e}")
+            time.sleep(1)
 
 # =========================
 # Status telemetry lokal
@@ -405,12 +467,16 @@ heading_lock = threading.Lock()
 def poshold_engaged():
     """True kalau overlay heading-hold benar-benar boleh menulis ke r.
 
-    Syaratnya dua: operator memang meminta POSHOLD, DAN wahana ada di mode yang
-    menahan kedalaman. Kalau wahana ditarik keluar ALT_HOLD lewat saklar RC atau
-    GCS lain, overlay ikut mati sendiri — bukan diam-diam terus mengoreksi yaw
-    di MANUAL.
+    Syaratnya dua: operator memang meminta POSHOLD, DAN wahana ada di ALT_HOLD
+    (POSHOLD_BASE_MODE di rov_modes.py). Kalau wahana ditarik keluar ALT_HOLD
+    lewat saklar RC atau GCS lain, overlay ikut mati sendiri — bukan diam-diam
+    terus mengoreksi yaw di MANUAL.
+
+    Gerbangnya poshold_mode_ok(), BUKAN depth_hold_allowed(): yang kedua adalah
+    syarat bias depth-set (STABILIZE) dan tidak ada hubungannya dengan mode
+    dasar overlay ini.
     """
-    return poshold_active and depth_hold_allowed(_effective_requested_mode() or state["mode"])
+    return poshold_active and poshold_mode_ok(_current_pixhawk_mode())
 
 
 def apply_heading_hold(mc, axes):
@@ -1503,6 +1569,59 @@ def joystick_sender():
         # benar-benar diperintahkan ke thruster, bukan niat mentahnya.
 
         eff_axes = AXIS_NEUTRAL if stale else shaped
+
+        # =========================
+        # THRUSTER GAIN
+        # =========================
+        gain = thruster_gain
+
+        scaled_axes = {
+            "surge": int(round(eff_axes.get("surge", 0) * gain)),
+            "sway": int(round(eff_axes.get("sway", 0) * gain)),
+            "heave": int(round(eff_axes.get("heave", 0) * gain)),
+            "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
+        }
+
+        # Heave dipetakan ulang supaya melewati dead band FC (lihat
+        # heave_skip_deadzone di rov_axes.py). Besar lompatannya tergantung MODE:
+        # di ALT_HOLD ada THR_DZ (deadzone input pilot) DI ATAS dead band motor,
+        # di mode lain hanya dead band motor. Memakai angka ALT_HOLD di MANUAL
+        # berarti sentuhan stik sekecil apa pun langsung ~20% dorongan.
+        #
+        # Gerbangnya poshold_mode_ok() (= mode ArduSub ALT_HOLD), BUKAN
+        # depth_hold_mode_ok(): yang terakhir sekarang berarti STABILIZE, dan
+        # THR_DZ tidak berlaku di sana.
+        #
+        # Konsekuensi yang disengaja: thruster_gain jadi kurang berpengaruh pada
+        # heave, karena bagian travel yang dulu dipotong gain justru bagian yang
+        # memang tidak pernah sampai ke FC. Gain kecil sekarang berarti "naik
+        # turun pelan", bukan lagi "naik turun tidak sama sekali".
+        skip = (
+            HEAVE_SKIP_ALT_HOLD
+            if poshold_mode_ok(_current_pixhawk_mode())
+            else HEAVE_SKIP_MANUAL
+        )
+        heave_out = heave_skip_deadzone(
+            scaled_axes["heave"], skip, epsilon=HEAVE_MANUAL_EPSILON,
+        )
+
+        # Buat ulang MANUAL_CONTROL berdasarkan axis
+        # yang sudah dikalikan thruster gain.
+        mc = axes_to_manual_control(
+            surge=scaled_axes["surge"],
+            sway=scaled_axes["sway"],
+            yaw=scaled_axes["yaw"],
+            heave=heave_out,
+        )
+
+        # Depth hold dan heading hold bekerja SETELAH gain untuk `mc` (dorongan
+        # nyata ke thruster) — TAPI gerbang "operator sedang memegang stik" di
+        # kedua fungsi itu (HEAVE_MANUAL_EPSILON/YAW_MANUAL_EPSILON) sengaja
+        # diberi `eff_axes`, BUKAN `scaled_axes`. Itu niat pilot, bukan
+        # kekuatan aktual ke thruster: kalau thruster_gain diturunkan jauh
+        # (mis. 20%), stik yang didorong penuh (100) jadi cuma 20 setelah
+        # dikalikan gain — pas di ambang epsilon atau di bawahnya — dan
+        # gerbang bisa gagal mendeteksi stik yang sebenarnya sedang dipegang.
         mc = apply_depth_hold_bias(mc, eff_axes)
 
         # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
@@ -1651,6 +1770,7 @@ def main():
     # Thread listener command
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
+    threading.Thread(target=qgc_command_receiver, daemon=True).start()
 
     last_send = 0
     last_hb = 0
@@ -1698,6 +1818,7 @@ def main():
 
         last_rx = now
         mtype = msg.get_type()
+        forward_mavlink_to_qgc(msg)
 
         # MAVLink Inspector (halaman Analyze). Sengaja PALING ATAS supaya
         # Inspector melihat message apa adanya — termasuk yang tidak punya
@@ -1883,6 +2004,6 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[EXIT] rov_agent stoppedqq by user")
+        print("\n[EXIT] rov_agent stopped by user")
     except Exception as e:
         print("[FATAL]", e)
