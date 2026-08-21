@@ -12,6 +12,7 @@ Cakupan:
                mode PBVS & IBVS, plus ketahanan loss-of-lock (dropout QR).
 """
 
+import json
 import os
 import sys
 
@@ -381,3 +382,31 @@ def test_config_override_changes_docking_target_at_runtime():
     finally:
         for k, v in backup.items():
             setattr(m5, k, v)   # jangan bocorkan override ke test lain
+
+
+# ── CommandSender: wire format ke rov_link.py ────────────────────────────────
+def test_command_sender_emits_heave_scaled_to_1000():
+    """rov_link.py::self.sp hanya mengenal key 'heave' (bukan 'vert') dalam skala
+    -1000..1000, sedangkan FSM menghitung dalam persen (-100..100). Kunci kontrak
+    ini supaya mismatch nama/skala (OPEN-FASE1) tak lolos lagi tanpa terdeteksi."""
+    sent = []
+
+    class FakeSock:
+        def setsockopt(self, *a):
+            pass
+
+        def sendto(self, raw, addr):
+            sent.append(json.loads(raw.decode()))
+
+    cmd = m5.CommandSender()
+    cmd._sock = FakeSock()
+
+    cmd.send(surge=-50, sway=10, yaw=0, vert=30, gripper=True)
+
+    by_name = {pkt['name']: pkt['value'] for pkt in sent}
+    assert by_name['surge'] == -500
+    assert by_name['sway'] == 100
+    assert by_name['yaw'] == 0
+    assert 'vert' not in by_name
+    assert by_name['heave'] == 300
+    assert by_name['gripper'] == 'close'

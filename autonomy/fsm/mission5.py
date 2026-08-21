@@ -16,8 +16,12 @@ Cara kerja:
                    [Misi 5] M5_REDIVE → M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
                    (Misi 5 = docking closed-loop ke QR payload; M5_FALLBACK = jalur timed degraded)
 
-Command JSON format (sama dengan server.js):
-  {"surge": 0-100, "sway": 0-100, "yaw": 0-100, "vert": 0-100, "gripper": 0|1}
+API internal (parameter CommandSender.send): surge/sway/yaw/vert dalam PERSEN
+(-100..100), sama seperti PID/VisualServo di modul ini. Di boundary wire,
+CommandSender mengalikan ×10 dan mengirim key "heave" (bukan "vert") supaya
+cocok dengan konvensi rov_link.py/server.js yang pakai skala -1000..1000:
+  {"surge": -1000..1000, "sway": -1000..1000, "yaw": -1000..1000,
+   "heave": -1000..1000, "gripper": 0|1}
 
 Nilai positif/negatif: surge+ = maju, vert+ = naik, gripper 1 = tutup, 0 = buka
 
@@ -217,10 +221,11 @@ class CommandSender:
         log.debug("[cmd] %s=%s", name, value)
 
     def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
-        self._emit('surge', surge)
-        self._emit('sway', sway)
-        self._emit('yaw', yaw)
-        self._emit('vert', vert)
+        # Internal FSM pakai skala persen (-100..100); rov_link/server.js pakai -1000..1000.
+        self._emit('surge', surge * 10)
+        self._emit('sway', sway * 10)
+        self._emit('yaw', yaw * 10)
+        self._emit('heave', vert * 10)
         if gripper is not None:
             # gripper truthy = tutup (jepit), falsy = buka
             self._emit('gripper', 'close' if gripper else 'open')
