@@ -32,7 +32,7 @@ from vision.qr_detect import VisionPipeline, decode_qr   # _order_corners + deco
 from tools.detection_log import DetectionCsvLogger
 
 ap = argparse.ArgumentParser()
-ap.add_argument("--calib", required=True, help="file .npz kalibrasi (K, dist)")
+ap.add_argument("--calib", default="vision/calibration/dwe_underwater.npz", help="file .npz kalibrasi (K, dist)")
 ap.add_argument("--qr-size", type=float, default=0.04, help="sisi QR payload fisik (m) — KKI 2026 = 0.04")
 ap.add_argument("--data", default=None, help="hanya proses QR yang isinya memuat substring ini")
 ap.add_argument("--device", type=int, default=0)

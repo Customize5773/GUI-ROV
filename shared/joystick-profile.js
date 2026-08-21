@@ -192,7 +192,7 @@ function defaultButtonLayer() {
     { action: "depth_set", button: 12, mode: "toggle" },          // D-pad ↑ : SET
     { action: "depth_hold_toggle", button: 13, mode: "toggle" },  // D-pad ↓ : ON/OFF
     { action: "cam_prev", button: 14, mode: "toggle" },        // D-pad ← : CAM sebelumnya
-    { action: "cam_next", button: 15, mode: "toggle" },        // D-pad → : CAM berikutnya
+    { action: "no_function", button: 15, mode: "toggle" },     // D-pad → : shift (lihat shiftButton)
     { action: "thruster_gain_dec", button: 10, mode: "toggle" }, // L3
     { action: "thruster_gain_inc", button: 11, mode: "toggle" }, // R3
     { action: "camera_stream", button: 16, mode: "toggle" },     // Logitech
@@ -213,9 +213,9 @@ export function defaultProfile() {
     device: { id: "", mapping: "standard", axes: STANDARD_AXIS_COUNT, buttons: STANDARD_BUTTON_COUNT },
     enabled: true,
 
-    /* LB dipakai sebagai shift: mudah ditahan jempol kiri sambil tetap
-       memegang kedua stik, dan tidak bentrok dengan aksi layer regular. */
-    shiftButton: 4,
+    /* D-pad kanan (15) dipakai sebagai shift: tidak bentrok dengan aksi
+       layer regular (button 15 di-nolkan jadi no_function di bawah). */
+    shiftButton: 15,
 
     axisConfig: [
       { input: "axis 0", assigned: "Axis R", min: -1000, max: 1000, direction: "↔", deadzone: DEFAULT_DEADZONE, expo: DEFAULT_EXPO },

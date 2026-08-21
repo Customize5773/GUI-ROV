@@ -46,7 +46,7 @@ ap.add_argument("--url", default=None,
                 help="stream kamera ROV (mis. http://192.168.2.2:8080/stream) — override --device")
 ap.add_argument("--data", default=None, help="hanya proses QR yang isinya memuat substring ini")
 ap.add_argument("--target-area", type=float, default=3000.0, help="IBVS: luas engage (px^2)")
-ap.add_argument("--calib", default=None, help="path .npz kalibrasi → mode PBVS")
+ap.add_argument("--calib", default="vision/calibration/dwe_underwater.npz", help="path .npz kalibrasi → mode PBVS")
 ap.add_argument("--qr-size", type=float, default=0.04, help="PBVS: sisi QR payload (m)")
 ap.add_argument("--target-dist", type=float, default=0.30, help="PBVS: jarak engage (m)")
 ap.add_argument("--csv", default=None, help="tulis log deteksi per-frame ke file CSV ini")

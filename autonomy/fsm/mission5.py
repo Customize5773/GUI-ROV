@@ -84,7 +84,7 @@ QR_SIDE_M          = 0.04     # sisi fisik QR payload (m) — KKI 2026 = 4 cm (u
 SERVO_TARGET_AREA  = 3000.0   # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
 SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payload (TUNE di kolam)
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
-CALIB_FILE         = None     # path .npz kalibrasi kamera (jalur satu-kamera lama); None → IBVS
+CALIB_FILE         = "vision/calibration/dwe_underwater.npz"  # jalur satu-kamera lama; None → IBVS
 CALIB_FILE_BOTTOM  = "vision/calibration/bottom.npz"  # kalibrasi kamera QR/BOTTOM (mode dual-camera)
 CALIB_FILE_WALL    = "vision/calibration/wall.npz"    # kalibrasi kamera hook/WALL (mode dual-camera)
 
