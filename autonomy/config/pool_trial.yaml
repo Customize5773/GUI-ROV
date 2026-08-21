@@ -4,7 +4,8 @@
 #   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_trial.yaml \
 #          --start-state M5_REDIVE --run-log
 #
-# Saat lomba, file ini ditukar dengan config/pool_kki.yaml — rov_tuned.yaml tetap.
+# Saat lomba, file ini ditukar dengan config/pool_kki_trial.yaml (babak Trial, 5×5 m)
+# atau config/pool_kki_running.yaml (babak Running/final, 10×10 m) — rov_tuned.yaml tetap.
 
 # ── Geometri kolam → setpoint kedalaman DITURUNKAN (mission5._derive_depths) ──
 pool:
@@ -14,7 +15,8 @@ pool:
   hook_height_from_floor: 0.385
   # Jarak aman titik-tengah ROV di atas dasar. NILAI AWAL — turunkan bertahap
   # (0.30 → 0.25 → …) sambil pantau kamera bottom, lalu SALIN hasilnya ke
-  # pool_kki.yaml. Ini satu-satunya angka di file ini yang berpindah ke lomba.
+  # pool_kki_trial.yaml & pool_kki_running.yaml. Satu-satunya angka geometri di
+  # file ini yang berpindah ke lomba (kedua babak).
   bottom_clearance: 0.25
   # → HOOK_DEPTH = 0.415 m, DEPTH_TARGET_BOTTOM = 0.55 m
   # Default mission5.py (0.70 m) menyisakan cuma 10 cm di kolam 0,8 m — gripper nabrak dasar.

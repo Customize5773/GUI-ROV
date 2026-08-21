@@ -58,7 +58,8 @@ HOOK_DEPTH            = 0.45   # m — kedalaman hook DARI PERMUKAAN. Lihat _der
                                #     di sini hanya benar bila kolam persis 0.9 m.
 
 # ── Geometri kolam (opsional, via config `pool:`) ─────────────────────────────
-# Diisi dari file config lokasi (pool_trial.yaml / pool_kki.yaml). Bila terisi,
+# Diisi dari file config lokasi (pool_trial.yaml / pool_kki_trial.yaml /
+# pool_kki_running.yaml). Bila terisi,
 # _derive_depths() menghitung HOOK_DEPTH & DEPTH_TARGET_BOTTOM dari sini — supaya
 # hasil tuning di kolam latihan bisa dipindah ke arena lomba cukup dgn menukar
 # angka kedalaman kolam, tanpa menghitung ulang setpoint absolut.

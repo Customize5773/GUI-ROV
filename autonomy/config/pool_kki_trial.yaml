@@ -1,0 +1,38 @@
+# config/pool_kki_trial.yaml — GEOMETRI ARENA LOMBA KKI 2026, BABAK TRIAL (5 × 5 m)
+#
+# Konfirmasi panitia (grup peserta, 2026-08-21): lomba dua babak, ukuran arena
+# BEDA — Trial 5×5 m, Running/final 10×10 m (lihat pool_kki_running.yaml). Sebelumnya
+# ini dikira satu arena dgn ukuran ambigu; sekarang dipisah jadi dua config nyata.
+#
+# Pasangan lomba dari config/pool_trial.yaml (kolam latihan 2,2×4,4×0,8 m).
+# Lapisan tuning TIDAK berubah:
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki_trial.yaml \
+#          --start-state M5_REDIVE --run-log
+#
+# ⚠ TIGA ANGKA YANG WAJIB DIISI DI LOKASI sebelum run pertama:
+#     1. pool.depth            — ukur kedalaman air babak Trial (Guidebook: 0,7–0,9 m)
+#     2. pool.bottom_clearance — SALIN dari hasil trial di kolam latihan
+#     3. wall_heading A/B/C/D  — kalibrasi kompas ROV di tiap dinding arena Trial
+#   Timeout & speed TIDAK diubah dari default mission5.py — arena 5×5 m persis
+#   ukuran yang dipakai menurunkan default itu (Guidebook L43).
+
+# ── Geometri kolam → setpoint kedalaman DITURUNKAN (mission5._derive_depths) ──
+pool:
+  depth: 0.90                  # ⚠ UKUR DI LOKASI. Guidebook L43: 0,7–0,9 m.
+  hook_height_from_floor: 0.45 # Guidebook L46 — hook 0,45 m DARI DASAR. Tetap di kedua babak.
+  bottom_clearance: 0.25       # ⚠ SALIN hasil trial (angka yang berpindah)
+  # depth 0.90 → HOOK_DEPTH 0.45, DEPTH_TARGET_BOTTOM 0.65
+  # depth 0.70 → HOOK_DEPTH 0.25, DEPTH_TARGET_BOTTOM 0.45
+
+# ── Heading tiap sisi kolam ───────────────────────────────────────────────────
+# ⚠ KALIBRASI DI ARENA TRIAL. Hook diacak ke sisi A/B/C/D (Guidebook L46) — beda
+# arena antar babak berarti heading juga wajib dikalibrasi ULANG utk babak Running.
+# Nilai di bawah = default mission5.py, hampir pasti bukan orientasi arena sesungguhnya.
+wall_heading:
+  A: 270
+  B: 90
+  C: 0
+  D: 180
+
+# Timeout & kecepatan TIDAK di-override di sini — default mission5.py (redive 15,
+# m5_dock 25, fallback 30, surge 35, approach_speed 20) sudah pas utk arena 5×5 m.
