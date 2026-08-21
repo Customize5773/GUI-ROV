@@ -368,17 +368,24 @@ export const setupPage = {
   if (input) input.value = gain;
   CONFIG.THRUSTER.gain = gain;
 
-  const motors = {};
+  /* Sengaja TANPA `motors`. Tombol gain dulu ikut mengirim seluruh peta
+     MOT_n_DIRECTION hasil rekaan localStorage — dan itu MENULIS ULANG arah
+     putar keenam thruster di Pixhawk hanya karena operator menaikkan daya
+     10%.
 
-  CONFIG.THRUSTER.reversed.forEach((rev, index) => {
-    motors[String(index + 1)] = rev ? -1 : 1;
-  });
+     Ini bukan bahaya teoretis. reversed[] hidup di localStorage browser, BUKAN
+     dibaca dari FC, jadi browser yang belum pernah menekan tombol Rev akan
+     mengirim "semua +1" dan diam-diam membalik motor yang di FC memang -1.
+     Trial 21 Agu 2026 memperlihatkan akibatnya: gain dinaikkan 80% -> 100%
+     di antara ROV6.log dan ROV7.log, dan roll ALT_HOLD saat stik netral
+     jatuh dari +0,20 ± 2,23 ke -3,39 ± 2,73 tanpa satu pun gain PID diubah.
 
+     Arah putar thruster hanya boleh berubah lewat tombol Apply yang eksplisit
+     di panel Thruster, tidak pernah sebagai efek samping perintah lain. */
   wsSend({
     type: "cmd",
     name: "thruster_config",
-    gain,
-    motors
+    gain
   });
 
   saveSetup();
@@ -394,17 +401,11 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
   if (input) input.value = gain;
   CONFIG.THRUSTER.gain = gain;
 
-  const motors = {};
-
-  CONFIG.THRUSTER.reversed.forEach((rev, index) => {
-    motors[String(index + 1)] = rev ? -1 : 1;
-  });
-
+  // Tanpa `motors` — lihat alasan lengkap di handler #suGainUp di atas.
   wsSend({
     type: "cmd",
     name: "thruster_config",
-    gain,
-    motors
+    gain
   });
 
   saveSetup();

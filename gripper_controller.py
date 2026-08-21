@@ -7,9 +7,13 @@ from pymavlink import mavutil
 GRIPPER_SERVO_CH = 7
 ROTATE_SERVO_CH = 8
 
-GRIPPER_PWM_OPEN = 1560
+# Rentang ini DISALIN DARI PI (21 Agu 2026), bukan sebaliknya: ~/rov-agent
+# sudah lama memakai 1580/1350 hasil kalibrasi di tepi kolam sementara repo
+# tertinggal di 1560/1410 — bukaan yang lebih sempit dari yang benar-benar
+# dipakai. Jangan "perbaiki" balik ke angka lama tanpa mencoba capitnya.
+GRIPPER_PWM_OPEN = 1580
 GRIPPER_PWM_NEUTRAL = 1500
-GRIPPER_PWM_CLOSE = 1410
+GRIPPER_PWM_CLOSE = 1350
 
 # Servo rotate/mount-tilt (CH8) punya rentang gerak lebih sempit dari gripper
 # (CH7) secara mekanik — memakai clamp_pwm() (rentang gripper) di sini akan

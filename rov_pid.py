@@ -231,17 +231,16 @@ DEPTH_BIAS_DAMPING = 300.0  # unit z per (m/s) laju error mengecil
 # tangani lebih baik secara native, batasi jangkauannya: SET yang sudah lama
 # (operator berenang jauh sebelum menekan ON) dibiarkan diam, bukan dipaksa
 # mengejar dan berisiko drift.
-# Trial 21 Agu 2026 menaikkan 0.15 -> 0.40. Alasannya: 17 hold >=15 detik di
-# trial itu semuanya menetap rapat (ayunan <=0.15 m, err akhir <=0.03 m) —
-# osilasi 15 Agu yang melahirkan batas ini sudah dibunuh DEPTH_BIAS_DAMPING,
-# bukan oleh batas ini. Yang tersisa justru kerugiannya: 14% sampel depth-hold
-# duduk DI LUAR 0.15 dengan bias mati total — satu SET ke 0.26 m dari 0.48 m
-# diam 22 cm meleset selama ~4 menit (vpwm persis 1500), dan SET ke 0.70 m
-# tidak pernah bergerak sama sekali. Bagi pilot itu terbaca "SET tidak jalan".
-# 0.40 menampung seluruh lompatan setpoint yang benar-benar dipakai di kolam
-# 0.7 m. TURUNKAN lagi kalau trial berikutnya menunjukkan ayunan melebar di
-# error besar — batas ini rem terakhir, bukan tuning utama.
-DEPTH_BIAS_MAX_CORRECTION = 0.40  # meter
+# 21 Agu 2026: nilai ini (dan DEPTH_BIAS_DEADZONE di atas) DISALIN DARI PI,
+# bukan sebaliknya. Repo tertinggal di 0.15/130 sementara wahana sudah lama
+# terbang dengan 0.35/115 — hasil penyetelan di tepi kolam yang tidak pernah
+# kembali ke git. Siapa pun yang membaca repo saja akan salah menyimpulkan apa
+# yang sebenarnya berjalan; itu sudah terjadi sekali hari ini.
+#
+# 0.35 dipertahankan karena datanya mendukung: dari 2.506 sampel depth-hold di
+# tiga trial (hydro/ROV6/ROV7), gerbang ini hanya menyentuh 2 sampel, error
+# terbesar 0.39 m. Melonggarkannya tidak membeli apa pun.
+DEPTH_BIAS_MAX_CORRECTION = 0.35  # meter
 
 
 def depth_bias_active(error, was_active):
