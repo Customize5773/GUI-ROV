@@ -530,9 +530,16 @@ body[data-theme="light"] .theme__icon::after {
 }
 .readout__u { font-size: 11px; color: var(--ink-dim); }
 .readout--lat .readout__v { color: var(--sonar); }
+.readout--qr {
+  grid-column: span 2;
+}
+
 .readout--qr .readout__v {
-  font-size: 14px; max-width: 110px;
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 14px;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
 }
 .readout--qr.is-ok .readout__v { color: var(--ok); }
 
