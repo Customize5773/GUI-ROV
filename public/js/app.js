@@ -37,6 +37,7 @@ const els = {
   camRes: $("camRes"), camRecIndicator: $("camRecIndicator"),
   tapeScale: $("tapeScale"), tapeVal: $("tapeVal"),
   camImg: $("camImg"), camNoSignal: $("camNoSignal"), camTag: $("camTag"),
+  camContrast: $("camContrast"),
   modelTag: $("modelTag"), log: $("log"),
   btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
   armLabel: $("armLabel"),
@@ -188,6 +189,18 @@ function loadTheme() {
   const saved = localStorage.getItem("hydroship-theme");
   setTheme(saved === "light" ? "light" : "dark");
 }
+
+function setCamContrast(pct) {
+  els.camImg.style.filter = `contrast(${pct}%)`;
+  localStorage.setItem("hydroship-cam-contrast", pct);
+}
+
+function loadCamContrast() {
+  const saved = Number(localStorage.getItem("hydroship-cam-contrast")) || 100;
+  els.camContrast.value = saved;
+  setCamContrast(saved);
+}
+els.camContrast.addEventListener("input", () => setCamContrast(els.camContrast.value));
 
 function num(v, d = 1) {
   return (v === null || v === undefined || Number.isNaN(v)) ? "—" : v.toFixed(d);
@@ -1820,6 +1833,7 @@ initIdentity();
 tickClock();
 setInterval(tickClock, 1000);
 loadTheme();
+loadCamContrast();
 initScene();
 connect();
 refreshLastRun();
