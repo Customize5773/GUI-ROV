@@ -305,10 +305,16 @@ class VisionPipeline:
         self.qr_length = qr_length
         self._K = None
         self._dist = None
+        # Resolusi saat kalibrasi dibuat, utk penjaga _verify_calib_size().
+        self._calib_size = None
+        self._calib_name = calib_file
+        self._calib_checked = False
         if calib_file and CV2_OK:
             try:
                 data = np.load(calib_file)
                 self._K, self._dist = data['K'], data['dist']
+                if 'image_size' in data:
+                    self._calib_size = tuple(int(v) for v in data['image_size'])
                 log.info("[vision] Kalibrasi dimuat: %s — PBVS (solvePnP) AKTIF", calib_file)
             except Exception as e:
                 log.warning("[vision] gagal muat kalibrasi %s: %s — fallback IBVS", calib_file, e)
@@ -462,6 +468,8 @@ class VisionPipeline:
                 log.warning("[vision] Frame gagal dibaca, retry...")
                 time.sleep(0.5)
                 continue
+
+            self._verify_calib_size(frame)
 
             # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
             dets = decode_qr(frame)
@@ -655,6 +663,42 @@ class VisionPipeline:
         if not r or (time.time() - r['timestamp']) > max_age:
             return None
         return r
+
+    def _verify_calib_size(self, frame):
+        """Sekali saja: tolak kalibrasi yang resolusinya beda dari frame sungguhan.
+
+        22 Agu 2026 — `dwe_underwater.npz` dikalibrasi pada 4080x3072 (resolusi
+        FOTO) sementara kamera streaming 1280x720. rms-nya paling bagus dari
+        semua file (1.75) sehingga tampak paling unggul, padahal rms hanya
+        mengukur kecocokan model thd gambar kalibrasinya SENDIRI — ia tak tahu
+        apa-apa soal resolusi yang nanti dipakai.
+
+        Kenapa ini berbahaya dan bukan sekadar tak rapi: z ~ fx*W/w_px, jadi fx
+        yang 3,2x terlalu besar membuat PBVS mengira QR 3,2x lebih jauh. Dengan
+        SERVO_TARGET_DIST=0.30 m, ROV baru berhenti saat jarak ASLI ~9 cm —
+        menabrak payload, bukan berhenti di depannya. Diam, tanpa pesan error.
+
+        Sengaja MEMATIKAN PBVS (bukan menskala K): saat aspect ratio juga beda
+        (4:3 vs 16:9) field-of-view-nya ikut beda, jadi menskala K TIDAK benar —
+        cuma menukar error yang kelihatan dengan error yang tersembunyi. IBVS
+        (berbasis area piksel) tak butuh kalibrasi dan tetap bisa docking.
+        """
+        if self._calib_checked:
+            return
+        self._calib_checked = True
+        if self._K is None or self._calib_size is None or frame is None:
+            return
+        fh, fw = frame.shape[0], frame.shape[1]
+        cw, ch = self._calib_size
+        if (cw, ch) == (fw, fh):
+            return
+        log.error("[vision] KALIBRASI DITOLAK: %s dibuat pada %dx%d, frame nyata %dx%d "
+                  "— K/dist tidak valid, PBVS DIMATIKAN, jatuh ke IBVS. "
+                  "Pakai kalibrasi pada resolusi stream, atau set resolusi "
+                  "kamera sama dengan saat kalibrasi.",
+                  self._calib_name, cw, ch, fw, fh)
+        self._K = None
+        self._dist = None
 
     @staticmethod
     def _order_corners(pts):

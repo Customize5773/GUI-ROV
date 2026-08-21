@@ -159,3 +159,47 @@ def test_detect_hook_result_compatible_with_servo():
     assert isinstance(det['center'], tuple) and len(det['center']) == 2
     assert det['frame_w'] == 640 and det['frame_h'] == 480
     assert set(det['pose'].keys()) >= {'x', 'y', 'z'}
+
+
+# ── Regresi: blob raksasa (air keruh) TIDAK boleh lolos sebagai hook ────────
+def test_detect_hook_rejects_full_frame_blob():
+    """Uji kolam 22 Agu 2026: di air keruh, Canny menghasilkan SATU contour yang
+    membungkus hampir seluruh frame. Karena bounding box-nya = frame, solidity ≈ 1,
+    dan suku ukuran di _score_contour sudah jenuh di 4000 px² — jadi skornya justru
+    SEMPURNA. Hasil nyata dari kamera WALL: center (640,360) persis titik tengah,
+    area 917.542 dari 921.600 px² (99,6%), confidence 1,00, di SETIAP frame.
+
+    Fatal bagi FSM, bukan cuma berisik: _hook_servo_step membacanya sebagai
+    "hook tepat di tengah, sangat dekat", sehingga HANG/DOCK mengira sudah
+    sejajar sempurna sejak frame pertama lalu mendudukkan payload ke tempat
+    yang salah. HOOK_MIN_AREA tak menyaring apa pun di sini — yang hilang
+    adalah batas ATAS (HOOK_MAX_AREA_FRAC)."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.hook_detect import detect_hook
+
+    # Frame yang hampir seluruhnya satu blob terang di atas latar gelap tipis —
+    # meniru kontur raksasa hasil air keruh/kontras rendah.
+    frame = np.full((480, 640, 3), 20, np.uint8)
+    cv2.rectangle(frame, (2, 2), (637, 477), (220, 220, 220), -1)
+
+    det = detect_hook(frame)
+    if det is not None:
+        frame_area = 480 * 640
+        assert det['area'] <= 0.25 * frame_area, (
+            f"blob seluas {det['area']:.0f} px² "
+            f"({100 * det['area'] / frame_area:.1f}% frame) lolos sebagai hook")
+
+
+def test_detect_hook_max_area_frac_configurable():
+    """Batasnya harus bisa dilonggarkan/diketatkan di kolam tanpa edit kode."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.hook_detect import detect_hook
+
+    hook = _make_hook(cv2, np)
+    # Hook sintetis normal jauh di bawah 25% frame → tetap terdeteksi.
+    assert detect_hook(hook) is not None
+    # Ambang mustahil (0.0001 = 30 px²) harus membuang bahkan hook yang sah,
+    # membuktikan parameternya benar-benar mengalir sampai ke penyaring.
+    assert detect_hook(hook, max_area_frac=0.0001) is None

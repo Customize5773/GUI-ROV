@@ -42,8 +42,29 @@ from fsm.mission5 import (Mission5FSM, State, CommandSender, TelemetryReceiver,
                           QR_SIDE_M, HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA, HOOK_PIPE_DIAM_M)
 from vision.qr_detect import VisionPipeline
 
-CALIB_BOTTOM_DEFAULT = "vision/calibration/dwe_underwater.npz"
-CALIB_WALL_DEFAULT   = "vision/calibration/dwe_underwater.npz"
+# 22 Agu 2026: dwe_underwater.npz -> dwe_trial2.npz. Dipilih dgn DUA syarat,
+# bukan rms saja (rms hanya mengukur kecocokan model thd gambar kalibrasinya
+# SENDIRI — ia tak tahu resolusi stream, dan bisa rendah justru karena overfit):
+#
+#   1. Resolusi WAJIB sama dgn stream (1280x720). dwe_underwater.npz dibuat pada
+#      4080x3072 (resolusi FOTO): fx jadi 3,2x terlalu besar -> PBVS mengira QR
+#      3,2x lebih jauh -> dgn SERVO_TARGET_DIST=0.30 m ROV baru berhenti saat
+#      jarak ASLI ~9 cm (menabrak payload).
+#   2. Geometri harus masuk akal. Menskala dwe_underwater (kalibrasi paling
+#      sehat: fx/fy=1.000, principal point -0,1%/-2,0%) ke lebar 1280 memberi
+#      fx ~= 950 sbg pembanding independen:
+#        dwe_trial2.npz  fx=914  (-3,8%)  <- dipakai
+#        dwe_v1.npz      fx=992  (+4,3%)  tapi cy=892,6 JATUH DI LUAR frame 720
+#                                          (mustahil fisik, khas overfit; rms-nya
+#                                          justru paling rendah 0,68)
+#        dwe.npz         fx=609  (-36%)   outlier, tak sepakat dgn keduanya
+#
+# Sisa kelemahan dwe_trial2: cy meleset +29,5% dari tengah. Perbaikan sebenarnya
+# = KALIBRASI ULANG DI AIR pada 1280x720; yang ini membuatnya tidak berbahaya,
+# belum membuatnya akurat. Dijaga _verify_calib_size() di vision/qr_detect.py:
+# resolusi tak cocok -> PBVS dimatikan + ERROR di log (bukan gagal diam-diam).
+CALIB_BOTTOM_DEFAULT = "vision/calibration/dwe_trial2.npz"
+CALIB_WALL_DEFAULT   = "vision/calibration/dwe_trial2.npz"
 
 # ───────────────────────── Konfigurasi yang perlu DIVERIFIKASI ke setup ArduSub kalian ──
 WATER_RHO = 997.0          # kg/m³ air tawar (kolam). Air laut ≈ 1025.

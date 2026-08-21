@@ -1819,18 +1819,28 @@ els.btnMode.onclick = () => {
   updateAutoCapture();
 };
 
-/* ============ auto screenshot & data logging ============ */
-const autoCap = { logging: false, rows: [], snapTimer: null };
+/* ============ auto data logging (autonomous) ============
+   Snapshot otomatis tiap 15 detik DIHAPUS 22 Agu 2026: tiap frame diunduh
+   sebagai PNG ~1,9 MB lewat dialog download browser, jadi satu run misi 5
+   (~4 menit) memuntahkan belasan file besar sementara isinya cuma view kamera
+   yang sudah terekam di stream. Selama trial ia menutupi log yang benar-benar
+   dipakai untuk diagnosa.
+
+   CSV telemetri SENGAJA DIPERTAHANKAN — itu yang dipakai membaca perilaku run
+   (mis. log-m5/ 22 Agu membuktikan wahana tak pernah menyelam: depth rata
+   0,08-0,14 m selama 57 detik). Snapshot manual tetap ada lewat tombol kamera.
+
+   CATATAN: ROADMAP_MISI5.md Fase 4 & TEST_CHECKLIST menyebut "auto screenshot
+   & logging" sbg satu butir. Yang tinggal sekarang bagian LOGGING-nya. */
+const autoCap = { logging: false, rows: [] };
 function updateAutoCapture() {
   const shouldRun = controlMode === "autonomous" && state.armed;
   if (shouldRun && !autoCap.logging) {
     autoCap.logging = true;
     autoCap.rows = [];
-    autoCap.snapTimer = setInterval(() => { snapshotImage(els.camImg, "hydroship_auto"); }, 15000);
-    log("Auto-capture ON (autonomous + armed): logging + snapshot", "ok");
+    log("Auto-log ON (autonomous + armed): telemetri CSV", "ok");
   } else if (!shouldRun && autoCap.logging) {
     autoCap.logging = false;
-    if (autoCap.snapTimer) { clearInterval(autoCap.snapTimer); autoCap.snapTimer = null; }
     exportAutoLog();
   }
 }

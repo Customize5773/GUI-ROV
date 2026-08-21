@@ -760,6 +760,12 @@ def _fsm_read_state():
     return dict(state)
 
 
+# Kalibrasi default misi 5. HARUS cocok resolusi stream kamera (1280x720).
+# Override per-kamera lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke string
+# kosong untuk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
+M5_CALIB_DEFAULT = "vision/calibration/dwe_trial2.npz"
+
+
 def setup_mission5_runner():
     """Siapkan runner FSM. Gagal-lunak: None berarti misi 5 tak tersedia."""
     global mission5_runner
@@ -782,8 +788,13 @@ def setup_mission5_runner():
         "vision_source": os.environ.get("M5_VISION_SOURCE", "usb"),
         "bottom_url": os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8080/stream"),
         "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8081/stream"),
-        "calib_bottom": os.environ.get("M5_CALIB_BOTTOM"),
-        "calib_wall": os.environ.get("M5_CALIB_WALL"),
+        # Path relatif thd WorkingDirectory service (=~/rov-agent). Kalibrasi
+        # HARUS sepadan resolusi stream (1280x720). Lihat alasan pemilihan
+        # dwe_trial2.npz (dan kenapa BUKAN rms terendah) di autonomy/rov_link.py.
+        # Salah resolusi tidak lagi lolos diam-diam: _verify_calib_size() di
+        # vision/qr_detect.py mematikan PBVS + menulis ERROR bila tak cocok.
+        "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_DEFAULT),
+        "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_DEFAULT),
         "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
     }
     mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)

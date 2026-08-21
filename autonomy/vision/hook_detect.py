@@ -68,6 +68,23 @@ except ImportError:
 # ── Parameter default deteksi (semua OPSIONAL, bisa dioverride via config) ────────
 # NOTE: nilai ini titik-awal uji-meja; WAJIB di-tuning ulang di kolam (lihat asumsi di atas).
 HOOK_MIN_AREA     = 150.0    # luas contour minimum (px^2) agar dianggap kandidat hook
+
+# Batas ATAS, sebagai fraksi luas frame. Tanpa ini detektor pernah mengembalikan
+# SELURUH FRAME sebagai "hook" (uji kolam 22 Agu 2026: center persis titik tengah
+# frame, area 917.542 px² dari 921.600 = 99,6%, confidence 1,00 — tiap frame).
+# Air keruh + kontras rendah membuat Canny menghasilkan satu contour raksasa yang
+# membungkus semuanya; solidity-nya ≈1 (bounding box = frame) dan suku ukuran di
+# _score_contour sudah jenuh, jadi skornya justru SEMPURNA.
+#
+# Untuk FSM ini fatal, bukan cuma berisik: _hook_servo_step membaca "hook tepat di
+# tengah, sangat dekat" lalu HANG/DOCK mengira sudah sejajar sempurna sejak frame
+# pertama dan mendudukkan payload ke tempat yang salah.
+#
+# 0.25 sangat longgar dengan sengaja: pada jarak docking hook hanya ~3.000 px²
+# (HOOK_TARGET_AREA di fsm/mission5.py) = 0,33% frame 1280x720. Bahkan pada
+# separuh jarak itu (~4x luas) masih ~1,3%. Jadi 25% tak akan memotong deteksi
+# sah mana pun, tapi membunuh kasus patologis di atas.
+HOOK_MAX_AREA_FRAC = 0.25
 HOOK_CLAHE_CLIP   = 2.0      # kekuatan CLAHE (lawan cahaya tak rata / glare) — sama gaya qr_detect
 HOOK_CLAHE_TILE   = 8        # ukuran grid CLAHE
 HOOK_CANNY_LO     = 50       # ambang bawah Canny edge
@@ -87,13 +104,16 @@ def _to_gray_clahe(frame, clip=HOOK_CLAHE_CLIP, tile=HOOK_CLAHE_TILE):
     return clahe.apply(gray)
 
 
-def _score_contour(cnt, min_area):
+def _score_contour(cnt, min_area, max_area=None):
     """Nilai satu contour sbg kandidat hook → (area, bbox, width_px, confidence) atau None.
 
-    confidence = solidity (area/luas-bbox) dibobot ukuran; menolak blob yg terlalu kecil
-    atau rasio-aspek tak masuk akal utk pipa berujung-U."""
+    confidence = solidity (area/luas-bbox) dibobot ukuran; menolak blob yg terlalu kecil,
+    terlalu BESAR (lihat HOOK_MAX_AREA_FRAC), atau rasio-aspek tak masuk akal utk pipa
+    berujung-U."""
     area = float(cv2.contourArea(cnt))
     if area < min_area:
+        return None
+    if max_area is not None and area > max_area:
         return None
     x, y, w, h = cv2.boundingRect(cnt)
     if w <= 0 or h <= 0:
@@ -112,12 +132,12 @@ def _score_contour(cnt, min_area):
     return area, (x, y, w, h), (cx, cy), width_px, conf
 
 
-def _best_contour(mask, min_area):
+def _best_contour(mask, min_area, max_area=None):
     """Ambil contour terbaik (confidence tertinggi) dari mask biner. None bila tak ada."""
     cnts, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     best = None
     for cnt in cnts:
-        scored = _score_contour(cnt, min_area)
+        scored = _score_contour(cnt, min_area, max_area)
         if scored is None:
             continue
         if best is None or scored[4] > best[4]:
@@ -125,7 +145,7 @@ def _best_contour(mask, min_area):
     return best
 
 
-def _detect_by_color(frame, hsv_range, min_area):
+def _detect_by_color(frame, hsv_range, min_area, max_area=None):
     """Jenjang 1: mask HSV → contour. Hanya dipakai bila hsv_range disediakan (di-tune venue)."""
     if frame.ndim != 3:
         return None
@@ -134,21 +154,21 @@ def _detect_by_color(frame, hsv_range, min_area):
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     mask = cv2.inRange(hsv, lower, upper)
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    best = _best_contour(mask, min_area)
+    best = _best_contour(mask, min_area, max_area)
     return (best, 'color') if best else None
 
 
-def _detect_by_contour(frame, min_area, canny_lo, canny_hi):
+def _detect_by_contour(frame, min_area, canny_lo, canny_hi, max_area=None):
     """Jenjang 2: grayscale+CLAHE → Canny edge → dilate → contour. Jalur UTAMA non-warna."""
     gray = _to_gray_clahe(frame)
     edges = cv2.Canny(gray, canny_lo, canny_hi)
     edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
     edges = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-    best = _best_contour(edges, min_area)
+    best = _best_contour(edges, min_area, max_area)
     return (best, 'contour') if best else None
 
 
-def _detect_by_hough(frame, min_area):
+def _detect_by_hough(frame, min_area, max_area=None):
     """Jenjang 3: HoughCircles menangkap lengkung-U / lubang payload (Ø3 cm) sbg fallback."""
     gray = _to_gray_clahe(frame)
     gray = cv2.medianBlur(gray, 5)
@@ -163,6 +183,8 @@ def _detect_by_hough(frame, min_area):
     area = float(np.pi * r * r)
     if area < min_area:
         return None
+    if max_area is not None and area > max_area:
+        return None
     bbox = (int(cx - r), int(cy - r), int(2 * r), int(2 * r))
     conf = float(np.clip(0.4 + 0.3 * min(1.0, area / 4000.0), 0.0, 0.8))  # < contour: fallback
     best = (area, bbox, (float(cx), float(cy)), float(2 * r), conf)
@@ -176,6 +198,7 @@ def detect_hook(frame,
                 focal_px: Optional[float] = None,
                 canny_lo=HOOK_CANNY_LO,
                 canny_hi=HOOK_CANNY_HI,
+                max_area_frac=HOOK_MAX_AREA_FRAC,
                 enhance=True) -> Optional[dict]:
     """Deteksi hook dari 1 frame → dict (lihat modul docstring) atau None.
 
@@ -191,13 +214,18 @@ def detect_hook(frame,
     if not CV2_OK or frame is None:
         return None
 
+    # Batas atas dihitung dari frame INI (bukan konstanta px), supaya ambangnya
+    # ikut resolusi kamera mana pun. Lihat HOOK_MAX_AREA_FRAC.
+    frame_area = float(frame.shape[0] * frame.shape[1])
+    max_area = frame_area * max_area_frac if max_area_frac else None
+
     found = None
     if hsv_range is not None:
-        found = _detect_by_color(frame, hsv_range, min_area)
+        found = _detect_by_color(frame, hsv_range, min_area, max_area)
     if found is None and enhance:
-        found = _detect_by_contour(frame, min_area, canny_lo, canny_hi)
+        found = _detect_by_contour(frame, min_area, canny_lo, canny_hi, max_area)
     if found is None and enhance:
-        found = _detect_by_hough(frame, min_area)
+        found = _detect_by_hough(frame, min_area, max_area)
     if found is None:
         return None
 
