@@ -1296,6 +1296,11 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
+    case "toggle_control_mode": {
+      els.btnMode.click();
+      return;
+    }
+
     // Emergency Stop: aksi terpisah dari mode_manual, supaya tombol yang
     // meminta pilot mode MANUAL dan tombol yang menghentikan seluruh
     // thruster tidak lagi menumpang pada action id yang sama.
@@ -1396,6 +1401,16 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
+    case "camera_snapshot": {
+      els.btnSnap.click();
+      return;
+    }
+
+    case "toggle_record": {
+      els.btnRec.click();
+      return;
+    }
+
     /* ================= LIGHT ================= */
     case "lights_brighter": {
       sendCmd("light_level", mode === "hold" ? { dir: "up", hold: true } : "up");
@@ -1404,6 +1419,11 @@ function executeJoystickAction(action, mode = "toggle") {
 
     case "lights_dimmer": {
       sendCmd("light_level", mode === "hold" ? { dir: "down", hold: true } : "down");
+      return;
+    }
+
+    case "toggle_light": {
+      els.btnLight.click();
       return;
     }
 

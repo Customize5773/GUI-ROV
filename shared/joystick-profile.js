@@ -44,8 +44,12 @@
    v7: mode ACRO dihapus dari dashboard (tanpa cascade PID kedalaman ArduSub
    dan tanpa handler ACRO di app.js, action ini praktis mati). Profil
    tersimpan yang punya tombol terikat ke "mode_acro" dimigrasikan ke
-   "no_function" supaya tidak diam-diam macet. */
-export const SCHEMA_VERSION = 9;
+   "no_function" supaya tidak diam-diam macet.
+
+   v10: 4 aksi baru yang men-trigger tombol GUI yang sudah ada (light,
+   snapshot, record, toggle mode manual/autonomous) supaya bisa di-bind ke
+   tombol joystick lewat halaman Setup > Joystick. */
+export const SCHEMA_VERSION = 10;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -78,6 +82,10 @@ export const BUTTON_ACTIONS = [
   "depth_down",
   "thruster_gain_inc",
   "thruster_gain_dec",
+  "toggle_light",
+  "camera_snapshot",
+  "toggle_record",
+  "toggle_control_mode",
 ];
 
 /* Cara sebuah tombol memicu aksinya:

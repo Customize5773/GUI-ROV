@@ -132,6 +132,10 @@ const ACTION_LABELS = {
   // wahana juga ada di mode Alt Hold — lihat rov_modes.py.
   depth_set: "Depth SET (rekam kedalaman)",
   depth_hold_toggle: "Depth-set ON/OFF",
+  toggle_light: "Toggle lampu",
+  camera_snapshot: "Snapshot kamera",
+  toggle_record: "Toggle record video",
+  toggle_control_mode: "Toggle mode Manual/Autonomous",
 };
 
 const COCKPIT_LAYOUT = {
