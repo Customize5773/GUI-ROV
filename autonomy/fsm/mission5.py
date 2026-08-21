@@ -227,7 +227,12 @@ class CommandSender:
         with self._lock:
             if self._closed:
                 return
-            raw = json.dumps({'name': name, 'value': value}).encode()
+            # src='fsm' menandai frame ini datang dari autonomy, bukan operator.
+            # Kill-switch di rov_link.handle_command pakai tanda ini — DULU dia
+            # nebak dari alamat pengirim (127.0.0.1 = loopback = FSM), yang diam-diam
+            # mati begitu server.js jalan sehost dgn rov_link (SITL/GUI di Pi):
+            # axis operator ikut ber-IP loopback, dianggap FSM, abort tak pernah nyala.
+            raw = json.dumps({'name': name, 'value': value, 'src': 'fsm'}).encode()
             self._sock.sendto(raw, (self._host, self._port))
         log.debug("[cmd] %s=%s", name, value)
 

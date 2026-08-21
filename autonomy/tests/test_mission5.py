@@ -538,3 +538,22 @@ def test_commandsender_emit_setelah_close_tidak_crash():
     cmd.close()
     cmd.emergency_stop()  # tak boleh raise
     cmd.close()  # idempotent, tak boleh raise dobel-close
+
+
+def test_commandsender_menandai_frame_src_fsm():
+    """Kill-switch rov_link membedakan axis operator dari axis FSM lewat field
+    'src'. Dulu dia nebak dari alamat pengirim (127.0.0.1 = FSM), yang diam-diam
+    mati begitu server.js jalan sehost dgn rov_link (GUI/SITL di satu mesin):
+    axis operator ikut ber-IP loopback, dianggap FSM, abort tak pernah nyala.
+    Kalau tanda ini hilang, kill-switch balik jadi tak bisa dipicu."""
+    terkirim = []
+    cmd = m5.CommandSender(host='127.0.0.1', port=0)
+    cmd._sock = type("FakeSock", (), {
+        "sendto": lambda self, raw, dest: terkirim.append(json.loads(raw.decode())),
+        "close": lambda self: None,
+    })()
+
+    cmd.send(surge=50)
+
+    assert terkirim, "tak ada frame terkirim"
+    assert all(f.get('src') == 'fsm' for f in terkirim), terkirim
