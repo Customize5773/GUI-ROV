@@ -38,6 +38,7 @@ autonomy/Cleaned_underwater
 
 # Model 3D besar
 public/models/rov.obj
+log-m5
 
 # Planning
 Planning/ANALISIS-PID-ROLL-PITCH.md

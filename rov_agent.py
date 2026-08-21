@@ -42,6 +42,7 @@ from rov_pid import (
     resolve_pid_writes,
     smooth_depth,
     valid_pool_depth,
+    
 )
 
 from attitude_filter import AttitudeFilter
@@ -204,6 +205,18 @@ master_lock = threading.Lock()
 # bukan hukum kendali apa yang dipakai wahana.
 current_control_mode = "manual"
 
+# Mission5 FSM (misi 5 autonomous). Dibuat saat pertama kali dibutuhkan di
+# main(), dinyalakan/dimatikan oleh toggle control_mode di command_listener.
+# None berarti belum di-setup (mis. import autonomy gagal) — kontrol manual
+# tetap jalan penuh, lihat rov_mission5_bridge.Mission5Runner.
+mission5_runner = None
+
+# Axis yang sedang diperintahkan FSM (skala GUI -1000..1000). Terpisah dari
+# `joystick` (axis operator) supaya keduanya tidak pernah saling menimpa: yang
+# menentukan mana yang dipakai adalah current_control_mode di joystick_sender.
+fsm_axes = {"surge": 0, "sway": 0, "heave": 0, "yaw": 0}
+fsm_axes_lock = threading.Lock()
+
 # Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
 attitude_filter = AttitudeFilter()
@@ -306,6 +319,19 @@ requested_mode_ts = 0.0
 REQUESTED_MODE_TIMEOUT = 3.0
 
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
+
+# Kill-switch autonomy: axis operator di atas ambang ini saat mode autonomous
+# membatalkan FSM dan mengembalikan kendali manual. Skalanya SAMA dengan axis
+# GUI, -1000..1000 (clampAxis di server.js, AXIS_RANGE di rov_axes.py) — jadi
+# 15 ≈ 1,5% skala penuh, BUKAN 15%.
+#
+# Yang menyaring drift stik bukan angka ini, melainkan deadzone sisi-GUI
+# (DEFAULT_DEADZONE=0.12 + expo 1.6 di shared/joystick-profile.js). Efek
+# gabungannya: kill-switch menyala di ~20% defleksi stik fisik — peka untuk
+# merebut kendali, tuli terhadap noise. Nilainya sengaja sama persis dengan
+# KILL_SWITCH_DEADZONE di autonomy/rov_link.py (jalur autonomous yang lain);
+# JANGAN naikkan ke 150 dengan anggapan skalanya -100..100.
+KILL_SWITCH_DEADZONE = 15
 
 def _effective_requested_mode():
     """requested_mode kalau masih dalam jendela REQUESTED_MODE_TIMEOUT, else None.
@@ -639,6 +665,12 @@ def send_telemetry():
     # Pola yang sama dipakai autonomy/rov_link.py dan server/server.js.
     state["control_mode"] = current_control_mode
     state["thruster_gain"] = thruster_gain * 100.0
+
+    # State FSM misi 5 (mis. "M5_DOCK") supaya operator melihat progres misi,
+    # bukan cuma badge autonomous. None = FSM tidak sedang jalan.
+    state["mission5_state"] = (
+        mission5_runner.state_name() if mission5_runner is not None else None
+    )
     send_to_gui(state)
 
     now = time.time()
@@ -680,6 +712,83 @@ def send_gcs_heartbeat():
             mavutil.mavlink.MAV_AUTOPILOT_INVALID,
             0, 0, 0,
         )
+
+
+# =========================
+# Mission5 FSM (misi 5 autonomous)
+# =========================
+def _fsm_set_axis(surge=0, sway=0, yaw=0, heave=0):
+    """Dipanggil Mission5FSM lewat adapter. Menulis ke fsm_axes, BUKAN joystick.
+
+    Nilai sudah dalam skala GUI -1000..1000 (adapter yang mengalikan ×10 dari
+    persen milik FSM). Di-clamp lewat jalur yang sama dengan axis operator
+    supaya tidak ada cara FSM mengirim nilai di luar rentang yang sah.
+    """
+    with fsm_axes_lock:
+        fsm_axes["surge"] = clamp_axis("surge", surge)
+        fsm_axes["sway"] = clamp_axis("sway", sway)
+        fsm_axes["yaw"] = clamp_axis("yaw", yaw)
+        fsm_axes["heave"] = clamp_axis("heave", heave)
+
+
+def _fsm_set_gripper(close):
+    if gripper is None:
+        return
+    if close:
+        gripper.close()
+    else:
+        gripper.open()
+
+
+def _fsm_emergency_stop():
+    """Failsafe FSM: netralkan axis FSM + disarm.
+
+    Sengaja TIDAK menyentuh gripper — melepas payload saat abort justru
+    menjatuhkannya di tempat yang salah.
+    """
+    with fsm_axes_lock:
+        fsm_axes.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+    send_arm_disarm(False)
+
+
+def _fsm_read_state():
+    """Telemetri untuk FSM: dict `state` apa adanya.
+
+    FSM membaca 'depth', 'heading', 'roll', 'pitch', dan 'control_mode' —
+    semuanya sudah diisi loop utama & send_telemetry.
+    """
+    return dict(state)
+
+
+def setup_mission5_runner():
+    """Siapkan runner FSM. Gagal-lunak: None berarti misi 5 tak tersedia."""
+    global mission5_runner
+    try:
+        from rov_mission5_bridge import (Mission5CommandAdapter,
+                                         Mission5TelemetryAdapter,
+                                         Mission5Runner)
+    except Exception as e:
+        print(f"[M5] bridge tidak tersedia: {e}")
+        return None
+
+    cmd = Mission5CommandAdapter(
+        set_axis=_fsm_set_axis,
+        set_gripper=_fsm_set_gripper,
+        arm=send_arm_disarm,
+        emergency_stop=_fsm_emergency_stop,
+    )
+    telem = Mission5TelemetryAdapter(read_state=_fsm_read_state)
+    cfg = {
+        "vision_source": os.environ.get("M5_VISION_SOURCE", "usb"),
+        "bottom_url": os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8080/stream"),
+        "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8081/stream"),
+        "calib_bottom": os.environ.get("M5_CALIB_BOTTOM"),
+        "calib_wall": os.environ.get("M5_CALIB_WALL"),
+        "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
+    }
+    mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
+    return mission5_runner
+
 
 # =========================
 # Command handler dari laptop
@@ -755,6 +864,25 @@ def command_listener():
 
                 current_control_mode = requested
                 print(f"[CONTROL] {current_control_mode}")
+
+                # Sampai 22 Agu 2026 baris di atas adalah SATU-SATUNYA efek
+                # toggle ini: string diubah, dicetak, selesai. Tak ada FSM yang
+                # pernah dijalankan rov_agent.py, jadi menekan Autonomous di GUI
+                # tidak menggerakkan wahana sama sekali (trial 22 Agu: depth
+                # rata 0.08-0.14 m selama 57 detik). FSM-nya ada, tapi di
+                # autonomy/rov_link.py — program terpisah yang tak pernah jalan
+                # di Pi. Sekarang toggle benar-benar menyalakan/mematikannya.
+                if mission5_runner is None:
+                    print("[M5] runner tidak tersedia — toggle autonomous tidak "
+                          "menjalankan FSM (kontrol manual tetap normal)")
+                elif current_control_mode == "autonomous":
+                    # Axis FSM dinolkan DULU: sisa setpoint dari sesi
+                    # sebelumnya tidak boleh ikut terbawa saat FSM baru mulai.
+                    with fsm_axes_lock:
+                        fsm_axes.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+                    mission5_runner.start()
+                else:
+                    mission5_runner.stop()
 
             elif name == "pilot_mode":
 
@@ -1387,6 +1515,7 @@ def joystick_sender():
     Mengirim heave mentah sebagai z membuat "diam" berarti MENYELAM PENUH —
     termasuk saat E-Stop dan saat link GUI putus.
     """
+    global current_control_mode
 
     while True:
         # Link Pixhawk sedang putus/menyambung ulang — tidak ada tujuan kirim.
@@ -1397,6 +1526,33 @@ def joystick_sender():
         with joystick_lock:
             axes = dict(joystick)
             last_update = last_joystick_update
+
+        # ── Otoritas: FSM vs operator ──────────────────────────────────────
+        # Saat autonomous, axis datang dari FSM. TAPI stik operator selalu
+        # menang: dorongan nyata di atas deadzone langsung membatalkan
+        # autonomy dan mengembalikan kendali. Ambang KILL_SWITCH_DEADZONE
+        # hidup di skala yang sama dgn axis GUI (-1000..1000) — lihat
+        # autonomy/rov_link.py utk analisis lengkapnya; yang menyaring drift
+        # stik adalah deadzone sisi-GUI (0.12), bukan angka ini.
+        if current_control_mode == "autonomous":
+            operator_nyetir = any(
+                abs(axes.get(k, 0)) > KILL_SWITCH_DEADZONE
+                for k in ("surge", "sway", "yaw", "heave")
+            )
+            if operator_nyetir:
+                print("[KILL-SWITCH] stik operator digerakkan saat autonomous "
+                      "— abort FSM, kembali ke manual")
+                current_control_mode = "manual"
+                if mission5_runner is not None:
+                    mission5_runner.stop()
+            else:
+                with fsm_axes_lock:
+                    axes = dict(fsm_axes)
+                # Axis FSM tidak lewat command_listener, jadi fail-safe idle
+                # (yang mengukur last_joystick_update) tak berlaku untuknya —
+                # kalau tidak di-refresh, FSM selalu dianggap "stale" dan
+                # setiap perintahnya diganti netral.
+                last_update = time.time()
 
         # Ramp TIDAK BOLEH menunda perintah berhenti. E-Stop menetralkan axis
         # lalu disarm; tanpa reset di sini, nilai ter-shape masih meluncur
@@ -1480,6 +1636,12 @@ def connect_pixhawk():
     master = link
     gripper = GripperController(master)
     print("[GRIPPER] Controller initialized")
+
+    # Runner FSM misi 5. Gagal-lunak: kalau paket autonomy/opencv belum ada di
+    # Pi, ini mencetak alasannya dan mengembalikan None — agent tetap jalan
+    # penuh untuk kontrol manual, cuma toggle Autonomous yang tidak berefek.
+    if setup_mission5_runner() is not None:
+        print("[M5] runner siap — toggle Autonomous di GUI akan menjalankan FSM")
 
     # Minta stream data secara periodik
     try:
