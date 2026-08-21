@@ -167,8 +167,15 @@ DEPTH_BIAS_GAIN = 200.0   # unit z per meter error, DI ATAS offset deadzone
 DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
 
 # Offset minimum supaya perintah benar-benar keluar dari deadzone ALT_HOLD.
-# 130 > 125 (THR_DZ=100 PWM) dengan margin kecil terhadap pembulatan.
 # NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
+#
+# 22 Agu 2026 — angkanya DIVERIFIKASI LANGSUNG dari Pixhawk, bukan diasumsikan:
+#   THR_DZ=100 PWM, RC3_MIN=1100, RC3_MAX=1900
+#   → span 800 PWM / 1000 unit z  ⇒  1 unit z = 0,8 PWM
+#   → keluar deadzone butuh > 100/0,8 = 125 unit z
+# Pada ambang engage (error 0,05 m) magnitude = DEADZONE + 0,05*200 = DEADZONE+10:
+#   130 → 140 unit = 112 PWM  → 12 PWM di atas deadzone, langsung mendorong ✓
+#   115 → 125 unit = 100 PWM  → PERSIS di tepi, nol dorongan ✗
 DEPTH_BIAS_DEADZONE = 130
 
 # DUA ambang, bukan satu — ini HISTERESIS, dan perbedaannya menentukan apakah
@@ -231,11 +238,24 @@ DEPTH_BIAS_DAMPING = 300.0  # unit z per (m/s) laju error mengecil
 # tangani lebih baik secara native, batasi jangkauannya: SET yang sudah lama
 # (operator berenang jauh sebelum menekan ON) dibiarkan diam, bukan dipaksa
 # mengejar dan berisiko drift.
-# 21 Agu 2026: nilai ini (dan DEPTH_BIAS_DEADZONE di atas) DISALIN DARI PI,
-# bukan sebaliknya. Repo tertinggal di 0.15/130 sementara wahana sudah lama
-# terbang dengan 0.35/115 — hasil penyetelan di tepi kolam yang tidak pernah
-# kembali ke git. Siapa pun yang membaca repo saja akan salah menyimpulkan apa
-# yang sebenarnya berjalan; itu sudah terjadi sekali hari ini.
+# 21 Agu 2026: nilai INI (0.35) disalin dari Pi, hasil penyetelan di tepi kolam
+# yang tidak pernah kembali ke git.
+#
+# 22 Agu 2026 — KOREKSI, dan bacalah sebelum menyalin balik dari Pi lagi.
+# Catatan 21 Agu menulis "DEPTH_BIAS_DEADZONE juga disalin dari Pi", tapi yang
+# benar-benar disalin cuma 0.35; deadzone tetap 130 di repo sementara Pi
+# memegang 115. Komentar dan kode di file yang sama saling membantah selama
+# sehari.
+#
+# Yang menyelesaikannya bukan "mana yang lebih baru", melainkan pengukuran:
+# THR_DZ=100 PWM & RC3 1100-1900 dibaca langsung dari FC (lihat blok
+# DEPTH_BIAS_DEADZONE di atas) membuktikan 115 menaruh bias minimum DI DALAM
+# deadzone firmware — depth-set tak menghasilkan dorongan sama sekali sampai
+# error lewat ~5 cm. Jadi 115 bukan "nilai lapangan yang terbukti", melainkan
+# salah setel yang kebetulan tidak pernah dipertanyakan karena wahana tetap
+# bergerak (ALT_HOLD native yang menahannya, bukan bias kita).
+#
+# Pelajarannya: "yang jalan di Pi" ≠ "yang benar". Ukur, jangan salin.
 #
 # 0.35 dipertahankan karena datanya mendukung: dari 2.506 sampel depth-hold di
 # tiga trial (hydro/ROV6/ROV7), gerbang ini hanya menyentuh 2 sampel, error

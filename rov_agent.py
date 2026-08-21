@@ -225,11 +225,6 @@ joystick = {
 # tidak boleh mengirim bias apa pun.
 depth_target = None
 
-# Saklar depth-set dari operator (tombol ON/OFF di GUI atau gamepad). Depth-set
-# TIDAK pernah menyala sendiri: masuk ALT_HOLD/POSHOLD tidak menyentuhnya.
-# Lihat apply_depth_hold_bias() untuk gerbang lengkapnya.
-depth_hold_enabled = False
-
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
 # depth 0 operator = permukaan sungguhan, bukan origin baro/EKF mentah yang
@@ -338,9 +333,9 @@ def _current_pixhawk_mode():
 def depth_hold_mode_ok():
     """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
 
-    HANYA soal mode — bukan "depth-set sedang aktif". Saklar operator ada di
-    depth_hold_enabled, dan keduanya sengaja terpisah: mode tidak pernah
-    menyalakan depth-set, depth-set tidak pernah memindahkan mode.
+    HANYA soal mode, dipakai badge GUI sebagai indikator "mode ini menahan
+    kedalaman" — bukan "bias sedang benar-benar mendorong" (lihat
+    depth_bias_engaged untuk syarat lengkapnya).
 
     MANUAL/ALT_HOLD/POSHOLD sengaja TIDAK termasuk — lihat DEPTH_HOLD_MODES
     di rov_modes.py untuk mode mana yang jadi syaratnya sekarang.
@@ -351,20 +346,21 @@ def depth_hold_mode_ok():
 def apply_depth_hold_bias(mc, axes):
     """Geser MANUAL_CONTROL.z ke arah depth_target saat depth-set aktif.
 
-    Empat gerbang, semuanya harus terbuka (lihat depth_bias_engaged di
-    rov_modes.py untuk aturannya dalam bentuk yang bisa diuji):
-      1. operator sudah menekan SET  -> depth_target bukan None
-      2. operator sudah meng-ON-kan  -> depth_hold_enabled
-      3. mode ArduSub ada di DEPTH_HOLD_MODES (rov_modes.py)
-      4. stik heave netral           -> begitu operator menyentuh stik, input
-                                        manual menang mutlak
+    Tiga gerbang, semuanya harus terbuka (lihat depth_bias_engaged di
+    rov_modes.py untuk aturannya dalam bentuk yang bisa diuji). Tak ada saklar
+    ON/OFF operator terpisah — target sendiri yang jadi penanda "aktif":
+      1. depth_target sudah terisi   -> None sampai heave pernah disentuh
+                                        (di bawah) atau depth_up/depth_down ditekan
+      2. mode ArduSub ada di DEPTH_HOLD_MODES (rov_modes.py)
+      3. stik heave netral           -> begitu operator menyentuh stik, input
+                                        manual menang mutlak, dan target
+                                        mengikuti kedalaman sampai stik dilepas
     """
     global depth_target
     global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
 
     with depth_lock:
         target = depth_target
-        enabled = depth_hold_enabled
 
     if not depth_bias_engaged(
         target,
@@ -697,7 +693,6 @@ def command_listener():
     global mavlink_stream_requested_at
     global pool_depth
     global depth_offset
-    global depth_hold_enabled
     global poshold_active
     global heading_target
     global thruster_gain
@@ -799,12 +794,11 @@ def command_listener():
                 with heading_lock:
                     heading_target = None
 
-                # CATATAN: perpindahan mode sengaja TIDAK menyentuh depth_target
-                # maupun depth_hold_enabled. Menuju setpoint tersimpan adalah
-                # fitur terpisah (command depth_set / depth_hold) yang di-arm
-                # operator sendiri — lihat DEPTH_HOLD_MODES di rov_modes.py
-                # untuk mode mana yang jadi syarat bias-nya sekarang.
-
+                # Masuk mode depth-hold (lihat DEPTH_HOLD_MODES di rov_modes.py)
+                # dari mode LAIN mengisi depth_target dari kedalaman saat ini —
+                # operator tidak perlu memegang-lalu-lepas heave dulu hanya
+                # untuk membuat target awal. Tetap di dalam depth-hold (ganti
+                # mode depth-hold ke depth-hold lain) mempertahankan target lama.
                 if depth_hold_allowed(pixhawk_mode):
                     was_depth_hold = (
                         previous_requested_mode is not None
@@ -854,11 +848,13 @@ def command_listener():
                     heading_target = None
                 # Depth-set juga dimatikan: E-Stop berarti operator ingin semua
                 # yang menulis ke thruster berhenti, dan setelah re-arm wahana
-                # tidak boleh langsung berenang sendiri ke setpoint lama.
-                # depth_target sengaja DIPERTAHANKAN — kedalaman kerja yang
-                # sudah direkam masih berguna, operator tinggal menekan ON lagi.
+                # tidak boleh langsung berenang sendiri ke setpoint lama tanpa
+                # operator menekan apa pun. Tak ada saklar enabled terpisah lagi
+                # (lihat apply_depth_hold_bias) — depth_target SENDIRI dibuang,
+                # supaya operator harus memegang-lalu-lepas heave dulu untuk
+                # membentuk target baru sebelum bias aktif lagi.
                 with depth_lock:
-                    depth_hold_enabled = False
+                    depth_target = None
                 send_arm_disarm(False)
 
             elif name == "light":
@@ -1587,6 +1583,7 @@ def drop_link(reason):
 def main():
     global prev_attitude_ts
     global _raw_depth
+    global depth_target
 
     connect_pixhawk()
 
@@ -1810,22 +1807,19 @@ def main():
             was_armed = state["armed"]
             state["armed"] = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
 
-            # Disarm dari JALUR MANA PUN mematikan depth-set: tombol DISARM,
+            # Disarm dari JALUR MANA PUN membuang depth_target: tombol DISARM,
             # failsafe FC, saklar RC, atau GCS lain. Handler `stop` sudah
             # menanganinya untuk E-Stop, tapi tanpa cek transisi di sini
-            # depth_hold_enabled tetap True selama wahana disarm — dan begitu
-            # di-arm ulang wahana langsung berenang sendiri ke setpoint lama
-            # tanpa operator menekan apa pun. Itu persis kejutan yang hendak
-            # dihilangkan oleh tombol ON/OFF ini.
-            #
-            # depth_target sengaja DIPERTAHANKAN (sama seperti handler `stop`):
-            # kedalaman kerja yang sudah direkam masih berguna, operator tinggal
-            # menekan ON lagi setelah re-arm.
+            # target lama tetap tersimpan selama wahana disarm — dan begitu
+            # di-arm ulang (tanpa mode berubah) bias langsung mendorong ke
+            # setpoint lama tanpa operator menyentuh apa pun. Sama seperti
+            # blok E-Stop: operator harus memegang-lalu-lepas heave dulu untuk
+            # membentuk target baru.
             if was_armed and not state["armed"]:
                 with depth_lock:
-                    if depth_hold_enabled:
-                        globals()["depth_hold_enabled"] = False
-                        print("[DEPTH] Depth-set OFF — vehicle disarm")
+                    if depth_target is not None:
+                        depth_target = None
+                        print("[DEPTH] target dibuang — vehicle disarm")
 
             # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
             if requested_mode is not None and state["mode"] == requested_mode:

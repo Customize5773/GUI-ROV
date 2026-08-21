@@ -53,8 +53,18 @@ SURFACE_HPA_DEFAULT = 1013.25
 # Channel servo (SERVOn_FUNCTION di ArduSub). VERIFIKASI dgn QGroundControl.
 LIGHT_SERVO_CH = 9         # contoh — sesuaikan
 GRIPPER_SERVO_CH = 7       # SERVO7, sesuai konfigurasi ArduSub aktual
-GRIPPER_PWM_OPEN = 1900
-GRIPPER_PWM_CLOSE = 1100
+
+# HARUS sama dengan gripper_controller.py (dipakai rov_agent.py, jalur manual)
+# — dua implementasi TERPISAH menggerakkan channel fisik yang sama, dan sampai
+# 22 Agu 2026 nilainya berbeda: di sini 1900/1100, di gripper_controller.py
+# 1580/1350 (kalibrasi nyata di tepi kolam, 22 Agu). Kirim 1900/1100 ke gripper
+# yang travel amannya cuma sampai 1580/1350 mendorong servo ~2x lebih jauh dari
+# batas fisiknya — stall/tarik arus berlebih/rusak gear, bukan cuma salah bunyi.
+# Sengaja DIDUPLIKASI, bukan di-import (lihat komentar PILOT_MODE_MAP di atas:
+# rov_link.py harus tetap jalan standalone tanpa root repo di sys.path).
+# Dikunci tests/test_mission5.py::test_gripper_pwm_sama_dengan_gripper_controller.
+GRIPPER_PWM_OPEN = 1580
+GRIPPER_PWM_CLOSE = 1350
 LIGHT_PWM_ON = 1900
 LIGHT_PWM_OFF = 1100
 
@@ -197,6 +207,12 @@ class RovLink:
     # ───────────────────────── Command dari GUI ─────────────────────────
     def handle_command(self, name, value, addr=None, from_fsm=False):
         if name in self.sp:                      # surge/sway/yaw/heave
+            # Frame nyasar dari thread FSM yang belum benar-benar mati (join()
+            # timeout di stop_mission5) tidak boleh lolos begitu operator sudah
+            # kembali ke manual — kalau tidak, axis autonomous lama terus
+            # menimpa self.sp diam-diam.
+            if from_fsm and self.control_mode != "autonomous":
+                return
             # Kill-switch: axis nyata dari operator (bukan CommandSender milik FSM
             # sendiri, yang menandai frame-nya src='fsm') di atas deadzone, saat
             # autonomous berjalan → override manual.
@@ -328,6 +344,9 @@ class RovLink:
         fsm.abort()   # failsafe + disarm; TIDAK menyentuh gripper (lihat PLAN §1)
         if thread:
             thread.join(timeout=2)
+            if thread.is_alive():
+                print("[M5] PERINGATAN: thread FSM belum berhenti dalam 2s — masih hidup "
+                      "di background, tapi axis-nya sudah diblokir gate control_mode")
         dest = ("127.0.0.1", self.fsm_telem_port)
         if dest in self.extra_dests:
             self.extra_dests.remove(dest)

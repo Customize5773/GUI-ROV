@@ -16,7 +16,7 @@ export const CONFIG = {
   ],
 
   // "models/rov.glb" or "models/rov.fbx".
-  MODEL_URL: "models/rov.fbx",
+  MODEL_URL: "models/rov2.fbx",
 
   // kedalaman kolam uji (meter) — dipakai halaman Setup & altitude
   // Arena KKI 2026: kedalaman air 0.7–0.9 m (pakai 0.9 m).

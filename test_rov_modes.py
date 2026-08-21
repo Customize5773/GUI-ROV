@@ -3,6 +3,9 @@
     python3 -m unittest test_rov_modes -v
 """
 
+import ast
+import inspect
+import os
 import unittest
 
 from rov_modes import (
@@ -95,32 +98,32 @@ class TestDepthHoldGate(unittest.TestCase):
 
 
 class TestDepthBiasEngaged(unittest.TestCase):
-    """Gerbang depth-set: tombol SET + tombol ON/OFF + mode + stik heave."""
+    """Gerbang depth-set: target + mode + stik heave. Tanpa saklar ON/OFF
+    operator terpisah (desain 21 Agu 2026) — target sendiri yang jadi penanda
+    aktif, diisi otomatis begitu operator memegang-lalu-lepas heave."""
 
     # Nilai default yang "semuanya benar"; tiap test menjatuhkan satu syarat.
-    OK = dict(enabled=True, target=0.5, mode="STABILIZE", heave=0, heave_epsilon=20)
+    OK = dict(target=0.5, mode="STABILIZE", heave=0, heave_epsilon=20)
 
     def engaged(self, **override):
         kw = dict(self.OK, **override)
         return depth_bias_engaged(
-            kw["enabled"], kw["target"], kw["mode"], kw["heave"], kw["heave_epsilon"]
+            kw["target"], kw["mode"], kw["heave"], kw["heave_epsilon"]
         )
 
     def test_semua_syarat_terpenuhi(self):
         self.assertTrue(self.engaged())
 
     def test_belum_pernah_di_set(self):
-        # target None = operator belum menekan SET. Ini yang membuat masuk
-        # STABILIZE tidak lagi menyeret wahana ke setpoint apa pun.
+        # target None = belum pernah menyentuh heave/masuk mode depth-hold.
+        # Ini yang membuat masuk STABILIZE tidak menyeret wahana ke setpoint apa pun
+        # sebelum target pertama terbentuk.
         self.assertFalse(self.engaged(target=None))
 
     def test_target_nol_tetap_setpoint_yang_sah(self):
-        # Kalau None dan 0.0 tercampur, menekan SET tepat di permukaan akan
+        # Kalau None dan 0.0 tercampur, target tepat di permukaan akan
         # dianggap "belum di-set" dan depth-set diam-diam tidak bekerja.
         self.assertTrue(self.engaged(target=0.0))
-
-    def test_saklar_operator_mati(self):
-        self.assertFalse(self.engaged(enabled=False))
 
     def test_mode_bukan_stabilize(self):
         # Sudah SET dan sudah ON, tapi wahana di mode lain: DEPTH_HOLD_MODES
@@ -135,6 +138,59 @@ class TestDepthBiasEngaged(unittest.TestCase):
     def test_heave_dalam_deadzone_masih_dianggap_netral(self):
         self.assertTrue(self.engaged(heave=20))
         self.assertTrue(self.engaged(heave=-19))
+
+
+class TestCallSiteCocokDenganDefinisi(unittest.TestCase):
+    """Menyeberangi batas file: rov_agent.py MEMANGGIL, rov_modes.py MENDEFINISIKAN.
+
+    21 Agu 2026: commit "kkkkkkk" mendesain ulang depth-hold jadi auto-follow
+    (tanpa saklar ON/OFF operator terpisah — lihat apply_depth_hold_bias) dan
+    menghapus handler command depth_set/depth_hold, tapi TIDAK ikut membuang
+    parameter `enabled` dari depth_bias_engaged() maupun dari pemanggilnya
+    secara konsisten — sempat 4 argumen dikirim ke fungsi yang masih 5
+    parameter (TypeError setiap evaluasi). 22 Agu: parameter `enabled` dibuang
+    dari KEDUANYA (menyelesaikan redesain yang ditinggal setengah jalan),
+    kembali ke 4 parameter murni target/mode/heave/epsilon — bukan
+    menghidupkan kembali saklar yang sudah diniatkan mati (lihat commit
+    d25194b: "Tidak ada saklar manual lagi").
+
+    73 test lolos semua saat bug lama ada, karena tiap test memanggil fungsi
+    ini LANGSUNG dengan argumen yang benar — tak ada satu pun yang melewati
+    call site sungguhan. Test ini menjaga supaya arity call site & definisi
+    tak pernah menyimpang lagi, di kedua arah. Kelas bug yang sama dengan
+    `vert`/`heave` dan `mode`/`control_mode`: dua file tak sepakat, dan tak
+    ada test yang menyeberang di antaranya.
+    """
+
+    def test_arity_pemanggilan_di_rov_agent_cocok(self):
+        src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "rov_agent.py")
+        with open(src_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+
+        panggilan = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "depth_bias_engaged"
+        ]
+        self.assertTrue(
+            panggilan,
+            "tak ada pemanggilan depth_bias_engaged di rov_agent.py — "
+            "kalau memang dipindah, perbarui test ini, jangan hapus")
+
+        wajib = [
+            p for p in inspect.signature(depth_bias_engaged).parameters.values()
+            if p.default is inspect.Parameter.empty
+            and p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+        ]
+        for call in panggilan:
+            diberi = len(call.args) + len(call.keywords)
+            self.assertEqual(
+                diberi, len(wajib),
+                f"rov_agent.py baris {call.lineno} mengirim {diberi} argumen ke "
+                f"depth_bias_engaged(), padahal definisinya butuh {len(wajib)}: "
+                f"{[p.name for p in wajib]}")
 
 
 if __name__ == "__main__":

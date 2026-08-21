@@ -586,3 +586,33 @@ def test_m5_fallback_when_qr_never_acquired():
     assert rep['state_akhir'] == 'DONE'
     assert rep['jalur']['used_fallback'] is True
     assert rep['payload']['unhooked'] is True    # urutan timed benar-benar melepas
+
+
+# ── Kontrak gripper: rov_link.py (autonomous) vs gripper_controller.py (manual) ──
+def test_gripper_pwm_sama_dengan_gripper_controller():
+    """Dua implementasi TERPISAH menggerakkan channel fisik yang sama (CH7):
+    rov_link.py (jalur FSM/autonomous) dan gripper_controller.py (jalur manual
+    rov_agent.py, dipakai via GripperController). 22 Agu 2026: keduanya sempat
+    berbeda — rov_link.py 1900/1100, gripper_controller.py 1580/1350 (kalibrasi
+    nyata di tepi kolam). Mengirim 1900/1100 ke gripper yang travel amannya cuma
+    1580/1350 mendorong servo jauh melewati batas fisiknya.
+
+    gripper_controller.py di root repo, bukan sinkronisasi jauh seperti
+    'vert'/'heave' — jadi dites langsung (bukan regex teks) sekalian mengunci
+    channel-nya juga sama."""
+    root = os.path.dirname(_AUTONOMY)
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    import gripper_controller as gc
+
+    with open(os.path.join(_AUTONOMY, 'rov_link.py'), encoding='utf-8') as f:
+        src = f.read()
+
+    def const(name):
+        m = re.search(rf"^{name}\s*=\s*(\d+)", src, re.M)
+        assert m, f"{name} tak ditemukan di rov_link.py — bentuknya berubah?"
+        return int(m.group(1))
+
+    assert const('GRIPPER_SERVO_CH') == gc.GRIPPER_SERVO_CH
+    assert const('GRIPPER_PWM_OPEN') == gc.GRIPPER_PWM_OPEN
+    assert const('GRIPPER_PWM_CLOSE') == gc.GRIPPER_PWM_CLOSE

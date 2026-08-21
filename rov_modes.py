@@ -127,32 +127,31 @@ def poshold_mode_ok(mode):
     return mode == POSHOLD_BASE_MODE
 
 
-def depth_bias_engaged(enabled, target, mode, heave, heave_epsilon):
+def depth_bias_engaged(target, mode, heave, heave_epsilon):
     """True kalau bias throttle depth-set boleh benar-benar dikirim sekarang.
 
     Semua gerbang depth-set dikumpulkan di satu fungsi murni supaya bisa diuji
     tanpa pymavlink/socket — pemanggilnya (apply_depth_hold_bias di
     rov_agent.py) tinggal membaca state global lalu menyerahkannya ke sini.
 
-    Urutan gerbang sengaja begini:
-      - `target is None` (operator belum menekan SET) DIBEDAKAN dari target
-        0.0 yang sah. Tanpa itu, "belum di-set" akan berarti "tahan di
-        permukaan" dan wahana naik sendiri begitu depth-set di-ON-kan.
-      - `enabled` adalah saklar operator. Masuk ALT_HOLD/POSHOLD TIDAK
-        menyalakannya: menahan kedalaman firmware adalah esensi mode itu,
-        sedangkan menuju setpoint tersimpan adalah fitur terpisah yang
-        di-arm sendiri oleh operator.
-      - `mode` tetap harus mode depth hold (lihat DEPTH_HOLD_MODES). Ini
-        bukan coupling arah sebaliknya, melainkan syarat fisik: kompensasi
-        deadzone yang dipakai bias mengasumsikan ada cascade PID kedalaman
-        yang menerimanya (atau, untuk STABILIZE, bias itu sendiri jadi
-        satu-satunya yang mendorong). Di MANUAL bias jadi dorongan open-loop
-        tanpa umpan balik sama sekali.
+    TIGA gerbang, tanpa saklar ON/OFF operator terpisah (desain 21 Agu 2026,
+    lihat apply_depth_hold_bias): target mengikuti kedalaman aktual selagi
+    stik heave dipegang, dan terkunci begitu stik dilepas. "Aktif" jadi murni
+    fungsi target+mode+heave, bukan state tersendiri yang bisa lupa dimatikan.
+
+      - `target is None` (belum pernah menyentuh heave sejak boot/SET awal)
+        DIBEDAKAN dari target 0.0 yang sah. Tanpa itu, "belum pernah diisi"
+        akan berarti "tahan di permukaan" dan wahana naik sendiri begitu
+        masuk mode yang tepat.
+      - `mode` harus mode depth hold (lihat DEPTH_HOLD_MODES). Ini bukan
+        coupling arah sebaliknya, melainkan syarat fisik: kompensasi deadzone
+        yang dipakai bias mengasumsikan ada cascade PID kedalaman yang
+        menerimanya (atau, untuk STABILIZE, bias itu sendiri jadi satu-satunya
+        yang mendorong). Di MANUAL bias jadi dorongan open-loop tanpa umpan
+        balik sama sekali.
       - stik heave yang dipegang selalu menang atas setpoint mana pun.
     """
     if target is None:
-        return False
-    if not enabled:
         return False
     if not depth_hold_allowed(mode):
         return False
