@@ -309,14 +309,16 @@ class TestDepthHoldBiasMaxCorrection(unittest.TestCase):
         self.assertNotEqual(depth_hold_bias(tepat_di_batas, was_active=True), 0.0)
 
     def test_di_luar_jangkauan_diam(self):
-        for error in (DEPTH_BIAS_MAX_CORRECTION + 0.001, 0.3, 1.0, 10.0):
+        for error in (DEPTH_BIAS_MAX_CORRECTION + 0.001,
+                      DEPTH_BIAS_MAX_CORRECTION * 2, 1.0, 10.0):
             self.assertEqual(depth_hold_bias(error, was_active=True), 0.0, msg=error)
             self.assertEqual(depth_hold_bias(-error, was_active=True), 0.0, msg=error)
 
     def test_kembali_dalam_jangkauan_aktif_lagi(self):
         # Tidak butuh "reset" apa pun -- histeresis (was_active) dan batas
         # jangkauan adalah dua gerbang independen, dicek ulang tiap panggilan.
-        self.assertEqual(depth_hold_bias(0.3, was_active=True), 0.0)
+        self.assertEqual(
+            depth_hold_bias(DEPTH_BIAS_MAX_CORRECTION * 2, was_active=True), 0.0)
         self.assertNotEqual(depth_hold_bias(0.1, was_active=True), 0.0)
 
     def test_override_max_correction_dihormati(self):

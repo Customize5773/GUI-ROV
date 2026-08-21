@@ -557,3 +557,32 @@ def test_commandsender_menandai_frame_src_fsm():
 
     assert terkirim, "tak ada frame terkirim"
     assert all(f.get('src') == 'fsm' for f in terkirim), terkirim
+
+
+# ── Integrasi: jalur M5_FALLBACK (degradasi timed misi 5) ────────────────────
+# Drill Fase 4 "tutup lensa kamera saat docking" (PERSIAPAN_FASE2-4.md §4.4):
+# QR payload hilang permanen → misi 5 WAJIB degradasi ke M5_FALLBACK dan tetap
+# selesai (kredit), BUKAN ABORT. Sebelumnya tak ada test yang menapaki jalur ini —
+# yang ada hanya memastikan fallback TIDAK terpakai di jalur normal.
+def test_m5_fallback_when_qr_lost_during_dock():
+    """QR ter-lock di REDIVE lalu HILANG saat M5_DOCK (lensa tertutup di tengah
+    docking) → M5_DOCK timeout → M5_FALLBACK → DONE, misi 5 tetap dapat nilai."""
+    rep = run_scenario(start_state=State.M5_REDIVE, provide_pose=True,
+                       dropout=lambda c: c > 40)
+    visited = [t[2] for t in rep['transitions']]
+    assert 'M5_DOCK' in visited, f'REDIVE harus sempat lock QR dulu: {visited}'
+    assert 'M5_FALLBACK' in visited, f'harus degradasi ke fallback: {visited}'
+    assert rep['state_akhir'] == 'DONE'          # bukan ABORT
+    assert rep['nilai_misi_5'] > 0               # tetap dapat kredit
+    assert rep['jalur']['used_fallback'] is True
+    assert rep['jalur']['used_visual_dock'] is False
+
+
+def test_m5_fallback_when_qr_never_acquired():
+    """QR tak pernah terdeteksi sama sekali → M5_REDIVE timeout → M5_FALLBACK.
+    Payload tetap terlepas dari hook lewat urutan timed buta."""
+    rep = run_scenario(start_state=State.M5_REDIVE, provide_pose=True,
+                       dropout=lambda c: True)
+    assert rep['state_akhir'] == 'DONE'
+    assert rep['jalur']['used_fallback'] is True
+    assert rep['payload']['unhooked'] is True    # urutan timed benar-benar melepas

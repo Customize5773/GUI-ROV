@@ -81,6 +81,27 @@ GUI menampilkan gerak 3D sinkron, handoff manual/autonomous & STOP terverifikasi
   Sisa yang belum tercentang: **checklist browser** di `TEST_CHECKLIST.md`
   (gerak 3D, tombol fisik, F12 console) — butuh mata, tak bisa headless.
 
+- **2026-08-21 (lanjutan) — skenario A/B/C + stabilitas DICENTANG.** Ketiga
+  skenario SITL di `TEST_CHECKLIST.md` dijalankan & lulus: **A** 100/100 dalam
+  54 dtk, **B** 40/40 dalam 15 dtk, **C** konvergensi servo x 0.15→0.00,
+  y 0.10→0.00, z 0.72→0.30 (= `SERVO_TARGET_DIST`), `ALIGNED` tepat 1×. Nol
+  WARNING/ERROR di ketiganya. Resource saat run: maks 77 MB RSS & 10,5% CPU per
+  proses, shutdown tanpa proses tersisa. `verify_handoff.mjs` dijalankan ulang
+  → 3/3 LULUS. Unit test 135 passed, 2 skipped.
+
+  Dua celah ditutup di sesi ini:
+  1. **`README_SETUP_C.md` yang hilang** (dirujuk README, ROADMAP, PERSIAPAN,
+     dan docstring `launch_sitl.py`) kini ada — jalur manual per-terminal untuk
+     mendiagnosa saat launcher gagal, plus empat jebakan lingkungan yang selama
+     ini cuma tercatat di catatan lepas (`RPI_ADDR`, `npm run sim`, `PYTHONPATH=`,
+     port sisa). Langkah-langkahnya dijalankan apa adanya untuk memastikan benar.
+  2. **Kill-switch joystick tak punya test sama sekali** — kini `tests/test_rov_link.py`
+     (6 test). Sekalian ketahuan komentar `KILL_SWITCH_DEADZONE` menyebut skala
+     `-100..100`, padahal axis GUI berskala `-1000..1000`; angkanya sendiri aman
+     (menyala di ~20% defleksi stik berkat deadzone GUI 0.12), tapi komentarnya
+     mengundang "perbaikan" 15→150 yang justru membuat takeover lamban. Komentar
+     diperbaiki, ambangnya TIDAK diubah.
+
 ## Fase 2 — Bring-up hardware kering (ROV di darat / ember, TANPA kolam penuh)
 
 Tujuan: pastikan tiap axis & aktuator fisik benar SEBELUM ROV masuk air.
@@ -141,14 +162,18 @@ Tujuan: simulasikan kondisi hari-H seakurat mungkin, termasuk jalur degradasi.
       (`fsm/mission5.py --start-state M5_REDIVE`) — operator toggle header
       Manual→Autonomous setelah docking misi 4 selesai.
 - [ ] Full run end-to-end dgn **auto screenshot & logging** GUI aktif (§4.7.3).
-- [ ] Uji sengaja jalur **M5_FALLBACK** (mis. tutup lensa kamera saat docking)
-      — pastikan degradasi timed tetap dapat kredit parsial, bukan ABORT total.
-- [ ] Siapkan checklist hari-H: baterai, kabel umbilical, cek arm/disarm,
-      urutan boot (Pixhawk → rov_link → server → GUI → FSM).
+- [x] **Logika** jalur **M5_FALLBACK** terverifikasi (2026-08-21, simulator):
+      QR hilang → `M5_DOCK`/`M5_REDIVE` timeout → `M5_FALLBACK` → `DONE`, misi 5
+      tetap dapat nilai, BUKAN ABORT; payload tetap lepas dari hook lewat urutan
+      timed buta. Dikunci 2 pytest (`test_m5_fallback_*`), sudah diuji-mutasi.
+- [ ] **Drill fisik** jalur M5_FALLBACK di kolam: tutup lensa kamera saat docking
+      sungguhan — yang terbukti di atas logikanya, bukan perilaku ROV di air.
+- [x] Checklist hari-H **sudah tertulis** — `PERSIAPAN_FASE2-4.md` §4.1 (urutan
+      boot), §4.2 (pra-dive), §4.6 (teardown). Sisa: dieksekusi & dihafal tim.
 - [ ] Rehearsal 3× run berturut-turut TANPA intervensi manual di luar toggle
       mode — catat skor & waktu tiap run.
-- [ ] Siapkan rencana cadangan bila WiFi/venue melarang wireless (aturan KKI:
-      umbilical kabel wajib, satu subnet).
+- [x] Rencana kabel/umbilical **sudah tertulis** — `PERSIAPAN_FASE2-4.md` §4.2
+      (umbilical wajib, satu subnet). Sisa: uji sambungan fisik di venue.
 
 **DoD Fase 4:** 3× run sukses berturut-turut dgn skor rubrik stabil, tim hafal
 checklist hari-H & prosedur pemulihan bila fallback terpicu.

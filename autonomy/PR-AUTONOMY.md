@@ -5,7 +5,7 @@ plus analisis apa yang masih kurang di tiap fase (Fase 0–4, lihat `ROADMAP_MIS
 Dokumen hidup: perbarui status saat item dikerjakan.
 
 > Ringkas status: kode logika (FSM, servo, deteksi QR & hook, docking closed-loop misi
-> 3b/4/5, simulator, evaluasi) **matang & teruji** (83 pytest hijau). Yang tersisa
+> 3b/4/5, simulator, evaluasi) **matang & teruji** (135 pytest hijau, 2 skip). Yang tersisa
 > mayoritas **butuh hardware/kolam** — tak bisa
 > diselesaikan tanpa perangkat. Item yang bisa dikerjakan tanpa hardware sudah/akan dibuat
 > (config tunable, launch_sitl, CSV logging, preprocessing QR, run-book).
@@ -99,10 +99,43 @@ yang kedua menggantung di mesin tanpa kamera. Sekarang diteruskan sebagai
   collect gagal (`ModuleNotFoundError: lark`).
 - `npm run sim` menghasilkan telemetri palsu sendiri tiap 100 ms yang di-broadcast
   bersamaan dgn telemetri UDP nyata. Pakai `npm start`/`node server.js`.
-- `autonomy/README_SETUP_C.md` masih tidak ada (dirujuk ROADMAP & docstring
-  `launch_sitl.py`).
+- ~~`autonomy/README_SETUP_C.md` masih tidak ada~~ — **dibuat 2026-08-21**:
+  jalur manual per-terminal (mock → rov_link → GUI → FSM) dengan kriteria sukses
+  tiap langkah, dipakai saat `launch_sitl.py` gagal dan perlu tahu komponen mana
+  yang putus. Empat jebakan lingkungan di bawah ini dipindahkan ke sana supaya
+  ada di tempat orang mencarinya.
 - Verifikasi visual GUI (gerak 3D, tombol fisik, F12) tetap **belum** tercakup —
   checklist browser di `TEST_CHECKLIST.md`.
+
+### KS-01 — `KILL_SWITCH_DEADZONE` berkomentar skala salah (diperbaiki 2026-08-21)
+
+**Gejala**: tak ada gejala runtime — justru itu masalahnya.
+
+**Temuan**: komentar di `rov_link.py` menyebut ambang kill-switch memakai "skala
+sama dgn axis GUI -100..100". Skala axis GUI sebenarnya **-1000..1000**
+(`clampAxis` di `server.js`, `AXIS_RANGE` di `rov_axes.py`), jadi `15` yang
+terbaca seolah "15% defleksi" sesungguhnya 1,5% skala penuh. Sekelas dengan
+`vert`/`heave` dan `mode`/`control_mode`: angka yang benar, keterangan yang
+salah, tanpa satu pun test.
+
+**Kenapa tetap aman**: yang menyaring drift stik bukan ambang ini, melainkan
+deadzone sisi-GUI (`DEFAULT_DEADZONE=0.12` + expo 1.6 di
+`shared/joystick-profile.js`) — nilai di bawah deadzone dikirim sebagai 0.
+Efek gabungannya kill-switch menyala di ~20% defleksi stik fisik, yang memang
+diinginkan.
+
+**Tindakan**: komentar diperbaiki + peringatan eksplisit jangan "membetulkan"
+15→150 (takeover jadi lamban). **Ambangnya sengaja TIDAK diubah** — perilaku
+sekarang benar. Dikunci `tests/test_rov_link.py` (6 test: kill-switch menyala di
+atas ambang, diam di bawah, tak menyala untuk perintah FSM sendiri, diam saat
+sudah manual, plus penjaga rentang ambang & skala clamp).
+
+**Sisa backlog (butuh hardware):**
+- [ ] Profil joystick mengizinkan `deadzone: 0`. Dengan setelan itu drift stik
+      MEMANG bisa memicu abort palsu di tengah misi. Verifikasi setelan deadzone
+      tim ≠ 0 sebelum lomba, atau paksakan batas bawah di `joystick-profile.js`.
+- [ ] Rangkaian fisik stik→browser→server→`rov_link` hanya bisa dibuktikan
+      dengan joystick nyata (butir terakhir checklist browser).
 
 ### HOOK-01 — Deteksi hook PVC untuk docking misi 3b (HANG) & misi 4 (DOCK)
 **Konteks**: hook = pipa PVC ¾" (25 mm) ujung-U di dinding, **tanpa QR/marker sendiri**;
@@ -149,7 +182,7 @@ Referensi: `vision/hook_detect.py`, `fsm/mission5.py` (`_state_hang`/`_state_doc
 | **1** SITL | ✅ VERIFIED 2026-08-21 | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE, `verify_handoff.mjs` | 3/3 run `DONE` 100/100; handoff & STOP 3/3 LULUS; 124 test hijau. Sisa: **checklist browser** (gerak 3D, tombol fisik, F12) — butuh mata | — (tak lagi blocker) |
 | **2** Bring-up bench | ⏳ siap dimulai | `VERIFIKASI_ARDUSUB.md` #1–7; `PERSIAPAN_FASE2-4.md` (run-book, PR ini) | Eksekusi cek arah 6–8 thruster, servo gripper/lampu (channel/PWM), depth, arming | **Hardware** (Pixhawk/ROV) |
 | **3** Uji kolam & tuning | 🔒 blocked | `VERIFIKASI_ARDUSUB.md` M1–M8; config tunable (`--config`); CSV logging (PR ini) | Kalibrasi kamera DI AIR; verif ulang `invert_*`; tuning jarak/depth/timing/`WALL_HEADING`; uji unhook | **Kolam + hardware** |
-| **4** Latihan & lomba | 🔒 blocked | `PERSIAPAN_FASE2-4.md` run-book hari-H + scoresheet (PR ini) | Rehearsal 3× run; drill fallback; checklist boot & pra-dive dieksekusi | **Setup penuh + kolam** |
+| **4** Latihan & lomba | 🔒 blocked (sebagian siap) | run-book hari-H + scoresheet; **logika M5_FALLBACK terverifikasi & dikunci 2 pytest**; checklist boot/pra-dive/umbilical sudah tertulis | Rehearsal 3× run; **drill fisik** tutup-lensa di kolam; eksekusi & hafalkan checklist | **Setup penuh + kolam** |
 
 Legenda: ✅ selesai · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · 🔒 menunggu hardware/kolam.
 
@@ -157,10 +190,12 @@ Legenda: ✅ selesai · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · �
 
 ## 3. Backlog tugas (dikerjakan setelah hardware/kolam tersedia)
 
-**Fase 1 (bisa segera, tak butuh hardware):**
-- [ ] Jalankan `python tools/launch_sitl.py --fsm --vision mock --no-wait-autonomous`
-      → konfirmasi rantai misi 5 sampai `DONE` via jalur MAVLink nyata.
-- [ ] Uji toggle GUI Manual↔Autonomous + STOP saat FSM berjalan (centang M8 di VERIFIKASI).
+**Fase 1 — SELESAI (2026-08-21), disisakan sbg rujukan cara mengulang:**
+- [x] `tools/launch_sitl.py --fsm --vision mock --no-wait-autonomous --no-gui`
+      → rantai misi 5 tuntas `DONE` via jalur MAVLink nyata (A 100/100, B & C 40/40).
+- [x] Toggle GUI Manual↔Autonomous + STOP saat FSM berjalan → `node tools/verify_handoff.mjs` 3/3.
+- [ ] **Sisa, butuh mata:** enam butir checklist browser di `TEST_CHECKLIST.md`
+      (badge mode, gerak ROV 3D, F12 bersih, joystick fisik).
 
 **Fase 2 (butuh hardware kering):**
 - [ ] Kerjakan `VERIFIKASI_ARDUSUB.md` #1–7; catat konstanta `rov_link.py` yang perlu dibalik/disesuaikan

@@ -37,7 +37,21 @@ SEND = re.compile(r"\[SEND\].*?(\{.*\})")
 # menyaring koreksi kecil, cukup rendah untuk menangkap manuver sungguhan.
 AKTIF = 500
 TENANG_DEG = 3.0  # |roll| & |pitch| di bawah ini = sudah tenang
+TOLERANSI_M = 0.05  # |err| akhir di bawah ini = sampai di target
 OSC_THRESHOLD = 0.10  # ayunan depth (err_max - err_min) di atas ini = berosilasi
+
+
+def baris(path):
+    """Baris file log, apa pun encoding-nya.
+
+    PowerShell/npm di Windows menulis redirect sebagai UTF-16 ber-BOM. Dibaca
+    sebagai UTF-8 dengan errors="ignore", setiap NUL hilang tapi barisnya
+    tetap "terbaca" — regex berhenti cocok dan alat ini melapor "tidak ada
+    telemetry" pada log yang isinya lengkap (ROV5.log, 21 Agu 2026).
+    """
+    b = open(path, "rb").read()
+    enc = "utf-16" if b[:2] in (b"\xff\xfe", b"\xfe\xff") else "utf-8"
+    return b.decode(enc, "ignore").splitlines()
 
 
 def baca_gui(path):
@@ -56,8 +70,7 @@ def baca_gui(path):
     rows = []
     asim = {a: [0, 0, 0] for a in AXES}
     armed, mode = False, "?"
-    with open(path, errors="ignore") as f:
-        for line in f:
+    for line in baris(path):
             m = CMD.match(line)
             if m:
                 v = int(m.group(2))
@@ -104,8 +117,7 @@ def waktu_tenang(rows):
 def baca_send(path):
     """Semua baris [SEND] dari log Pi, sebagai list dict state (10 Hz)."""
     out = []
-    with open(path, errors="ignore") as f:
-        for line in f:
+    for line in baris(path):
             m = SEND.search(line)
             if not m:
                 continue
@@ -124,8 +136,7 @@ def rentang_pi(path):
     tidak dipakai untuk aritmatika waktu.
     """
     first = last = None
-    with open(path, errors="ignore") as f:
-        for line in f:
+    for line in baris(path):
             m = STAMP.match(line)
             if m:
                 last = m.group(0)
@@ -227,13 +238,23 @@ def depth_hold_windows(rows):
     ayunan lebar bisa kebetulan berakhir dekat titik awal. err_min/err_max
     itulah yang mengungkap osilasi yang endpoint-nya sembunyikan.
     """
+    # Window PECAH juga saat depth_target berubah, bukan cuma saat depth_hold
+    # mati. Tombol SET boleh ditekan berkali-kali tanpa mematikan hold, dan
+    # trial 21 Agu 2026 memang begitu: SATU window 33 menit berisi 162 setpoint
+    # berbeda. Err terhadap target PERTAMA lalu jadi omong kosong — ayunan
+    # terbaca 0,46 m ("BEROSILASI") padahal tiap hold sesungguhnya menetap
+    # dengan ayunan <=0,15 m. Metrik yang salah lebih buruk dari tidak ada.
     windows, cur = [], []
     for r in rows:
-        if r.get("depth_hold"):
-            cur.append(r)
-        elif cur:
+        if not r.get("depth_hold"):
+            if cur:
+                windows.append(cur)
+                cur = []
+            continue
+        if cur and r.get("depth_target") != cur[-1].get("depth_target"):
             windows.append(cur)
             cur = []
+        cur.append(r)
     if cur:
         windows.append(cur)
 
@@ -251,6 +272,12 @@ def depth_hold_windows(rows):
             "err_akhir": errs[-1],
             "err_min": min(errs),
             "err_max": max(errs),
+            # Ayunan diukur dari EKOR window (10 detik terakhir), bukan seluruh
+            # window: hold yang sehat pun berangkat dari error awal besar, dan
+            # rentang seluruh window karena itu mengukur jarak tempuh
+            # pendekatan, bukan ketenangan. Yang ditanya "sudah tenang belum
+            # di akhir", dan itu cuma bisa dijawab ekornya.
+            "ayunan": max(errs[-10:]) - min(errs[-10:]),
             "roll": st.mean(abs(r["roll"]) for r in w),
             "pitch": st.mean(abs(r["pitch"]) for r in w),
         })
@@ -346,13 +373,17 @@ def main(argv):
             print(f"\n{len(windows)} window depth-hold ON dari {argv[1]}")
             print("  durasi   target  err_awal  err_akhir  ayunan  |roll|  |pitch|")
             for w in windows:
-                ayunan = w["err_max"] - w["err_min"]
+                ayunan = w["ayunan"]
                 # Rentang ayunan itu sendiri yang menentukan tenang/tidak —
                 # endpoint saja BISA kebetulan berdekatan padahal di antaranya
                 # berosilasi lebar (lihat docstring depth_hold_windows).
+                # Urutannya penting: tenang DULU, baru dekat. Membandingkan
+                # err_akhir dengan err_awal (versi lama) menghukum window yang
+                # sudah tepat sejak awal — err 0,00 -> -0,01 terbaca "MELEBAR"
+                # padahal itu hold terbaik di seluruh trial.
                 verdict = ("BEROSILASI" if ayunan >= OSC_THRESHOLD
-                           else "OK" if abs(w["err_akhir"]) < abs(w["err_awal"])
-                           else "MACET/MELEBAR")
+                           else "OK" if abs(w["err_akhir"]) <= TOLERANSI_M
+                           else "MELESET")
                 menit = f"{w['durasi']/60:4.1f}m" if w["durasi"] >= 60 else f"{w['durasi']:4.0f}s"
                 print(f"  {menit:>7s}  {w['target']:5.2f}   "
                       f"{w['err_awal']:+.3f}    {w['err_akhir']:+.3f}    "
@@ -400,6 +431,17 @@ def selftest():
     assert asim["surge"] == [0, 0, 1], asim["surge"]
     # sample-and-hold: baris terakhir membawa sway=1000 dari [CMD] sebelumnya
     assert rows[2][0]["sway"] == 1000, rows[2][0]
+
+    # depth_hold_windows harus PECAH saat depth_target berubah walau hold
+    # tidak pernah mati (tombol SET ditekan ulang) — kalau tidak, err diukur
+    # terhadap target yang sudah basi. Lihat komentar di depth_hold_windows.
+    def sampel(tgt, depth):
+        return {"depth_hold": True, "depth_target": tgt, "depth": depth,
+                "roll": 0.0, "pitch": 0.0}
+    w = depth_hold_windows([sampel(0.1, 0.1)] * 12 + [sampel(0.5, 0.5)] * 12)
+    assert len(w) == 2, w
+    assert [x["target"] for x in w] == [0.1, 0.5], w
+    assert all(abs(x["err_akhir"]) < 1e-9 for x in w), w
 
     print("selftest ok")
     return 0

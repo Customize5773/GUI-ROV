@@ -71,9 +71,21 @@ PILOT_MODE_MAP = {
     "depth_hold": "ALT_HOLD",
 }
 
-# Kill-switch: abaikan noise/jitter joystick fisik (mis. drift Logitech F310/DS4) di
-# bawah ambang ini (skala sama dgn axis GUI -100..100) agar tidak salah trigger abort
-# tepat setelah autonomy dimulai.
+# Kill-switch: axis operator di atas ambang ini membatalkan autonomy. Skalanya
+# SAMA dengan axis GUI, yaitu -1000..1000 (clampAxis di server.js, AXIS_RANGE di
+# rov_axes.py) — jadi 15 ≈ 1,5% skala penuh, BUKAN 15%.
+#
+# Yang menyaring drift stik bukan angka ini, melainkan deadzone sisi-GUI
+# (DEFAULT_DEADZONE=0.12 + expo 1.6 di shared/joystick-profile.js): nilai di
+# bawah deadzone dikirim sebagai 0. Efek gabungannya, kill-switch menyala di
+# ~20% defleksi stik fisik — cukup peka untuk merebut kendali, cukup tuli
+# terhadap noise.
+#
+# JANGAN "perbaiki" jadi 150 dengan anggapan skalanya -100..100: itu membuat
+# operator harus mendorong stik hampir penuh sebelum bisa mengambil alih.
+# Profil joystick mengizinkan deadzone 0 — dengan setelan itu drift MEMANG bisa
+# memicu abort palsu, jadi jangan pakai deadzone 0 saat lomba.
+# Dikunci tests/test_rov_link.py.
 KILL_SWITCH_DEADZONE = 15
 
 # Port lokal (loopback) tempat Mission5FSM menerima telemetri fan-out dari rov_link

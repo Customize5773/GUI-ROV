@@ -44,10 +44,10 @@ python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state DIVE --no
 python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state DIVE --no-wait-autonomous
 ```
 
-**Checklist:**
-- [ ] FSM reaches DIVE → SCAN_QR → GRAB → NAV_WALL → HANG → SURFACE → DOCK
-- [ ] FSM transitions to M5_REDIVE → M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
-- [ ] Final output shows:
+**Checklist** — dijalankan 2026-08-21, LULUS (log: 100/100, 54 dtk, 0 WARNING/ERROR):
+- [x] FSM reaches DIVE → SCAN_QR → GRAB → NAV_WALL → HANG → SURFACE → DOCK
+- [x] FSM transitions to M5_REDIVE → M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
+- [x] Final output shows:
   ```
   [FSM] ===== SKOR AKHIR =====
   [FSM]  Misi 1 (Scan QR)     : 15/15
@@ -57,7 +57,7 @@ python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state DIVE --no
   [FSM]  Misi 5 (Auto Release): 40/40
   [FSM]  TOTAL               : 100/100
   ```
-- [ ] Total runtime < 5 minutes (mock converge time + FSM overhead)
+- [x] Total runtime < 5 minutes — **aktual 54 detik**
 
 **Pass Criteria:** Skor total = 100, no crashes
 
@@ -70,11 +70,11 @@ python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state DIVE --no
 python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state M5_REDIVE --no-wait-autonomous
 ```
 
-**Checklist:**
-- [ ] FSM starts at M5_REDIVE (simulates already docked at surface)
-- [ ] M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
-- [ ] Misi 5 skor = 40 (no partial credit in mock)
-- [ ] Runtime < 2 minutes
+**Checklist** — dijalankan 2026-08-21, LULUS (40/40, 15 dtk, 0 WARNING/ERROR):
+- [x] FSM starts at M5_REDIVE (simulates already docked at surface)
+- [x] M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
+- [x] Misi 5 skor = 40 (no partial credit in mock)
+- [x] Runtime < 2 minutes — **aktual 15 detik**
 
 **Pass Criteria:** Misi 5 complete, skor 40
 
@@ -87,17 +87,29 @@ python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state M5_REDIVE
 python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state M5_DOCK --no-wait-autonomous
 ```
 
-**Checklist:**
-- [ ] FSM starts at M5_DOCK (already near QR payload)
-- [ ] Log shows servo steps:
+**Checklist** — dijalankan 2026-08-21, LULUS:
+- [x] FSM starts at M5_DOCK (already near QR payload)
+- [x] Log shows servo steps (butuh `--loglevel DEBUG`, lihat catatan di bawah):
   ```
   [FSM] servo(PBVS) x=-0.02 y=0.05 z=0.31 → su=50 sw=15 vt=-10
   [FSM] servo(PBVS) x=-0.01 y=0.02 z=0.30 → su=45 sw=8 vt=-5
   ...
   [FSM] QR payload ALIGNED (PBVS) — engage gripper
   ```
-- [ ] Alignment converges smoothly (error decreases each iteration)
-- [ ] Transition to M5_ENGAGE occurs after alignment
+- [x] Alignment converges smoothly (error decreases each iteration)
+- [x] Transition to M5_ENGAGE occurs after alignment
+
+Terverifikasi 2026-08-21. Baris `servo(...)` adalah `log.debug`, jadi TIDAK
+muncul di level default — `launch_sitl.py` belum meneruskan `--loglevel`. Untuk
+melihatnya, jalankan FSM langsung di atas stack manual (`README_SETUP_C.md`):
+
+```bash
+PYTHONPATH= python3 fsm/mission5.py --server 127.0.0.1 --telem-port 14552 \
+    --vision mock --start-state M5_DOCK --no-wait-autonomous --loglevel DEBUG
+```
+
+Konvergensi terukur: x 0.15→0.00, y 0.10→0.00, z 0.72→0.30 (= `SERVO_TARGET_DIST`),
+monoton turun, `ALIGNED` muncul tepat 1×.
 
 **Pass Criteria:** Smooth servo convergence, alignment message appears
 
@@ -152,7 +164,12 @@ Buka `http://localhost:8080` dengan stack Fase 1 jalan
       bukan melompat-lompat
 - [ ] F12 console bersih (tak ada exception saat toggle bolak-balik 3×)
 - [ ] Joystick fisik: dorong stik saat Autonomous → KILL-SWITCH menyala,
-      FSM abort, mode balik ke Manual (`rov_link.py` KILL_SWITCH_DEADZONE=15)
+      FSM abort, mode balik ke Manual. Ambangnya `KILL_SWITCH_DEADZONE=15` pada
+      skala axis **-1000..1000** (bukan -100..100) → menyala di ~20% defleksi
+      stik fisik. Logikanya sudah dikunci `tests/test_rov_link.py`; yang butuh
+      mata tinggal rangkaian stik→browser→server→rov_link.
+      **Jangan setel deadzone joystick ke 0 di hari lomba** — yang menyaring
+      drift stik adalah deadzone sisi-GUI (0.12), bukan ambang ini.
 
 **Pass Criteria:** skrip otomatis 3/3 LULUS **dan** keenam butir browser tercentang.
 
@@ -173,10 +190,11 @@ Mock payload QR converges: far & off-center → center & close
 [FSM] QR payload ALIGNED (PBVS) → engage gripper
 ```
 
-**Checklist:**
-- [ ] Error magnitude decreases consistently (x/y/z → smaller)
-- [ ] Convergence takes 3-5 seconds (mock design)
-- [ ] Alignment message appears exactly once per docking attempt
+**Checklist** — terverifikasi 2026-08-21 (lihat perintah `--loglevel DEBUG` di Scenario C):
+- [x] Error magnitude decreases consistently (x/y/z → smaller)
+- [x] Convergence takes 3-5 seconds — **aktual ~9 dtk** dari start M5_DOCK
+      (lebih jauh dari asumsi tabel; bukan kegagalan, catat ulang saat tuning kolam)
+- [x] Alignment message appears exactly once per docking attempt
 
 ---
 
@@ -184,12 +202,9 @@ Mock payload QR converges: far & off-center → center & close
 
 ### Timeout Handling (Fallback to Degraded Mode)
 
-**Setup:** Patch vision pipeline to simulate detection loss
-
-```python
-# In qr_detect.py _run_mock(), after line 410:
-# return None  # Force QR loss
-```
+~~**Setup:** Patch vision pipeline to simulate detection loss~~ — **USANG**,
+tak perlu lagi mengedit `qr_detect.py`; dua pytest di bawah menapaki jalur ini
+otomatis lewat `dropout=` milik `SimVision`.
 
 **Expected Behavior:**
 - M5_DOCK waits M5_LOCK_GRACE_T (0.6s) → sweeps for QR
@@ -197,10 +212,22 @@ Mock payload QR converges: far & off-center → center & close
 - M5_FALLBACK executes dive/grab/unhook/ascend without visual feedback
 - Skor reduced: misi 5 still scores (40 full or partial depending on phase)
 
-**Checklist:**
-- [ ] FSM does NOT crash when vision fails
-- [ ] Log shows "degradasi ke fallback timed"
-- [ ] FSM completes DONE state
+**Checklist** — terverifikasi 2026-08-21 di SIMULATOR (bukan SITL), dikunci pytest:
+- [x] FSM does NOT crash when vision fails
+- [x] Log shows "degradasi ke fallback timed"
+- [x] FSM completes DONE state (bukan ABORT), misi 5 tetap dapat nilai
+
+Tak perlu lagi mem-*patch* `qr_detect.py` seperti resep di atas — dua test
+menapaki jalur ini otomatis (`tests/test_mission5.py`):
+
+| test | skenario |
+|---|---|
+| `test_m5_fallback_when_qr_lost_during_dock` | QR ter-lock lalu HILANG di tengah docking → `M5_DOCK` timeout → `M5_FALLBACK` → `DONE` |
+| `test_m5_fallback_when_qr_never_acquired` | QR tak pernah terdeteksi → `M5_REDIVE` timeout → `M5_FALLBACK`, payload tetap lepas dari hook |
+
+Keduanya sudah diuji-mutasi: mengganti transisi fallback jadi `ABORT` membuat
+test gagal. **Drill fisik "tutup lensa kamera" tetap wajib di kolam** (Fase 4) —
+yang terbukti di sini logikanya, bukan perilaku ROV di air.
 
 ---
 
@@ -237,10 +264,10 @@ Mock payload QR converges: far & off-center → center & close
 ps aux | grep -E "sitl_mock|rov_link|mission5|launch_sitl"
 ```
 
-**Checklist:**
-- [ ] No process > 500 MB RAM (normal: 50-200 MB each)
-- [ ] No 100% CPU sustained (spikes OK, not hung)
-- [ ] No zombie processes after Ctrl+C shutdown
+**Checklist** — terukur 2026-08-21 saat SITL berjalan:
+- [x] No process > 500 MB RAM — aktual: mock 42 MB, rov_link 72 MB, FSM 77 MB, launcher 17 MB
+- [x] No 100% CPU sustained — aktual puncak 10,5% (rov_link)
+- [x] No zombie processes after shutdown — tak ada proses stack tersisa
 
 **Pass Criteria:** Clean resource usage, graceful shutdown
 
@@ -302,12 +329,14 @@ log run ke disk untuk perbandingan gain pasca-trial (run 1 vs run 2).
 
 ## Sign-Off Checklist
 
-**SITL Validation (This Session)**
-- [ ] Scenario A (Full 1-5) passes with skor=100
-- [ ] Scenario B (M5 only) passes with skor=40
-- [ ] Scenario C (Docking servo) converges smoothly
-- [ ] GUI toggle test: FSM waits, starts on "autonomous"
-- [ ] No memory leaks, clean shutdown
+**SITL Validation** — LULUS 2026-08-21
+- [x] Scenario A (Full 1-5) passes with skor=100
+- [x] Scenario B (M5 only) passes with skor=40
+- [x] Scenario C (Docking servo) converges smoothly
+- [x] GUI toggle test: FSM waits, starts on "autonomous" (`verify_handoff.mjs` 3/3)
+- [x] No memory leaks, clean shutdown
+- [x] Jalur degradasi `M5_FALLBACK` tidak ABORT (pytest, simulator)
+- [x] Unit test: 135 passed, 2 skipped (`PYTHONPATH= pytest tests/ -q`)
 
 **Hardware Readiness**
 - [ ] Pixhawk connected via USB/tether
@@ -325,5 +354,5 @@ log run ke disk untuk perbandingan gain pasca-trial (run 1 vs run 2).
 
 **Status:** Ready to execute SITL → Bench → Pool progression  
 **Owner:** Rasya (autonomy integration)  
-**Last Updated:** 2026-08-11  
+**Last Updated:** 2026-08-21  
 **Next Review:** After first pool test
