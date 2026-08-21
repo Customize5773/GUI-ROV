@@ -9,16 +9,11 @@ from pymavlink import mavutil
 from rov_axes import (
     AXIS_NEUTRAL,
     AXIS_RANGE,
-    AXIS_SHAPE,
-    apply_shape_updates,
     axes_to_manual_control,
     clamp_axis,
-    heave_skip_deadzone,
-    HEAVE_SKIP_ALT_HOLD,
-    HEAVE_SKIP_MANUAL,
     resolve_manual_packet,
-    shape_axes,
 )
+
 from rov_modes import (
     depth_bias_engaged,
     depth_hold_allowed,
@@ -208,12 +203,6 @@ master_lock = threading.Lock()
 # mode ArduSub di bawah — yang ini menentukan siapa yang boleh memerintah,
 # bukan hukum kendali apa yang dipakai wahana.
 current_control_mode = "manual"
-
-# Diset E-Stop, dikonsumsi joystick_sender: buang state ramp axis SEKETIKA
-# alih-alih membiarkannya meluncur turun. Boolean biasa sudah cukup — hanya
-# satu penulis (command listener) dan satu pembaca (joystick_sender), dan
-# kehilangan satu edge tidak mungkin karena penulisnya selalu True.
-shape_reset_requested = False
 
 # Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
@@ -710,7 +699,6 @@ def command_listener():
     global depth_hold_enabled
     global poshold_active
     global heading_target
-    global shape_reset_requested
     global thruster_gain
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
@@ -882,10 +870,7 @@ def command_listener():
                 print("[MAV] STOP -> DISARM")
                 with joystick_lock:
                     joystick.update(AXIS_NEUTRAL)
-                # Axis mentah sudah netral, tapi joystick_sender menyimpan
-                # nilai TER-SHAPE sendiri yang masih akan melandai turun.
-                # E-Stop harus memotongnya, bukan menunggu ramp selesai.
-                shape_reset_requested = True
+
                 # E-Stop tidak boleh meninggalkan overlay yang masih menulis ke
                 # r: axis dinetralkan di sini, dan koreksi heading akan
                 # mengisinya kembali pada tick berikutnya.
@@ -1046,28 +1031,6 @@ def command_listener():
                 shown_txt = "belum di-set" if shown is None else f"{shown:.2f} m"
                 print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
                       f"(target: {shown_txt})")
-
-            elif name == "axis_shape":
-
-                # Tuning live skala/laju axis tanpa SSH + restart. Tidak ada UI
-                # untuk ini; dipakai dari terminal laptop saat trial kolam,
-                # memakai pola nc yang sudah didokumentasikan di SETUP.md:
-                #
-                #   echo '{"name":"axis_shape","value":{"sway":{"scale":0.5}}}' \
-                #     | nc -u -w1 192.168.2.2 14550
-                #
-                # Update PARSIAL: field yang tidak disebut dibiarkan apa adanya.
-                applied, rejects = apply_shape_updates(value)
-
-                for field, reason in rejects:
-                    print(f"[SHAPE] DITOLAK {field}: {reason}")
-
-                for axis, (rise, fall, scale) in applied.items():
-                    print(f"[SHAPE] {axis}: rise={rise:.0f}/s fall={fall:.0f}/s "
-                          f"scale={scale:.2f}")
-
-                if not applied and not rejects:
-                    print(f"[SHAPE] tidak ada yang diubah: {value!r}")
 
             elif name == "thruster_gain_inc":
 
@@ -1527,14 +1490,7 @@ def joystick_sender():
     axis, sedangkan ArduSub mengharapkan z pada 0..1000 dengan 500 = netral.
     Mengirim heave mentah sebagai z membuat "diam" berarti MENYELAM PENUH —
     termasuk saat E-Stop dan saat link GUI putus.
-
-    Loop ini juga pemegang STATE shaping (lihat shape_axes di rov_axes.py):
-    modul itu sengaja murni, jadi nilai axis ter-shape sebelumnya disimpan di
-    sini — sejajar dengan last_joystick_update yang sudah ada.
     """
-    global shape_reset_requested
-
-    shaped = dict(AXIS_NEUTRAL)
 
     while True:
         # Link Pixhawk sedang putus/menyambung ulang — tidak ada tujuan kirim.
@@ -1550,34 +1506,15 @@ def joystick_sender():
         # lalu disarm; tanpa reset di sini, nilai ter-shape masih meluncur
         # turun selama ~0,2 detik sesudahnya. Disarm memang sudah mematikan
         # thruster, tapi keselamatan tidak boleh bergantung pada satu lapis.
-        if shape_reset_requested:
-            shape_reset_requested = False
-            shaped = dict(AXIS_NEUTRAL)
-
-        shaped = shape_axes(shaped, axes, JOYSTICK_SEND_INTERVAL)
-
+        
         # Fail-safe: GUI diam terlalu lama (crash / joystick dicabut / link
         # putus) -> tahan posisi netral, jangan ulangi input terakhir.
-        mc, stale = resolve_manual_packet(shaped, last_update, time.time())
+        mc, stale = resolve_manual_packet(axes, last_update, time.time())
+        eff_axes = AXIS_NEUTRAL if stale else axes
 
         # Beri tahu dashboard bahwa yang mengalir sekarang adalah netral buatan
         # Pi, bukan perintah operator.
         state["cmd_link"] = "stale" if stale else "ok"
-
-        # Alasan yang sama seperti E-Stop: saat fail-safe, netral harus SEKETIKA.
-        # resolve_manual_packet sudah mengirim netral ke FC, reset di sini
-        # menjaga agar tick berikutnya juga tidak melanjutkan ramp dari nilai
-        # lama begitu link kembali.
-        if stale:
-            shaped = dict(AXIS_NEUTRAL)
-
-        # Saat stale, axes yang dipakai juga harus netral supaya bias
-        # depth-hold tidak dihitung dari input basi. Saat tidak stale yang
-        # dipakai nilai TER-SHAPE, bukan mentah: gerbang "operator sedang
-        # memegang stik" (HEAVE/YAW_MANUAL_EPSILON) harus menilai apa yang
-        # benar-benar diperintahkan ke thruster, bukan niat mentahnya.
-
-        eff_axes = AXIS_NEUTRAL if stale else shaped
 
         # =========================
         # THRUSTER GAIN
@@ -1591,36 +1528,13 @@ def joystick_sender():
             "yaw": int(round(eff_axes.get("yaw", 0) * gain)),
         }
 
-        # Heave dipetakan ulang supaya melewati dead band FC (lihat
-        # heave_skip_deadzone di rov_axes.py). Besar lompatannya tergantung MODE:
-        # di ALT_HOLD ada THR_DZ (deadzone input pilot) DI ATAS dead band motor,
-        # di mode lain hanya dead band motor. Memakai angka ALT_HOLD di MANUAL
-        # berarti sentuhan stik sekecil apa pun langsung ~20% dorongan.
-        #
-        # Gerbangnya poshold_mode_ok() (= mode ArduSub ALT_HOLD), BUKAN
-        # depth_hold_mode_ok(): yang terakhir sekarang berarti STABILIZE, dan
-        # THR_DZ tidak berlaku di sana.
-        #
-        # Konsekuensi yang disengaja: thruster_gain jadi kurang berpengaruh pada
-        # heave, karena bagian travel yang dulu dipotong gain justru bagian yang
-        # memang tidak pernah sampai ke FC. Gain kecil sekarang berarti "naik
-        # turun pelan", bukan lagi "naik turun tidak sama sekali".
-        skip = (
-            HEAVE_SKIP_ALT_HOLD
-            if poshold_mode_ok(_current_pixhawk_mode())
-            else HEAVE_SKIP_MANUAL
-        )
-        heave_out = heave_skip_deadzone(
-            scaled_axes["heave"], skip, epsilon=HEAVE_MANUAL_EPSILON,
-        )
-
         # Buat ulang MANUAL_CONTROL berdasarkan axis
         # yang sudah dikalikan thruster gain.
         mc = axes_to_manual_control(
             surge=scaled_axes["surge"],
             sway=scaled_axes["sway"],
             yaw=scaled_axes["yaw"],
-            heave=heave_out,
+            heave=scaled_axes["heave"],
         )
 
         # Depth hold dan heading hold bekerja SETELAH gain untuk `mc` (dorongan

@@ -1100,7 +1100,7 @@ const KEY_AXIS = {
    sekali-jalan, bukan nilai axis yang harus dinolkan saat tombol dilepas.
 
    ↑ = SET (rekam kedalaman saat ini), ↓ = ON/OFF. Sama seperti D-pad. */
-const KEY_DEPTH = { ArrowUp: "depth_set", ArrowDown: "depth_hold" };
+const KEY_DEPTH = { ArrowUp: "depth_up", ArrowDown: "depth_down" };
 
 const heldKeys = new Set();
 function pilotKeyActive(e) {
@@ -1409,15 +1409,13 @@ function executeJoystickAction(action, mode = "toggle") {
     }
 
     /* ================= DEPTH-SET ================= */
-    case "depth_set": {
-      sendCmd("depth_set", true);
+    case "depth_up": {
+      sendCmd("depth_up", null);
       return;
     }
 
-    // Tanpa nilai = toggle di sisi agent. Tombol gamepad tidak tahu keadaan
-    // saklar sekarang, dan menebaknya dari telemetry bisa meleset satu tick.
-    case "depth_hold_toggle": {
-      sendCmd("depth_hold", null);
+    case "depth_down": {
+      sendCmd("depth_down", null);
       return;
     }
   }

@@ -359,6 +359,7 @@ def apply_depth_hold_bias(mc, axes):
       4. stik heave netral           -> begitu operator menyentuh stik, input
                                         manual menang mutlak
     """
+    global depth_target
     global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
 
     with depth_lock:
@@ -366,20 +367,26 @@ def apply_depth_hold_bias(mc, axes):
         enabled = depth_hold_enabled
 
     if not depth_bias_engaged(
-        enabled,
         target,
         _effective_requested_mode() or state["mode"],
         axes.get("heave", 0),
         HEAVE_MANUAL_EPSILON,
     ):
+        # Saat operator memegang heave, depth target mengikuti
+        # kedalaman aktual. Begitu stik dilepas, target berhenti
+        # mengikuti dan menjadi setpoint yang ditahan.
+        if abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON:
+            with depth_lock:
+                depth_target = clamp_depth_target(
+                    state["depth"],
+                    pool_depth
+                )
+
         _bias_active = False
-        # Buang EMA saat gerbang tertutup: begitu bias hidup lagi nanti
-        # (mis. depth-set di-ON-kan ulang), rate tidak boleh dihitung dari
-        # depth yang mungkin sudah lama dan sangat berbeda.
         _depth_ema = None
         _depth_ema_ts = None
         return mc
-
+        
     now = time.time()
     depth_now = state["depth"]
 
@@ -616,16 +623,10 @@ def send_telemetry():
     global _last_telem_log
 
     with depth_lock:
-        # null = operator belum menekan SET. GUI menampilkannya sebagai "—",
-        # bukan 0.00 m, supaya tidak terbaca seolah setpoint permukaan aktif.
         state["depth_target"] = depth_target
-        state["depth_hold"] = depth_hold_enabled
 
-    # POSHOLD tidak terlihat di HEARTBEAT (ia berjalan di ALT_HOLD), jadi
-    # INILAH satu-satunya cara GUI tahu overlay sedang hidup dan tab mana yang
-    # harus menyala. heading_target None = belum di-seed (stik yaw masih
-    # dipegang, atau baru saja masuk mode).
-    state["poshold"] = poshold_engaged()
+    state["depth_hold"] = depth_hold_mode_ok()
+
     with heading_lock:
         state["heading_target"] = heading_target
 
@@ -832,33 +833,7 @@ def command_listener():
                             f"[DEPTH] Hold target dipertahankan = "
                             f"{depth_target:.2f} m"
                         )
-                # Pindah ke depth-hold dengan error BESAR + depth-set ON =
-                # penyelaman mendadak. Peringatkan ke operator dan matikan saklar.
-                # Ini mencegah kejutan: operator pindah balik dari Manual ke Alt
-                # Hold saat wahana di permukaan, saklar masih ON dari kedalaman
-                # kerja sebelumnya (0.5 m) → bias langsung dorong penuh tanpa
-                # orang menekan apa pun.
-                if (
-                    depth_hold_mode_ok() and
-                    depth_hold_enabled and
-                    depth_target is not None and
-                    abs(depth_target - state["depth"]) > 0.3
-                ):
-                    with depth_lock:
-                        depth_hold_enabled = False
-                    send_to_gui({
-                        "type": "event",
-                        "text": (
-                            f"Depth-set OFF — error {abs(depth_target - state['depth']):.2f} m "
-                            f"terlalu besar, tahan dulu dengan stik"
-                        ),
-                        "level": "warn",
-                    })
-                    print(
-                        f"[DEPTH] Depth-set OFF — error besar saat pindah "
-                        f"ke depth-hold"
-                    )
-
+                
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if poshold_active:
@@ -906,108 +881,33 @@ def command_listener():
                     "level": "ok",
                 })
 
-            elif name == "depth_set":
+            elif name in ("depth_up", "depth_down"):
 
-                # Tombol SET: rekam kedalaman SAAT INI sebagai setpoint.
-                #
-                # Sengaja tidak menuntut armed maupun mode tertentu — merekam
-                # sebuah angka tidak menggerakkan apa pun, dan operator memang
-                # sering ingin mengunci kedalaman kerja dulu (mis. saat masih
-                # meluncur di MANUAL) baru menyalakannya belakangan.
-                if not _depth_cmd_rate.allow("depth_set", time.time()):
+                if not state["armed"]:
                     continue
 
-                # Smoothing: sampel baro bergetar ±0.02–0.05 m. Rata-rata
-                # menghilangkan noise tanpa lag berarti (buffer 0.1 s). Operator
-                # akan melihat angka yang stabil di GUI sebelum tekan SET.
-                global _depth_samples
-                smoothed = smooth_depth(_depth_samples, alpha=0.7)
+                step = -0.05 if name == "depth_up" else 0.05
 
                 with depth_lock:
-                    # Dijepit ke [0, pool_depth]: pembacaan baro bisa meleset di
-                    # dekat dasar, dan setpoint di luar kolam membuat bias
-                    # menekan wahana ke dasar tanpa henti.
-                    depth_target = clamp_depth_target(smoothed, pool_depth)
+                    if depth_target is None:
+                        depth_target = state["depth"]
+
+                    depth_target = clamp_depth_target(
+                        depth_target + step,
+                        pool_depth
+                    )
+
                     shown = depth_target
-                    global _bias_active
-                    _bias_active = False  # Reset histeresis saat SET
-                print(f"[DEPTH] Set = {shown:.2f} m")
+
+                arah = "NAIK 5 cm" if step < 0 else "TURUN 5 cm"
+
+                print(f"[DEPTH] {arah} -> target {shown:.2f} m")
+
                 send_to_gui({
                     "type": "event",
-                    "text": f"Depth di-set = {shown:.2f} m",
+                    "text": f"Depth target {arah} -> {shown:.2f} m",
                     "level": "ok",
                 })
-
-            elif name == "depth_hold":
-
-                # Saklar ON/OFF depth-set. value bool eksplisit dari tombol GUI,
-                # atau None dari tombol gamepad (= toggle).
-                #
-                # OFF adalah operasi yang WAJIB berhasil — mematikan sesuatu tidak
-                # boleh pernah tertahan rate limiter. Rate limit hanya untuk ON,
-                # yang memicu aksi penting. OFF hanya membaca dan matikan state.
-                with depth_lock:
-                    want = (not depth_hold_enabled) if value is None else bool(value)
-                    target_now = depth_target
-
-                # OFF selalu diterima tanpa syarat.
-                if not want:
-                    with depth_lock:
-                        depth_hold_enabled = False
-                    print("[DEPTH] Depth-set OFF")
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth-set OFF",
-                        "level": "ok",
-                    })
-                    continue
-
-                # ON saja yang dikontrol rate limiter.
-                if not _depth_cmd_rate.allow("depth_hold", time.time()):
-                    continue
-
-                if target_now is None:
-                    print("[DEPTH] ON diabaikan — belum ada setpoint")
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth-set belum di-set — tekan SET dulu",
-                        "level": "warn",
-                    })
-                    continue
-
-                # Disarmed -> ArduSub mengabaikan MANUAL_CONTROL sepenuhnya,
-                # jadi menyalakan depth-set di sini hanya membuat GUI terlihat
-                # "menahan" padahal wahana tidak menerima apa pun.
-                if not state.get("armed"):
-                    print("[DEPTH] ON diabaikan — vehicle belum armed")
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth-set diabaikan — vehicle belum armed",
-                        "level": "warn",
-                    })
-                    continue
-
-                with depth_lock:
-                    depth_hold_enabled = True
-                print(f"[DEPTH] Depth-set ON -> {target_now:.2f} m")
-
-                # Mode yang salah TIDAK menolak permintaan, hanya memperingatkan:
-                # inilah yang membuat depth-set benar-benar lepas dari mode.
-                # Saklarnya tetap menyala, dan begitu operator pindah ke Alt Hold
-                # bias langsung bekerja tanpa perlu menekan ON lagi.
-                if depth_hold_mode_ok():
-                    send_to_gui({
-                        "type": "event",
-                        "text": f"Depth-set ON — menahan {target_now:.2f} m",
-                        "level": "ok",
-                    })
-                else:
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth-set ON tapi mode bukan Alt Hold — belum akan menahan",
-                        "level": "warn",
-                    })
-
             elif name == "pool_depth":
 
                 # Kedalaman kolam uji. Bukan cuma catatan: jadi batas bawah

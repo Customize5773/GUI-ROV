@@ -45,7 +45,7 @@
    dan tanpa handler ACRO di app.js, action ini praktis mati). Profil
    tersimpan yang punya tombol terikat ke "mode_acro" dimigrasikan ke
    "no_function" supaya tidak diam-diam macet. */
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -74,8 +74,8 @@ export const BUTTON_ACTIONS = [
   "grip_close",
   "lights_brighter",
   "lights_dimmer",
-  "depth_set",
-  "depth_hold_toggle",
+  "depth_up",
+  "depth_down",
   "thruster_gain_inc",
   "thruster_gain_dec",
 ];
@@ -187,10 +187,8 @@ function defaultButtonLayer() {
     { action: "grip_open", button: 7, mode: "hold" },          // RT (analog)
     { action: "input_hold_set", button: 8, mode: "toggle" },   // Back
     { action: "mount_center", button: 9, mode: "toggle" },     // Start
-    // Depth-set: SET merekam kedalaman saat ini, toggle menyalakan/mematikan.
-    // Keduanya sekali-pencet — tidak ada lagi setpoint yang digeser bertahap.
-    { action: "depth_set", button: 12, mode: "toggle" },          // D-pad ↑ : SET
-    { action: "depth_hold_toggle", button: 13, mode: "toggle" },  // D-pad ↓ : ON/OFF
+    { action: "depth_up", button: 12, mode: "toggle" },   // D-pad ↑
+    { action: "depth_down", button: 13, mode: "toggle" }, // D-pad ↓
     { action: "cam_prev", button: 14, mode: "toggle" },        // D-pad ← : CAM sebelumnya
     { action: "no_function", button: 15, mode: "toggle" },     // D-pad → : shift (lihat shiftButton)
     { action: "thruster_gain_dec", button: 10, mode: "toggle" }, // L3
@@ -536,6 +534,39 @@ export function migrateProfile(data, warnings = []) {
     warnings.push("Button 16 ditambahkan sebagai Camera Stream");
     cfg.version = 7;
   }
+
+if (from < 9) {
+  for (const layer of ["regular", "shift"]) {
+    const rows = cfg.buttonConfig?.[layer];
+
+    if (!Array.isArray(rows)) continue;
+
+    cfg.buttonConfig[layer] = rows.map((row) => {
+      if (!row) return row;
+
+      if (row.action === "depth_set") {
+        return {
+          ...row,
+          action: "depth_up",
+          mode: "toggle",
+        };
+      }
+
+      if (row.action === "depth_hold_toggle") {
+        return {
+          ...row,
+          action: "depth_down",
+          mode: "toggle",
+        };
+      }
+
+      return row;
+    });
+  }
+
+  warnings.push("Depth: depth_set/depth_hold_toggle diganti menjadi depth_up/depth_down");
+  cfg.version = 9;
+}
 
   // sanitizeProfile menjalankan migrateButtonAction dan seluruh clamping.
   return sanitizeProfile(cfg, warnings);
