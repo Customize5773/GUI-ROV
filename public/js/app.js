@@ -12,10 +12,7 @@ import { analyzePage } from "./pages/analyze.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
 import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,resetAxisSlew,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
-import {
-  ARDUSUB_MODE_TO_TAB,
-  DEPTH_HOLD_MODES,
-} from "/shared/rov-modes.js";
+import { ARDUSUB_MODE_TO_TAB } from "/shared/rov-modes.js";
 import { HEADING_DEADBAND_DEG, headingError } from "/shared/rov-heading.js";
 
 // Gain tampilan artificial horizon. Harus cocok dengan offset ladder ±10°
@@ -58,7 +55,7 @@ const els = {
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"),
-  btnDepthSet: $("btnDepthSet"), btnDepthHold: $("btnDepthHold"),
+  depthHoldBadge: $("depthHoldBadge"),
   modeActual: $("modeActual"),
 };
 
@@ -367,21 +364,16 @@ function applyTelemetry(d) {
   applyDepthHold(d);
 }
 
-/* Saklar depth-set. Tiga keadaan yang sengaja dibedakan di label tombol:
-     OFF      — saklar mati (atau belum ada setpoint sama sekali)
-     ARMED    — saklar hidup, tapi mode bukan Alt Hold jadi BELUM ada bias yang
-                dikirim. Tanpa keadaan ini operator melihat "ON" dan mengira
-                wahana sedang menahan padahal tidak.
-     HOLDING  — saklar hidup DAN mode Alt Hold: bias benar-benar mengalir. */
+/* Badge status depth-hold, read-only — tidak ada saklar manual lagi.
+   d.depth_hold datang langsung dari depth_hold_mode_ok() (rov_agent.py):
+   true berarti mode ArduSub sedang ALT_HOLD-capable dan bias sedang mengalir. */
 function applyDepthHold(d) {
-  if (!els.btnDepthHold) return;
+  if (!els.depthHoldBadge) return;
 
-  const on = d.depth_hold === true;
-  const holding = on && DEPTH_HOLD_MODES.has(d.mode);
+  const holding = d.depth_hold === true;
 
-  els.btnDepthHold.textContent = on ? (holding ? "DEPTH-SET HOLDING" : "DEPTH-SET ARMED") : "DEPTH-SET OFF";
-  els.btnDepthHold.setAttribute("aria-pressed", on ? "true" : "false");
-  els.btnDepthHold.classList.toggle("btn-wide--on", on);
+  els.depthHoldBadge.textContent = holding ? "DEPTH-HOLD ON" : "DEPTH-HOLD OFF";
+  els.depthHoldBadge.classList.toggle("badge--ok", holding);
 }
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
@@ -1681,19 +1673,6 @@ requestAnimationFrame(pollGamepad);
    log di sini tidak optimis di sisi klien lagi. */
 $("btnSetSurface").onclick = () => {
   sendCmd("set_surface", true);
-};
-
-/* depth-set — SET merekam kedalaman saat ini, tombol kedua menyalakan/mematikan.
-   Keduanya tidak optimis di sisi klien: label tombol baru berubah saat telemetri
-   berikutnya membawa depth_target/depth_hold dari wahana, dan alasan penolakan
-   (belum di-set / belum armed) datang sebagai event dari rov_agent.py. */
-$("btnDepthSet").onclick = () => {
-  sendCmd("depth_set", true);
-};
-
-$("btnDepthHold").onclick = () => {
-  // null = toggle di sisi agent, sumber kebenarannya tetap wahana.
-  sendCmd("depth_hold", null);
 };
 
 /* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */

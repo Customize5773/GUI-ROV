@@ -1116,17 +1116,7 @@ body[data-theme="light"] .theme__icon::after {
 .btn-wide:hover { background: rgba(20,216,255,.12); border-color: rgba(20,216,255,.45); box-shadow: 0 0 16px rgba(20,216,255,.15); }
 .btn-wide:active { transform: scale(.99); }
 
-/* Depth-set: SET + saklar ON/OFF berdampingan. */
-.depthset { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 6px; }
-.btn-wide--half { padding: 9px 6px; font-size: 11px; }
-/* Saklar menyala = depth-set ON. Warna dibedakan dari sonar biru supaya
-   sekali lirik operator tahu ada yang menulis ke thruster selain stik. */
-.btn-wide--on {
-  background: rgba(0,230,150,.14);
-  border-color: rgba(0,230,150,.5);
-  color: #7ff5c4;
-}
-.btn-wide--on:hover { background: rgba(0,230,150,.2); border-color: rgba(0,230,150,.7); box-shadow: 0 0 16px rgba(0,230,150,.18); }
+.depthset { margin-top: 6px; }
 
 /* fullscreen pilot viewport */
 .panel--attitude:fullscreen { border-radius: 0; background: var(--abyss); }
