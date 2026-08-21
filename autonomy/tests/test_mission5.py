@@ -507,3 +507,34 @@ def test_handoff_tetap_jalan_saat_control_mode_autonomous():
     telem = fsm.telem.get()
     assert not (fsm._require_auto and telem.get('control_mode') == 'manual')
     assert fsm._state == State.DIVE
+
+
+def test_abort_kirim_emergency_stop_sebelum_running_false():
+    """abort() harus emergency_stop() DULU, baru _running=False.
+
+    Urutan kebalik pernah nyata bikin race: begitu _running jadi False, thread
+    FSM sendiri (rov_link.start_mission5 _run finally) langsung cmd.close();
+    kalau emergency_stop() belum sempat sendto(), itu race dgn close() dan
+    lempar OSError Bad file descriptor — mematikan thread loop_rx_json rov_link
+    (semua command GUI berhenti masuk sampai proses direstart)."""
+    fsm = _make_fsm()
+    fsm._running = True
+    running_saat_emit = []
+    fsm.cmd.emergency_stop = lambda: running_saat_emit.append(fsm._running)
+
+    fsm.abort()
+
+    assert running_saat_emit == [True]
+    assert not fsm._running
+
+
+def test_commandsender_emit_setelah_close_tidak_crash():
+    """Dua thread bisa panggil abort() nyaris bersamaan (rov_link.handle_command
+    DAN self-check Mission5FSM._loop() — sengaja rangkap, lihat komentar di
+    _loop). Salah satu close() cmd duluan; _emit() dari thread lain sesudahnya
+    harus no-op, BUKAN OSError Bad file descriptor yang mematikan thread
+    loop_rx_json rov_link."""
+    cmd = m5.CommandSender(host='127.0.0.1', port=0)
+    cmd.close()
+    cmd.emergency_stop()  # tak boleh raise
+    cmd.close()  # idempotent, tak boleh raise dobel-close

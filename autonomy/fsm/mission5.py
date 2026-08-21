@@ -213,11 +213,22 @@ class CommandSender:
         self._port = port
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # abort() punya dua jalur pemanggil independen yang bisa nyaris
+        # bersamaan (rov_link.handle_command('control_mode') DAN self-check
+        # Mission5FSM._loop() sendiri — keduanya sengaja rangkap, lihat komentar
+        # di _loop). Lock ini bikin close() idempotent & _emit() setelah close
+        # jadi no-op alih-alih race lempar OSError Bad file descriptor yang
+        # mematikan thread loop_rx_json rov_link.
+        self._lock = threading.Lock()
+        self._closed = False
 
     def _emit(self, name, value):
         """Kirim SATU command {name,value} — format yang dipahami rov_link/server.js."""
-        raw = json.dumps({'name': name, 'value': value}).encode()
-        self._sock.sendto(raw, (self._host, self._port))
+        with self._lock:
+            if self._closed:
+                return
+            raw = json.dumps({'name': name, 'value': value}).encode()
+            self._sock.sendto(raw, (self._host, self._port))
         log.debug("[cmd] %s=%s", name, value)
 
     def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
@@ -242,7 +253,11 @@ class CommandSender:
         self._emit('stop', True)
 
     def close(self):
-        self._sock.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._sock.close()
 
 
 # ── State Machine Utama ───────────────────────────────────────────────────────
@@ -355,8 +370,13 @@ class Mission5FSM:
 
     def abort(self):
         """Hentikan semua gerak dan masuk ABORT (failsafe + disarm)."""
-        self._running = False
+        # Kirim emergency_stop SEBELUM _running=False: begitu _running jadi False,
+        # thread FSM sendiri (lihat rov_link.start_mission5 _run finally) langsung
+        # cmd.close() — kalau urutannya kebalik, sendto() di atas race dengan
+        # close() itu dan lempar OSError Bad file descriptor (mematikan thread
+        # loop_rx_json rov_link, jadi semua command GUI berhenti masuk).
         self.cmd.emergency_stop()
+        self._running = False
         self._state = State.ABORT
         log.warning("[FSM] ABORT — failsafe, thruster netral + disarm")
 
