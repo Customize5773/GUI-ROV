@@ -57,6 +57,7 @@ const els = {
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"),
   depthHoldBadge: $("depthHoldBadge"),
+  markBadge: $("markBadge"),
   modeActual: $("modeActual"),
 };
 
@@ -375,11 +376,26 @@ function applyTelemetry(d) {
 
   els.depthTarget.textContent = num(d.depth_target, 2);
   applyDepthHold(d);
+  applyMarkBadge(d);
 }
 
 /* Badge status depth-hold, read-only — tidak ada saklar manual lagi.
    d.depth_hold datang langsung dari depth_hold_mode_ok() (rov_agent.py):
    true berarti mode ArduSub sedang ALT_HOLD-capable dan bias sedang mengalir. */
+/* Status MARK gantungan. Tanpa mark, M5_REDIVE tidak punya arah dan hanya
+   menyapu pelan sampai timeout — jadi ini HARUS terbaca sebelum operator
+   menekan AUTONOMOUS, bukan ditemukan setelah wahana menyelam dan gagal. */
+function applyMarkBadge(d) {
+  if (!els.markBadge) return;
+  const hdg = d.marked_heading;
+  const dep = d.marked_depth;
+  const marked = Number.isFinite(hdg) && Number.isFinite(dep);
+  els.markBadge.textContent = marked
+    ? `MARK ${hdg.toFixed(0)}\u00B0 / ${dep.toFixed(2)} m`
+    : "BELUM DI-MARK";
+  els.markBadge.classList.toggle("badge--ok", marked);
+}
+
 function applyDepthHold(d) {
   if (!els.depthHoldBadge) return;
 
@@ -1706,6 +1722,13 @@ requestAnimationFrame(pollGamepad);
    log di sini tidak optimis di sisi klien lagi. */
 $("btnSetSurface").onclick = () => {
   sendCmd("set_surface", true);
+};
+
+/* MARK gantungan — ditekan di MISI 3, tepat setelah payload tersangkut di hook.
+   Backend merekam heading+depth saat itu dan mengonfirmasi lewat event, jadi log
+   di sini tidak optimis di sisi klien (pola sama btnSetSurface). */
+$("btnMarkHook").onclick = () => {
+  sendCmd("mark_hook", true);
 };
 
 /* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */

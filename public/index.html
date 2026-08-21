@@ -264,6 +264,17 @@
                 </div>
                 <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
 
+                <!-- MARK gantungan: ditekan saat MISI 3, tepat setelah payload
+                     tersangkut di hook dinding. Merekam heading + depth saat itu
+                     supaya misi 5 autonomous tahu ARAH untuk kembali.
+                     Bukan koordinat x/y: wahana tak punya estimasi posisi
+                     horizontal (tak ada GPS/DVL/optical flow di bawah air).
+                     Tanpa MARK, M5_REDIVE hanya menyapu pelan sampai timeout. -->
+                <button class="btn-wide" id="btnMarkHook">MARK Gantungan (tekan di misi 3)</button>
+                <div class="depthset">
+                  <span class="badge" id="markBadge">BELUM DI-MARK</span>
+                </div>
+
                 <!-- Depth-hold sekarang otomatis: target mengikuti kedalaman
                      aktual selagi stick heave dipegang, dan terkunci begitu
                      stick dilepas (lihat apply_depth_hold_bias di rov_agent.py).

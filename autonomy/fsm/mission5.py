@@ -277,7 +277,21 @@ class Mission5FSM:
     """
 
     def __init__(self, cmd: CommandSender, telem: TelemetryReceiver,
-                 vision: VisionPipeline, runlog=None):
+                 vision: VisionPipeline, runlog=None,
+                 marked_heading=None, marked_depth=None):
+        # Tanda gantungan yang direkam operator lewat tombol MARK saat misi 3
+        # (command `mark_hook` di rov_agent.py), yaitu SAAT payload benar-benar
+        # tergantung di hook. Dipakai M5_REDIVE untuk kembali ke sana.
+        #
+        # Kenapa heading+depth dan BUKAN koordinat x/y: wahana ini tak punya
+        # estimasi posisi horizontal sama sekali — tidak ada GPS/DVL/optical
+        # flow, LOCAL_POSITION_NED tak pernah tiba (pos_n/pos_e selalu None).
+        # Lihat rov_agent.py bagian POSHOLD.
+        #
+        # Keduanya None → perilaku lama utuh (WALL_HEADING + HOOK_DEPTH), jadi
+        # jalur SITL dan misi 1→5 penuh tidak berubah sama sekali.
+        self._marked_heading = marked_heading
+        self._marked_depth   = marked_depth
         self.cmd    = cmd
         self.telem  = telem
         self.vision = vision
@@ -340,6 +354,17 @@ class Mission5FSM:
                     False → langsung jalan (untuk uji SITL/mock tanpa GUI).
         """
         log.info("[FSM] ===== MISI ROV KKI 2026 DIMULAI (start=%s) =====", start_state.name)
+        # Selalu katakan sumber arah yang dipakai. Gerbang yang diam-diam tak
+        # menyala sudah dua kali memakan waktu debug di proyek ini; operator
+        # harus bisa melihat SEBELUM wahana bergerak apakah MARK terbaca.
+        if self._marked_heading is not None or self._marked_depth is not None:
+            log.info("[FSM] MARK gantungan dipakai — heading=%s depth=%s",
+                     "-" if self._marked_heading is None else f"{self._marked_heading:.0f}°",
+                     "-" if self._marked_depth is None else f"{self._marked_depth:.2f} m")
+        else:
+            log.warning("[FSM] TANPA MARK — arah dari WALL_HEADING/QR misi 1. "
+                        "Pada alur misi 1-4 manual keduanya kosong, jadi M5_REDIVE "
+                        "akan menyapu pelan dan mungkin timeout. Tekan MARK di gantungan.")
         self._running = True
         self._require_auto = wait_mode
         if wait_mode and not self._wait_for_autonomous():
@@ -818,8 +843,13 @@ class Mission5FSM:
             self._transition(State.M5_FALLBACK)
             return
 
-        qr   = self._fresh_payload(0.5)
-        near = depth >= HOOK_DEPTH - DEPTH_TOLERANCE
+        qr = self._fresh_payload(0.5)
+        # Kedalaman yang di-MARK menang atas HOOK_DEPTH: ia direkam di gantungan
+        # sungguhan, jadi ikut mencoret offset tare permukaan (kedua pembacaan
+        # memakai referensi yang sama). HOOK_DEPTH sendiri hanya benar bila
+        # geometri kolam di config sudah diisi — lihat _derive_depths().
+        target_depth = self._marked_depth if self._marked_depth is not None else HOOK_DEPTH
+        near = depth >= target_depth - DEPTH_TOLERANCE
 
         if qr is not None and near:
             log.info("[FSM] QR payload diperoleh @depth=%.2f (%s) — mulai docking",
@@ -829,23 +859,50 @@ class Mission5FSM:
             self.pose_servo.reset()
             self._transition(State.M5_DOCK)
         elif not near:
-            # Turun ke level hook; sambil arahkan heading balik ke dinding target (WALL_HEADING),
-            # bukan sapu buta — dinding sudah diketahui dari QR misi 1, tak perlu "ingat" posisi.
+            # Turun ke level hook; sambil arahkan heading balik ke dinding target,
+            # bukan sapu buta — arah datang dari MARK operator atau QR misi 1,
+            # jadi tak perlu "ingat" posisi x/y (yang memang tak tersedia).
             yaw = 0 if qr is not None else self._heading_toward_wall(telem)
             self.cmd.send(vert=-DIVE_SPEED, yaw=yaw)
-            log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=%s", depth, HOOK_DEPTH, bool(qr))
+            log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=%s", depth, target_depth, bool(qr))
         else:
-            yaw = YAW_SPEED if self._target_wall is None else self._heading_toward_wall(telem)
-            self.cmd.send(yaw=yaw)   # sudah di level hook, QR belum terlihat → arah dinding target
+            # Sudah di level hook, QR belum terlihat → hadapkan ke arah gantungan.
+            # Dulu cabang ini memaksa yaw=YAW_SPEED dan mengabaikan MARK, jadi
+            # alur misi 1-4 manual selalu berputar buta sampai timeout.
+            #
+            # Tapi saat BENAR-BENAR tak ada arah (tanpa mark & tanpa _target_wall)
+            # sapuan harus tetap kecepatan PENUH, bukan 0.6x milik
+            # _heading_toward_wall(): pelan-pelan berarti QR tak keburu ketemu
+            # sebelum TIMEOUT_REDIVE — terbukti bikin skenario SITL B jatuh ke
+            # M5_FALLBACK padahal sebelumnya lolos jalur visual.
+            if self._marked_heading is None and self._target_wall is None:
+                yaw = YAW_SPEED
+            else:
+                yaw = self._heading_toward_wall(telem)
+            self.cmd.send(yaw=yaw)
             log.debug("[FSM] M5_REDIVE sapu cari QR @depth=%.2f", depth)
 
     def _heading_toward_wall(self, telem) -> int:
         """Yaw menuju heading dinding target (sama dgn NAV_WALL) — dipakai M5_REDIVE
-        agar sapu cari QR terarah, bukan sapu buta satu arah."""
-        if self._target_wall is None:
+        agar sapu cari QR terarah, bukan sapu buta satu arah.
+
+        Urutan sumber arah, dari yang paling dipercaya:
+          1. `_marked_heading` — heading TERUKUR saat operator menekan MARK di
+             gantungan sungguhan. Menang atas WALL_HEADING karena tabel itu
+             masih placeholder yang wajib dikalibrasi ulang tiap arena.
+          2. WALL_HEADING[_target_wall] — hanya ada bila FSM sendiri yang
+             menjalankan misi 1 (SCAN_QR). Pada alur misi 1-4 MANUAL,
+             _target_wall SELALU None.
+          3. Tak ada keduanya → sapu pelan; ini yang membuat run 22 Agu
+             berputar buta sampai timeout.
+        """
+        heading = telem.get('heading', 0.0)
+        if self._marked_heading is not None:
+            target_hdg = self._marked_heading
+        elif self._target_wall is not None:
+            target_hdg = WALL_HEADING.get(self._target_wall, heading)
+        else:
             return int(YAW_SPEED * 0.6)
-        heading    = telem.get('heading', 0.0)
-        target_hdg = WALL_HEADING.get(self._target_wall, heading)
         err = self._heading_error(heading, target_hdg)
         if abs(err) < 10:
             return 0

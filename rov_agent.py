@@ -189,6 +189,11 @@ state = {
     # membedakan "belum ada data" dari "posisi 0,0" dan jatuh ke fallback.
     "pos_n": None,
     "pos_e": None,
+    # Tanda gantungan dari tombol MARK (command `mark_hook`). None = belum
+    # ditandai — lihat marked_heading/marked_depth untuk kenapa ini heading+depth
+    # dan bukan koordinat x/y.
+    "marked_heading": None,
+    "marked_depth": None,
 }
 
 master = None
@@ -237,6 +242,24 @@ joystick = {
 # yang belum menekan SET sama sekali — yang pertama harus menahan, yang kedua
 # tidak boleh mengirim bias apa pun.
 depth_target = None
+
+# Tanda gantungan (command `mark_hook`): heading & depth SAAT operator menekan
+# MARK, yaitu tepat ketika payload tergantung di hook pada misi 3. Dipakai
+# Mission5FSM.M5_REDIVE untuk kembali ke sana saat misi 5 autonomous.
+#
+# Kenapa heading+depth dan BUKAN koordinat x/y: wahana ini tidak punya estimasi
+# posisi horizontal sama sekali (tidak ada GPS/DVL/optical flow — lihat bagian
+# POSHOLD di bawah). state["pos_n"]/["pos_e"] tetap None karena
+# LOCAL_POSITION_NED tak pernah dikirim FC. Jadi tak ada koordinat untuk direkam.
+#
+# None = belum pernah di-MARK. Dibedakan tegas dari 0.0 yang merupakan nilai sah
+# (heading 0° = utara), pola sama dengan depth_target di atas.
+#
+# Sengaja HANYA di memori: hilang saat rov-agent.service restart. Satu run lomba
+# 10 menit, dan status mark dipantulkan ke telemetri supaya operator melihat
+# kalau ia terhapus, bukan menemukannya saat wahana sudah menyelam.
+marked_heading = None
+marked_depth = None
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
@@ -656,6 +679,13 @@ def send_telemetry():
     # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
 
+    # Tanda gantungan (tombol MARK). null = belum di-MARK, dan GUI WAJIB
+    # menampilkannya begitu: tanpa mark, M5_REDIVE tak punya arah dan hanya
+    # menyapu pelan sampai timeout. Operator harus tahu itu SEBELUM menekan
+    # AUTONOMOUS, bukan setelah wahana menyelam dan gagal.
+    state["marked_heading"] = marked_heading
+    state["marked_depth"] = marked_depth
+
     # Gate otoritas untuk mission5 FSM (toggle autonomous/manual di GUI).
     # HARUS kunci sendiri: dulu ini menulis ke state["mode"] dan menimpa pilot
     # mode ArduSub dari HEARTBEAT 10x/detik. Akibatnya requested_mode tak pernah
@@ -765,6 +795,11 @@ def _fsm_read_state():
 # kosong untuk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
 M5_CALIB_DEFAULT = "vision/calibration/dwe_trial2.npz"
 
+# Config geometri arena, dipisah koma. Kosong = konstanta default fsm/mission5.py,
+# yang HANYA benar bila kolam persis 0,9 m (Guidebook mengukur hook 0,45 m dari
+# DASAR, sedangkan HOOK_DEPTH default 0,45 m dari PERMUKAAN).
+M5_CONFIG_DEFAULT = ""
+
 
 def setup_mission5_runner():
     """Siapkan runner FSM. Gagal-lunak: None berarti misi 5 tak tersedia."""
@@ -796,6 +831,13 @@ def setup_mission5_runner():
         "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_DEFAULT),
         "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_DEFAULT),
         "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
+        # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
+        # (lihat Mission5Runner._apply_configs). Arena lomba:
+        #   M5_CONFIG="config/rov_tuned.yaml,config/pool_kki_running.yaml"
+        "config_files": os.environ.get("M5_CONFIG", M5_CONFIG_DEFAULT),
+        # Dibaca SAAT toggle autonomous, bukan sekarang: operator menekan MARK
+        # di tengah misi 3, jauh sesudah runner ini dibuat.
+        "read_mark": lambda: (marked_heading, marked_depth),
     }
     mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
     return mission5_runner
@@ -813,6 +855,8 @@ def command_listener():
     global mavlink_stream_requested_at
     global pool_depth
     global depth_offset
+    global marked_heading
+    global marked_depth
     global poshold_active
     global heading_target
     global thruster_gain
@@ -1013,6 +1057,27 @@ def command_listener():
                 send_to_gui({
                     "type": "event",
                     "text": f"Surface level diset — offset {depth_offset:.2f} m",
+                    "level": "ok",
+                })
+
+            elif name == "mark_hook":
+
+                # Rekam DI MANA payload digantung, untuk dipakai M5_REDIVE saat
+                # misi 5 autonomous. Ditekan operator pada misi 3, tepat setelah
+                # payload tersangkut di gantungan dinding.
+                #
+                # Sengaja tanpa syarat armed/mode: merekam dua angka tidak
+                # menggerakkan apa pun, dan memaksa syarat justru membuat
+                # operator kehilangan momen yang benar (payload sudah tergantung,
+                # ROV mungkin sudah dinetralkan).
+                marked_heading = state["heading"]
+                marked_depth = state["depth"]
+                print(f"[MARK] gantungan ditandai — heading={marked_heading:.0f}° "
+                      f"depth={marked_depth:.2f} m")
+                send_to_gui({
+                    "type": "event",
+                    "text": (f"Gantungan ditandai — heading {marked_heading:.0f}° "
+                             f"depth {marked_depth:.2f} m"),
                     "level": "ok",
                 })
 

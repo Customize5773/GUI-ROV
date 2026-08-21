@@ -141,6 +141,49 @@ class Mission5Runner:
         return (Mission5FSM, State, VisionPipeline, QR_SIDE_M,
                 HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA, HOOK_PIPE_DIAM_M)
 
+    def _apply_configs(self):
+        """Terapkan config geometri/tuning ke modul fsm.mission5 sebelum FSM dibuat.
+
+        Meniru mission5.main() (lihat `--config` di sana): apply_config() menimpa
+        konstanta modul, lalu _derive_depths() MENGHITUNG ulang HOOK_DEPTH &
+        DEPTH_TARGET_BOTTOM dari geometri kolam.
+
+        Kenapa ini wajib, bukan pemanis: HOOK_DEPTH default 0.45 diukur DARI
+        PERMUKAAN, sedangkan Guidebook mengukur hook 0,45 m DARI DASAR. Keduanya
+        hanya sama bila kolam persis 0,9 m. Di kolam 0,7 m hook sebenarnya ada di
+        kedalaman 0,25 m — tanpa config, M5_REDIVE menyelam 20 cm terlalu dalam
+        dan QR tak pernah masuk frame.
+
+        Gagal-lunak: config rusak/absen TIDAK boleh mematikan misi 5, apalagi
+        kontrol manual. Jalan terus dgn default, tapi berisik di log.
+        """
+        paths = [p.strip() for p in (self._cfg.get("config_files") or "").split(",") if p.strip()]
+        if not paths:
+            self._log("[M5] tanpa config arena — HOOK_DEPTH pakai default modul "
+                      "(benar HANYA bila kolam 0,9 m). Set M5_CONFIG bila kolam berbeda.")
+            return
+        try:
+            from config.loader import load_config, apply_config
+            import fsm.mission5 as m5
+        except Exception as e:
+            self._log(f"[M5] loader config tak tersedia: {e} — pakai default")
+            return
+        cfg_keys = set()
+        for path in paths:
+            try:
+                applied = apply_config(vars(m5), load_config(path))
+            except Exception as e:
+                self._log(f"[M5] config GAGAL dimuat: {path}: {e} — dilewati")
+                continue
+            cfg_keys.update(name for name, _o, _n in applied)
+            self._log(f"[M5] config dimuat: {path} ({len(applied)} nilai)")
+        try:
+            m5._derive_depths(cfg_keys)
+            self._log(f"[M5] geometri diturunkan — HOOK_DEPTH={m5.HOOK_DEPTH:.2f} m "
+                      f"DEPTH_TARGET_BOTTOM={m5.DEPTH_TARGET_BOTTOM:.2f} m")
+        except Exception as e:
+            self._log(f"[M5] _derive_depths gagal: {e} — setpoint kedalaman pakai default")
+
     def is_running(self):
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
@@ -167,6 +210,8 @@ class Mission5Runner:
             self._log("[M5] (cek: folder autonomy/ ada di Pi? opencv-python & pyzbar terpasang di venv?)")
             return False
 
+        self._apply_configs()
+
         cfg = self._cfg
         vision = VisionPipeline(
             source=cfg.get("vision_source", "usb"),
@@ -184,7 +229,12 @@ class Mission5Runner:
         )
         vision.start()
 
-        fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision)
+        # MARK dibaca SAAT start, bukan disimpan di config: operator menekan
+        # MARK di tengah misi 3, jauh sesudah runner dibuat.
+        read_mark = cfg.get("read_mark")
+        mh, md = read_mark() if callable(read_mark) else (None, None)
+        fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision,
+                          marked_heading=mh, marked_depth=md)
         start_state = getattr(State, cfg.get("start_state", "M5_REDIVE"))
 
         def _run():

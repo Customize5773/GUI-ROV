@@ -616,3 +616,75 @@ def test_gripper_pwm_sama_dengan_gripper_controller():
     assert const('GRIPPER_SERVO_CH') == gc.GRIPPER_SERVO_CH
     assert const('GRIPPER_PWM_OPEN') == gc.GRIPPER_PWM_OPEN
     assert const('GRIPPER_PWM_CLOSE') == gc.GRIPPER_PWM_CLOSE
+
+
+# ── MARK gantungan: arah M5_REDIVE tanpa koordinat x/y ──────────────────────
+def _fsm_with_mark(heading=None, depth=None):
+    from tests.sim_plant import FakeClock, SimPlant, SimCommandLink, SimTelemetry, SimVision
+    clock, plant = FakeClock(), SimPlant()
+    return m5.Mission5FSM(SimCommandLink(plant), SimTelemetry(plant),
+                          SimVision(plant, clock),
+                          marked_heading=heading, marked_depth=depth)
+
+
+def test_mark_heading_menang_atas_wall_heading():
+    """MARK adalah heading TERUKUR di gantungan sungguhan; WALL_HEADING masih
+    tabel placeholder yang wajib dikalibrasi ulang tiap arena. Jadi mark menang."""
+    fsm = _fsm_with_mark(heading=123.0)
+    fsm._target_wall = 'C'                      # WALL_HEADING['C'] = 0
+    # Menghadap 123° = persis heading yang di-mark → tak perlu berputar.
+    assert fsm._heading_toward_wall({'heading': 123.0}) == 0
+    # Menghadap 0° (yaitu WALL_HEADING['C']) → HARUS tetap berputar ke 123°,
+    # membuktikan tabel tidak dipakai saat mark ada.
+    assert fsm._heading_toward_wall({'heading': 0.0}) != 0
+
+
+def test_tanpa_mark_jatuh_ke_wall_heading():
+    """Perilaku lama utuh — jalur SITL/misi 1-5 penuh tak boleh berubah."""
+    fsm = _fsm_with_mark()
+    fsm._target_wall = 'C'                      # WALL_HEADING['C'] = 0
+    assert fsm._heading_toward_wall({'heading': 0.0}) == 0
+    assert fsm._heading_toward_wall({'heading': 90.0}) != 0
+
+
+def test_mark_memberi_arah_walau_target_wall_kosong():
+    """INI kegagalan 22 Agu. Misi 1-4 dijalankan MANUAL → FSM tak pernah lewat
+    SCAN_QR → _target_wall None. Dulu M5_REDIVE memaksa yaw=YAW_SPEED (putar
+    buta) dan mengabaikan mark; log Pi menunjukkan dua run berturut
+    'M5_REDIVE timeout — QR tak diperoleh'.
+
+    Dengan mark, arah harus datang dari heading yang direkam, dan begitu ROV
+    sudah menghadap ke sana yaw HARUS 0 — bukan terus berputar."""
+    fsm = _fsm_with_mark(heading=200.0)
+    assert fsm._target_wall is None
+    assert fsm._heading_toward_wall({'heading': 200.0}) == 0, "sudah menghadap → berhenti berputar"
+    assert fsm._heading_toward_wall({'heading': 100.0}) != 0, "belum menghadap → berputar"
+
+
+def test_tanpa_mark_dan_tanpa_target_wall_tetap_menyapu():
+    """Jaring pengaman: operator lupa MARK → tetap menyapu mencari QR, bukan diam."""
+    fsm = _fsm_with_mark()
+    assert fsm._target_wall is None
+    assert fsm._heading_toward_wall({'heading': 0.0}) != 0
+
+
+def test_mark_depth_dipakai_sebagai_target_selam():
+    """M5_REDIVE menyelam ke kedalaman yang di-MARK, bukan HOOK_DEPTH.
+
+    Penting karena HOOK_DEPTH default diukur DARI PERMUKAAN sedangkan Guidebook
+    mengukur hook 0,45 m DARI DASAR — hanya sama bila kolam persis 0,9 m."""
+    sent = []
+    fsm = _fsm_with_mark(heading=90.0, depth=0.25)
+    fsm.cmd.send = lambda **kw: sent.append(kw)
+    fsm._fresh_payload = lambda *a, **k: None   # isolasi: uji gerbang KEDALAMAN saja,
+                                               # tanpa QR sim yang memicu M5_DOCK
+    fsm._state = m5.State.M5_REDIVE
+    fsm._state_t = m5.time.time()
+
+    fsm._state_m5_redive({'depth': 0.10, 'heading': 90.0})   # jauh di atas 0.25
+    assert sent and sent[-1].get('vert', 0) < 0, "harus menyelam"
+
+    sent.clear()
+    fsm._state_m5_redive({'depth': 0.24, 'heading': 90.0})   # sudah di level mark
+    assert sent and sent[-1].get('vert', 0) == 0, (
+        f"pada 0.24 m sudah dianggap sampai (mark 0.25), tak boleh menyelam lagi: {sent[-1]}")
