@@ -294,14 +294,14 @@ class TestDepthHoldBias(unittest.TestCase):
 
 
 class TestDepthHoldBiasMaxCorrection(unittest.TestCase):
-    """Bias diam di luar DEPTH_BIAS_MAX_CORRECTION -- ArduSub ALT_HOLD native
-    (bukan Python) yang menahan di luar jangkauan trim ini.
+    """Bias diam di luar DEPTH_BIAS_MAX_CORRECTION -- sabuk pengaman kolam
+    dangkal terhadap SET yang sudah sangat basi.
 
-    Ditambahkan 16 Agu 2026: trial membuktikan ALT_HOLD native (bias OFF,
-    stik netral) menahan rapat (sd 0,007 m, 130+ detik) -- persis rasa
-    BlueOS/Cockpit -- sementara bias mengejar target JAUH (0,15-0,4 m) malah
-    drift arah terbalik dan berosilasi tanpa henti. Operator memutuskan: SET
-    jadi trim dekat saja, bukan navigasi otomatis jarak jauh.
+    Batasnya dulu 0,15 m karena ArduSub ALT_HOLD native yang diandalkan
+    menahan di luar jangkauan itu. Sejak DEPTH_HOLD_MODES = {STABILIZE},
+    tidak ada native yang mengambil alih, jadi batas sempit itu berarti
+    "depth-set ON tapi wahana diam total". Test mengikuti konstantanya, bukan
+    angka literal -- lihat test_error_menengah_tetap_mendorong di bawah.
     """
 
     def test_dalam_jangkauan_tetap_aktif(self):
@@ -309,14 +309,24 @@ class TestDepthHoldBiasMaxCorrection(unittest.TestCase):
         self.assertNotEqual(depth_hold_bias(tepat_di_batas, was_active=True), 0.0)
 
     def test_di_luar_jangkauan_diam(self):
-        for error in (DEPTH_BIAS_MAX_CORRECTION + 0.001, 0.3, 1.0, 10.0):
+        for error in (DEPTH_BIAS_MAX_CORRECTION + 0.001, 1.0, 10.0):
             self.assertEqual(depth_hold_bias(error, was_active=True), 0.0, msg=error)
             self.assertEqual(depth_hold_bias(-error, was_active=True), 0.0, msg=error)
+
+    def test_error_menengah_tetap_mendorong(self):
+        # REGRESI bug "depth-set ON tapi ROV diam" di STABILIZE: error 0,30 m
+        # (operator naik 30 cm dari setpoint) HARUS menghasilkan dorongan.
+        # Dengan batas lama 0,15 m ini nol, dan tidak ada apa pun di STABILIZE
+        # yang menggantikannya.
+        for error in (0.2, 0.3, 0.5):
+            self.assertNotEqual(depth_hold_bias(error, was_active=True), 0.0, msg=error)
+            self.assertNotEqual(depth_hold_bias(-error, was_active=True), 0.0, msg=error)
 
     def test_kembali_dalam_jangkauan_aktif_lagi(self):
         # Tidak butuh "reset" apa pun -- histeresis (was_active) dan batas
         # jangkauan adalah dua gerbang independen, dicek ulang tiap panggilan.
-        self.assertEqual(depth_hold_bias(0.3, was_active=True), 0.0)
+        jauh = DEPTH_BIAS_MAX_CORRECTION + 0.1
+        self.assertEqual(depth_hold_bias(jauh, was_active=True), 0.0)
         self.assertNotEqual(depth_hold_bias(0.1, was_active=True), 0.0)
 
     def test_override_max_correction_dihormati(self):

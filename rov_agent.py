@@ -792,7 +792,6 @@ def command_listener():
                     print(f"[PILOT] {pixhawk_mode} not supported oleh firmware ini")
                     continue
 
-                previous_requested_mode = requested_mode
                 master.set_mode(mode_mapping[pixhawk_mode])
                 requested_mode = pixhawk_mode
                 requested_mode_ts = time.time()
@@ -816,34 +815,6 @@ def command_listener():
                 # operator sendiri — lihat DEPTH_HOLD_MODES di rov_modes.py
                 # untuk mode mana yang jadi syarat bias-nya sekarang.
 
-                if depth_hold_allowed(pixhawk_mode):
-                    was_depth_hold = (
-                        previous_requested_mode is not None
-                        and depth_hold_allowed(previous_requested_mode)
-                    )
-
-                    if not was_depth_hold:
-                        with depth_lock:
-                            depth_target = clamp_depth_target(
-                                state["depth"],
-                                pool_depth
-                            )
-
-                        print(
-                            f"[DEPTH] Hold target mengikuti depth saat ini = "
-                            f"{depth_target:.2f} m"
-                        )
-                    else:
-                        with depth_lock:
-                            depth_target = clamp_depth_target(
-                                depth_target,
-                                pool_depth
-                            )
-
-                        print(
-                            f"[DEPTH] Hold target dipertahankan = "
-                            f"{depth_target:.2f} m"
-                        )
                 # Pindah ke depth-hold dengan error BESAR + depth-set ON =
                 # penyelaman mendadak. Peringatkan ke operator dan matikan saklar.
                 # Ini mencegah kejutan: operator pindah balik dari Manual ke Alt
@@ -1019,7 +990,7 @@ def command_listener():
                 else:
                     send_to_gui({
                         "type": "event",
-                        "text": "Depth-set ON tapi mode bukan Alt Hold — belum akan menahan",
+                        "text": "Depth-set ON tapi mode bukan Stabilize — belum akan menahan",
                         "level": "warn",
                     })
 

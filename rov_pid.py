@@ -169,6 +169,12 @@ DEPTH_BIAS_LIMIT = 200    # |bias| maksimum terhadap Z_NEUTRAL (500) = 160 PWM
 # Offset minimum supaya perintah benar-benar keluar dari deadzone ALT_HOLD.
 # 130 > 125 (THR_DZ=100 PWM) dengan margin kecil terhadap pembulatan.
 # NAIKKAN kalau THR_DZ di FC dinaikkan — keduanya harus jalan bersama.
+#
+# ponytail: 130 diturunkan dari THR_DZ ALT_HOLD, sedangkan DEPTH_HOLD_MODES
+# sekarang cuma STABILIZE — di sana throttle open-loop dan THR_DZ tidak
+# berlaku, jadi lompatan ini kemungkinan besar kebesaran (≈104 PWM hentakan
+# langsung). Kandidat PERTAMA yang diturunkan kalau trial kolam menunjukkan
+# hentakan/overshoot; jangan ditebak tanpa data log.
 DEPTH_BIAS_DEADZONE = 130
 
 # DUA ambang, bukan satu — ini HISTERESIS, dan perbedaannya menentukan apakah
@@ -213,25 +219,25 @@ DEPTH_BIAS_RELEASE = 0.02
 # tools/analyze_trial.py, kolom "ayunan").
 DEPTH_BIAS_DAMPING = 300.0  # unit z per (m/s) laju error mengecil
 
-# Jarak koreksi maksimum yang boleh dicoba bias — di luar ini, bias diam dan
-# ArduSub ALT_HOLD asli (native, tanpa campur tangan Python) yang menahan,
-# sama seperti operator memakai BlueOS/Cockpit langsung tanpa fitur SET kita.
+# Jarak koreksi maksimum yang boleh dicoba bias — di luar ini bias diam (0.0).
 #
-# Trial 15-16 Agu 2026 membuktikan dua hal yang berlawanan sekaligus:
-#   - ALT_HOLD native (bias OFF, stik netral) menahan RAPAT — sd 0,007 m
-#     selama 130+ detik nyata, persis rasa Cockpit.
-#   - Bias kita mencoba mengejar target JAUH (0,15-0,4 m) malah drift arah
-#     TERBALIK dan berosilasi lambat tanpa henti (lihat window "BEROSILASI"
-#     di tools/analyze_trial.py).
+# Nilai lama 0.15 m berasal dari zaman depth-set dipasangkan ke ALT_HOLD:
+# alasannya "di luar jangkauan ini, ArduSub ALT_HOLD native yang menahan"
+# (trial 15-16 Agu 2026: native menahan sd 0,007 m, jauh lebih rapat daripada
+# bias kita yang mengejar target jauh). Penyerahan itu MASUK AKAL di ALT_HOLD.
 #
-# Kesimpulannya: hukum bias ini (deadzone-jump + proporsional + redaman)
-# cukup andal untuk KOREKSI KECIL (operator sudah dekat target, cuma perlu
-# trim), tapi tidak untuk MENGGANTIKAN navigasi manual ke kedalaman jauh.
-# Daripada terus menambal hukum bias untuk kasus yang ArduSub sendiri sudah
-# tangani lebih baik secara native, batasi jangkauannya: SET yang sudah lama
-# (operator berenang jauh sebelum menekan ON) dibiarkan diam, bukan dipaksa
-# mengejar dan berisiko drift.
-DEPTH_BIAS_MAX_CORRECTION = 0.15  # meter
+# Sejak DEPTH_HOLD_MODES dipersempit ke STABILIZE, asumsinya batal: di
+# STABILIZE TIDAK ADA controller kedalaman yang mengambil alih. Batas 0.15 m
+# jadi berarti "error > 15 cm → tidak ada apa pun yang mendorong" — depth-set
+# menyala tapi wahana diam total. Itu bug yang diperbaiki di sini, bukan fitur.
+#
+# Sekarang batas ini murni SABUK PENGAMAN kolam dangkal: SET yang sudah sangat
+# basi (operator berenang jauh sebelum menekan ON) tetap tidak dikejar. 0,60 m
+# masih di bawah POOL_DEPTH default 0,9 m.
+#
+# KNOB KALIBRASI — turunkan lagi kalau trial menunjukkan drift/osilasi pada
+# error besar (cek kolom "ayunan" di tools/analyze_trial.py).
+DEPTH_BIAS_MAX_CORRECTION = 0.60  # meter
 
 
 def depth_bias_active(error, was_active):
