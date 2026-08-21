@@ -14,6 +14,7 @@ Cakupan:
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -410,3 +411,99 @@ def test_command_sender_emits_heave_scaled_to_1000():
     assert 'vert' not in by_name
     assert by_name['heave'] == 300
     assert by_name['gripper'] == 'close'
+
+
+# ── Kontrak telemetry FSM ↔ rov_link ─────────────────────────────────────────
+
+def _rov_link_telem_keys():
+    """Key telemetry yang BENAR-BENAR dikirim rov_link.py, dibaca dari sumbernya.
+
+    Sengaja parsing teks, bukan `import rov_link`: modul itu membuka socket
+    MAVLink saat konstruksi dan butuh pymavlink, sedangkan test ini cuma perlu
+    tahu nama field. Cukup dua bentuk yang dipakai file itu — literal
+    `self.telem = {...}` di __init__ dan penugasan `self.telem["x"] = ...`.
+    """
+    with open(os.path.join(_AUTONOMY, 'rov_link.py'), encoding='utf-8') as f:
+        src = f.read()
+    keys = set(re.findall(r'self\.telem\["([a-z_0-9]+)"\]', src))
+    init = re.search(r'self\.telem = \{(.*?)\}', src, re.S)
+    assert init, "bentuk `self.telem = {...}` di rov_link.py berubah — perbarui test ini"
+    keys |= set(re.findall(r'"([a-z_0-9]+)":', init.group(1)))
+    return keys
+
+
+def test_fsm_hanya_membaca_field_telemetry_yang_dikirim_rov_link():
+    """Cerminan test_command_sender_emits_heave_scaled_to_1000, arah sebaliknya.
+
+    Bug 'vert' vs 'heave' (OPEN-FASE1) lolos karena tak ada yang mengunci nama
+    field COMMAND. Bug kembarannya di sisi TELEMETRY lolos dengan cara yang sama
+    persis: mission5.py membaca telem['mode'] == 'autonomous'/'manual' padahal
+    rov_link mengisi 'mode' dgn mode ArduSub ('MANUAL'/'ALT_HOLD') dan menaruh
+    gate GUI di 'control_mode'. Keduanya diam — tidak error, tidak warning,
+    cek-nya sekadar tak pernah menyala.
+
+    BATAS TEST INI, tegas: ia hanya menangkap nama yang TIDAK DIKENAL. Bug
+    'vert'/'heave' bentuknya begitu, jadi tertangkap. Bug 'mode'/'control_mode'
+    TIDAK — 'mode' adalah key sah di rov_link, cuma artinya lain. Dimutasi balik
+    ke 'mode', test ini tetap hijau (sudah dicek).
+
+    Yang menjaga bug kedua itu adalah test_handoff_kembali_ke_manual_memicu_abort
+    di bawah, yang menguji PERILAKU dan memang gagal saat dimutasi. Keduanya
+    dipertahankan karena menangkap kelas yang berbeda; jangan buang salah satu
+    dengan alasan tumpang tindih.
+    """
+    with open(os.path.join(_AUTONOMY, 'fsm', 'mission5.py'), encoding='utf-8') as f:
+        src = f.read()
+    # DUA pola, karena mission5.py memakai keduanya dan bug aslinya ada di
+    # pola kedua: `telem.get('x')` pada dict yang sudah diambil, dan
+    # `self.telem.get().get('x')` yang mengambil dict-nya lebih dulu.
+    dibaca = set(re.findall(r"telem\.get\(\)\.get\('([a-z_0-9]+)'", src))
+    dibaca |= set(re.findall(r"(?<!\)\.)telem\.get\('([a-z_0-9]+)'", src))
+    assert dibaca, "pola telem.get('...') di mission5.py berubah — perbarui test ini"
+
+    tak_dikenal = dibaca - _rov_link_telem_keys()
+    assert not tak_dikenal, (
+        f"mission5.py membaca field telemetry yang tak pernah dikirim rov_link.py: "
+        f"{sorted(tak_dikenal)}"
+    )
+
+
+def test_handoff_kembali_ke_manual_memicu_abort():
+    """Toggle GUI Autonomous→Manual saat FSM jalan → FSM berhenti sendiri.
+
+    Ini lapis KEDUA (rov_link.stop_mission5 adalah yang pertama), dan lapis yang
+    sampai 2026-08-21 mati total karena membaca field yang salah.
+    """
+    fsm = _make_fsm()
+    fsm._require_auto = True
+    fsm._running = True
+    fsm._transition(State.DIVE)
+
+    # Operator memutar toggle balik ke Manual.
+    telem_asli = fsm.telem.get
+    fsm.telem.get = lambda: {**telem_asli(), 'control_mode': 'manual'}
+
+    fsm._loop()
+
+    assert fsm._state == State.ABORT
+    assert not fsm._running
+
+
+def test_handoff_tetap_jalan_saat_control_mode_autonomous():
+    """Kebalikannya — 'autonomous' TIDAK boleh memicu abort.
+
+    Tanpa test ini, membalik perbandingan (abort saat != 'manual') akan lolos
+    test di atas sambil mematikan autonomy sepenuhnya.
+    """
+    fsm = _make_fsm()
+    fsm._require_auto = True
+    fsm._running = True
+    fsm._transition(State.DIVE)
+
+    telem_asli = fsm.telem.get
+    fsm.telem.get = lambda: {**telem_asli(), 'control_mode': 'autonomous'}
+
+    # Satu iterasi loop tak boleh membuang FSM ke ABORT.
+    telem = fsm.telem.get()
+    assert not (fsm._require_auto and telem.get('control_mode') == 'manual')
+    assert fsm._state == State.DIVE

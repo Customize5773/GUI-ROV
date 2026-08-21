@@ -100,7 +100,17 @@ def build_plan(args):
                         "--telem-port", str(args.telem_port),
                         "--json-rx-port", str(args.cmd_port),
                         "--mavlink", args.mavlink,
-                        "--baud", str(args.baud)]
+                        "--baud", str(args.baud),
+                        # --vision berlaku untuk KEDUA jalur FSM, bukan cuma proses
+                        # terpisah di bawah. rov_link punya jalurnya sendiri:
+                        # toggle GUI Manual->Autonomous memanggil start_mission5()
+                        # yang menjalankan FSM in-process. Tanpa baris ini
+                        # start_mission5 jatuh ke default "usb" (rov_link.py:263),
+                        # jadi `--vision mock` diam-diam berarti "mock untuk proses
+                        # FSM, webcam untuk FSM hasil toggle" — dua arti berbeda
+                        # untuk satu flag, dan yang kedua menggantung di mesin
+                        # tanpa kamera.
+                        "--fsm-vision-source", args.vision]
         if args.fsm:
             rov_link_cmd += ["--telem-extra", f"127.0.0.1:{args.fsm_telem_port}"]
         plan.append(("ROV_LINK", rov_link_cmd, AUTONOMY, None))

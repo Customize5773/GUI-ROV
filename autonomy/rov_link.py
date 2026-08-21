@@ -196,6 +196,24 @@ class RovLink:
                 self.sp[name] = float(value)
             return
         if name == "stop":                       # FAILSAFE
+            # Hentikan FSM DULU, baru netral+disarm.
+            #
+            # Urutannya penting: fsm.abort() sendiri memanggil emergency_stop()
+            # yang menulis setpoint lewat loopback. Kalau dinolkan lebih dulu,
+            # tulisan itu datang SESUDAHNYA dan kita kirim manual_control dari
+            # nilai yang sudah basi.
+            #
+            # Tanpa baris ini (perilaku sampai 2026-08-21), STOP hanya
+            # menetralkan + disarm sementara thread FSM TERUS jalan dan terus
+            # menulis self.sp. Wahana diam karena disarm — tapi begitu operator
+            # menekan ARM (refleks wajar setelah STOP tak sengaja), gerakan
+            # langsung lanjut dari state FSM terakhir tanpa peringatan apa pun.
+            # E-Stop yang bisa hidup lagi sendiri bukan E-Stop.
+            #
+            # stop_mission5() idempotent (return cepat bila fsm None), jadi aman
+            # dipanggil saat autonomy tidak jalan. Pola yang sama sudah dipakai
+            # cabang KILL-SWITCH di atas dan cabang control_mode→manual di bawah.
+            self.stop_mission5()
             with self.lock:
                 for k in self.sp:
                     self.sp[k] = 0.0

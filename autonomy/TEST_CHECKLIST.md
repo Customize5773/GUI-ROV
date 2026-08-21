@@ -105,25 +105,56 @@ python autonomy/tools/launch_sitl.py --fsm --vision mock --start-state M5_DOCK -
 
 ## Integration Layer Validation
 
-### GUI Toggle (Manual ↔ Autonomous)
+### GUI Toggle (Manual ↔ Autonomous) + STOP
 
-**Setup:** 2 terminals
+Terverifikasi otomatis 2026-08-21 — jalankan ulang kapan pun:
 
 ```bash
-# Terminal 1: SITL without FSM (wait for GUI)
-python autonomy/tools/launch_sitl.py --vision mock
-
-# Terminal 2: Browser or curl test
-# Navigate to localhost:3000, or:
-# Send command: {"name":"control_mode","value":"autonomous"}
+node autonomy/tools/verify_handoff.mjs      # VERBOSE=1 untuk log stack
 ```
 
-**Checklist:**
-- [ ] FSM starts ONLY after toggle → "autonomous" (not before)
-- [ ] Telemetry includes `"mode": "autonomous"` (in Terminal 1 logs)
-- [ ] Operator can toggle back to "manual" → FSM stops gracefully
+Skrip menyalakan stack-nya sendiri (server.js RPI_ADDR=127.0.0.1 di WS :8090,
+vehicle mock + rov_link, TANPA --fsm) lalu menguji tiga skenario lewat
+WebSocket dengan envelope yang sama persis dengan dashboard:
 
-**Pass Criteria:** FSM waits for toggle, starts on "autonomous" signal
+- **A** `control_mode=autonomous` → FSM hidup dan MAJU (`IDLE → M5_REDIVE → M5_DOCK`)
+- **B** `control_mode=manual` saat FSM jalan → FSM abort bersih
+- **C** `stop` saat FSM jalan → disarm **dan** FSM ikut berhenti
+
+**Jangan jalankan skrip ini sambil `node server.js` polos aktif dan berharap
+port 8080.** RPI_ADDR default adalah `192.168.2.2` (ROV asli), jadi toggle akan
+dikirim ke wahana di kolam sementara telemetry tetap terlihat normal — server
+BIND :14551 dan menerima dari siapa pun. Perintah hilang tanpa jejak, gejalanya
+menyesatkan. Skrip memakai port terpisah justru untuk menghindari ini.
+
+**CATATAN, jangan tulis ulang ke bentuk lama:** telemetry TIDAK pernah berisi
+`"mode": "autonomous"`. Ada dua field berbeda (lihat `rov_link.py loop_telem_tx`):
+
+| field | isi | sumber |
+|---|---|---|
+| `mode` | `MANUAL` / `ALT_HOLD` / `STABILIZE` | HEARTBEAT ArduSub |
+| `control_mode` | `manual` / `autonomous` | gate otoritas GUI |
+
+Checklist versi lama menyuruh memeriksa `"mode": "autonomous"` — nilai yang tak
+pernah ada. `mission5.py` juga membaca field yang salah sampai 2026-08-21.
+
+#### Yang masih butuh mata (browser, tidak bisa headless)
+
+Buka `http://localhost:8080` dengan stack Fase 1 jalan
+(`RPI_ADDR=127.0.0.1 node server.js` + `python3 autonomy/tools/launch_sitl.py --no-gui --vision mock`):
+
+- [ ] Toggle header Manual→Autonomous benar-benar mengirim `control_mode`
+      (F12 → Network → WS, atau log server `[CMD] control_mode = autonomous`)
+- [ ] Badge mode di header berubah, dan kembali saat di-toggle balik
+- [ ] Tombol **STOP** merah: sekali klik → thruster netral, badge disarm,
+      dan blok mission5 hilang dari panel telemetry
+- [ ] ROV 3D bergerak sinkron dengan depth/heading/attitude — bukan diam,
+      bukan melompat-lompat
+- [ ] F12 console bersih (tak ada exception saat toggle bolak-balik 3×)
+- [ ] Joystick fisik: dorong stik saat Autonomous → KILL-SWITCH menyala,
+      FSM abort, mode balik ke Manual (`rov_link.py` KILL_SWITCH_DEADZONE=15)
+
+**Pass Criteria:** skrip otomatis 3/3 LULUS **dan** keenam butir browser tercentang.
 
 ---
 

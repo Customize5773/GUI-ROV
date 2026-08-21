@@ -330,11 +330,22 @@ class Mission5FSM:
         self._loop()
 
     def _wait_for_autonomous(self, timeout: Optional[float] = None) -> bool:
-        """Blok sampai operator menekan toggle GUI → mode 'autonomous' (via rov_link telem)."""
+        """Blok sampai operator menekan toggle GUI → mode 'autonomous' (via rov_link telem).
+
+        Membaca `control_mode`, BUKAN `mode`. Keduanya ada di telemetry dan
+        mudah tertukar, tapi artinya berbeda (lihat rov_link.py loop_telem_tx):
+            mode          = mode ArduSub dari HEARTBEAT — 'MANUAL'/'ALT_HOLD'/...
+            control_mode  = gate otoritas GUI          — 'manual'/'autonomous'
+        Sampai 2026-08-21 fungsi ini membandingkan `mode` dengan 'autonomous',
+        nilai yang TIDAK PERNAH muncul di field itu, jadi ia menunggu selamanya.
+        Tidak ketahuan karena satu-satunya jalur GUI yang nyata
+        (rov_link.start_mission5) memakai wait_mode=False sehingga melewati
+        fungsi ini sama sekali.
+        """
         log.info("[FSM] Menunggu mode AUTONOMOUS dari GUI (toggle header)... Ctrl+C batal")
         t0 = time.time()
         while self._running:
-            if self.telem.get().get('mode') == 'autonomous':
+            if self.telem.get().get('control_mode') == 'autonomous':
                 log.info("[FSM] Mode AUTONOMOUS terdeteksi — mulai eksekusi misi 5")
                 return True
             if timeout and (time.time() - t0) > timeout:
@@ -367,7 +378,14 @@ class Mission5FSM:
             self.telemetry_out['qr_wall'] = qr['wall'] if qr else None
 
             # Handoff GUI: bila operator kembalikan ke MANUAL saat autonomous → abort.
-            if self._require_auto and telem.get('mode') == 'manual':
+            #
+            # `control_mode`, bukan `mode` — lihat catatan di _wait_for_autonomous().
+            # Cek ini adalah lapis KEDUA: rov_link.handle_command('control_mode')
+            # sudah memanggil stop_mission5() lebih dulu. Sengaja dibiarkan
+            # rangkap, supaya FSM tetap berhenti sendiri kalau suatu saat ia
+            # dijalankan sebagai proses terpisah (mission5.py CLI) di mana
+            # rov_link tidak memegang referensi ke thread-nya.
+            if self._require_auto and telem.get('control_mode') == 'manual':
                 log.warning("[FSM] Mode kembali ke MANUAL — abort autonomous")
                 self.abort()
                 break
