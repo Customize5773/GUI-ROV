@@ -264,14 +264,13 @@
                 </div>
                 <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
 
-                <!-- Depth-set: SET merekam kedalaman saat ini, ON/OFF menyalakannya.
-                     Sengaja TERPISAH dari tab mode di atas. Bias hanya
-                     benar-benar mengalir saat mode ArduSub = STABILIZE (lihat
-                     DEPTH_HOLD_MODES di rov_modes.py) — di Alt Hold/Pos Hold
-                     kedalaman sudah ditahan cascade PID ArduSub sendiri. -->
+                <!-- Depth-hold sekarang otomatis: target mengikuti kedalaman
+                     aktual selagi stick heave dipegang, dan terkunci begitu
+                     stick dilepas (lihat apply_depth_hold_bias di rov_agent.py).
+                     Tidak ada saklar manual lagi — badge ini cuma menampilkan
+                     status yang dikirim wahana. -->
                 <div class="depthset">
-                  <button class="btn-wide btn-wide--half" id="btnDepthSet">SET DEPTH</button>
-                  <button class="btn-wide btn-wide--half" id="btnDepthHold" aria-pressed="false">DEPTH-SET OFF</button>
+                  <span class="badge" id="depthHoldBadge">DEPTH-HOLD OFF</span>
                 </div>
               </div>
             </section>
@@ -329,6 +328,10 @@
                   <button class="chip" id="btnSnap">SNAPSHOT</button>
                   <button class="chip" id="btnRec" aria-pressed="false">REC</button>
                   <button class="chip" id="btnHud" aria-pressed="true">HUD</button>
+                  <label class="cam-contrast__wrap" title="Kontras kamera">
+                    <span class="cam-contrast__label">KONTRAS</span>
+                    <input type="range" id="camContrast" class="cam-contrast" min="50" max="200" value="100" step="5" />
+                  </label>
                 </div>
 
                 <!-- PiP digital twin / ROV Control (tampil saat kamera fullscreen) -->
