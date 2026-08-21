@@ -1,0 +1,46 @@
+# config/pool_kki_running.yaml — GEOMETRI ARENA LOMBA KKI 2026, BABAK RUNNING/FINAL (10 × 10 m)
+#
+# Konfirmasi panitia (grup peserta, 2026-08-21): babak Running/final memakai arena
+# 10×10 m — 2× sisi babak Trial (config/pool_kki_trial.yaml, 5×5 m). Kedalaman air
+# tetap mengikuti Guidebook L43 (0,7–0,9 m); yang beda cuma jejak horizontal arena.
+#
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki_running.yaml \
+#          --start-state M5_REDIVE --run-log
+#
+# ⚠ TIGA ANGKA YANG WAJIB DIISI DI LOKASI sebelum run pertama:
+#     1. pool.depth            — ukur kedalaman air babak Running (Guidebook: 0,7–0,9 m)
+#     2. pool.bottom_clearance — SALIN dari hasil trial di kolam latihan
+#     3. wall_heading A/B/C/D  — kalibrasi kompas ROV DI ARENA RUNNING (arena fisik
+#        beda dari babak Trial, jadi heading tidak boleh dipakai ulang dari sana)
+
+# ── Geometri kolam → setpoint kedalaman DITURUNKAN (mission5._derive_depths) ──
+pool:
+  depth: 0.90                  # ⚠ UKUR DI LOKASI. Guidebook L43: 0,7–0,9 m.
+  hook_height_from_floor: 0.45 # Guidebook L46 — hook 0,45 m DARI DASAR.
+  bottom_clearance: 0.25       # ⚠ SALIN hasil trial (angka yang berpindah)
+
+# ── Heading tiap sisi kolam ───────────────────────────────────────────────────
+# ⚠ KALIBRASI DI ARENA RUNNING — jangan salin dari pool_kki_trial.yaml.
+wall_heading:
+  A: 270
+  B: 90
+  C: 0
+  D: 180
+
+# ── Timeout — arena 2× lebih besar dari Trial ──────────────────────────────────
+# Misi 5 (REDIVE→ASCEND) sebagian besar gerak lokal (servo docking ke QR/hook di
+# satu dinding, bukan menyeberang kolam), jadi timeoutnya tak perlu naik 2× lurus.
+# Yang membesar: ruang drift saat ROV timbul lalu menyelam ulang (M5_REDIVE) dan
+# radius sapu pencarian saat lock visual hilang (M5_DOCK/FALLBACK) — arena lebih
+# luas = lebih besar kemungkinan muncul agak jauh dari QR. Margin ~1.3–1.4×.
+timeouts:
+  redive: 20.0      # default mission5.py 15.0
+  m5_dock: 35.0     # default mission5.py 25.0
+  fallback: 40.0    # default mission5.py 30.0
+
+# ── Kecepatan jelajah — sedikit lebih pelan, ruang pengereman lebih jauh dari dinding ─
+speed:
+  surge: 30         # default mission5.py 35
+
+hook_docking:
+  approach_speed: 17   # default mission5.py 20

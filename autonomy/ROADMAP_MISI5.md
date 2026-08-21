@@ -41,39 +41,45 @@ Tujuan: uji FSM lewat jalur **MAVLink + `rov_link.py` + GUI** yang sesungguhnya
 dipakai saat lomba — bukan lagi `sim_plant.py` in-process, tapi proses terpisah
 dgn latency & timing nyata.
 
-- [ ] Cara cepat (satu perintah): `python tools/launch_sitl.py --fsm --vision mock
-      --no-wait-autonomous` — start vehicle mock + `rov_link.py` + GUI + FSM sekaligus.
-      Atau manual ikuti `SITL_SETUP.md`: ArduSub SITL (WSL2) ATAU pakai `sitl_mock.py`
-      (lebih ringan, tanpa WSL) sbg pengganti sementara.
-- [ ] Jalankan `rov_link.py` menjembatani MAVLink ↔ UDP JSON (`:14550`/`:14551`).
-- [ ] Buka GUI (`npm start` mode LIVE, `RPI_ADDR=127.0.0.1`) — pastikan
-      telemetri (depth/heading/attitude) masuk & ROV 3D bergerak.
-- [ ] Jalankan `fsm/mission5.py --vision usb --start-state DIVE
-      --no-wait-autonomous` (atau `--vision mock` dulu bila kamera SITL belum
-      siap) — rantai misi 1→5 tuntas sampai `DONE`.
-- [ ] Uji handoff GUI: toggle Manual→Autonomous di tengah proses, FSM merespons
-      `mode=='autonomous'`; toggle balik ke Manual → FSM `abort()` bersih.
-- [ ] Tombol **STOP** di GUI menetralkan thruster walau FSM sedang jalan.
+- [x] Cara cepat (satu perintah): `python3 autonomy/tools/launch_sitl.py --fsm --vision mock
+      --no-wait-autonomous --no-gui` — start vehicle mock + `rov_link.py` + FSM sekaligus.
+      (`--no-gui` bila sudah ada `node server.js` yang memegang :8080/:14551.)
+      Atau manual ikuti `SITL_SETUP.md`.
+- [x] Jalankan `rov_link.py` menjembatani MAVLink ↔ UDP JSON (`:14550`/`:14551`).
+- [x] Buka GUI mode LIVE, `RPI_ADDR=127.0.0.1` — telemetri masuk.
+      **`RPI_ADDR` WAJIB di-set**; default `192.168.2.2` mengirim command ke ROV asli
+      sementara telemetry tetap terlihat normal (server BIND :14551, menerima dari
+      siapa pun) — perintah hilang tanpa jejak. Gerak 3D visual = checklist browser.
+- [x] `fsm/mission5.py --vision mock` — rantai misi 1→5 tuntas sampai `DONE`.
+- [x] Uji handoff GUI Manual↔Autonomous — otomatis via `tools/verify_handoff.mjs`.
+- [x] Tombol **STOP** menetralkan thruster walau FSM jalan — skenario C skrip yang sama.
 
 **DoD Fase 1:** rantai misi 5 tuntas via SITL dgn skor rubrik penuh di log FSM,
 GUI menampilkan gerak 3D sinkron, handoff manual/autonomous & STOP terverifikasi.
 
 **Catatan:**
-- **2026-08-12 — BELUM VERIFIED, ada blocker.** `launch_sitl.py --fsm --vision mock
-  --no-wait-autonomous` dijalankan 3× berturut-turut: **3/3 gagal identik**, FSM tak
-  pernah lolos state `DIVE` (timeout 15 dtk → `ABORT`, skor 0/100 tiap run). Root cause:
-  mismatch nama field command — `mission5.py` kirim `"vert"`, `rov_link.py` hanya kenal
-  `"heave"` di antara axis (`self.sp`), jadi setpoint vertikal selalu diabaikan
-  (`[CMD] (diabaikan di link) vert = ...`). Lapisan MAVLink/UDP telemetry sendiri OK
-  (heartbeat & `[TELEM]` masuk ke `server.js` normal) — bug murni di command layer
-  FSM↔rov_link, bukan di koneksi SITL. Detail lengkap + kandidat perbaikan (tak
-  diimplementasikan): lihat `PR-AUTONOMY.md` §1 **OPEN-FASE1**. Jangan lanjut ke Fase 2
-  sampai ini beres & 3× run ulang sukses ke `DONE`.
-  Tak tercakup dlm verifikasi ini (butuh browser interaktif): toggle GUI
-  Manual↔Autonomous, tombol STOP dari dashboard, F12 console, gerak 3D visual —
-  juga tak relevan diuji selama DIVE belum lulus.
+- **2026-08-21 — VERIFIED.** Rantai FSM: `launch_sitl.py --fsm --vision mock
+  --no-wait-autonomous --no-gui` 3× berturut → **3/3 `DONE`, 100/100**, 13 transisi
+  state identik, nol WARNING/ERROR. Blocker `vert`/`heave` (2026-08-12) sudah beres.
+  Handoff + STOP: `node autonomy/tools/verify_handoff.mjs` → **3/3 skenario LULUS**.
+  Unit test: 124 passed, 2 skipped (`cd autonomy && PYTHONPATH= python3 -m pytest tests/ -q`
+  — `PYTHONPATH=` wajib, PYTHONPATH ROS Humble membuat pytest gagal collect).
 
----
+  **Dua bug ditemukan & diperbaiki saat verifikasi ini**, keduanya sekelas dengan
+  `vert`/`heave` — field yang dibaca tak pernah berisi nilai yang diharapkan, dan
+  tak ada test yang menangkapnya:
+  1. `mission5.py` membaca `telem['mode']` untuk gate autonomous, padahal `mode`
+     berisi mode ArduSub (`MANUAL`/`ALT_HOLD`) dan gate GUI ada di `control_mode`.
+     `_wait_for_autonomous()` menunggu selamanya; abort-saat-kembali-ke-Manual tak
+     pernah menyala. Tak terlihat karena kedua jalur yang dipakai memakai
+     `wait_mode=False` yang melewati cek itu.
+  2. Handler `stop` di `rov_link.py` tidak memanggil `stop_mission5()`. STOP
+     men-disarm tapi thread FSM terus jalan — dibuktikan mencapai `M5_ASCEND`
+     setelah STOP ditekan. Sekali operator menekan ARM, gerakan lanjut dari state
+     terakhir tanpa peringatan.
+
+  Sisa yang belum tercentang: **checklist browser** di `TEST_CHECKLIST.md`
+  (gerak 3D, tombol fisik, F12 console) — butuh mata, tak bisa headless.
 
 ## Fase 2 — Bring-up hardware kering (ROV di darat / ember, TANPA kolam penuh)
 

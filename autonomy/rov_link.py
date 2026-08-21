@@ -181,12 +181,12 @@ class RovLink:
             mavutil.mavlink.MAV_TYPE_GCS, mavutil.mavlink.MAV_AUTOPILOT_INVALID, 0, 0, 0)
 
     # ───────────────────────── Command dari GUI ─────────────────────────
-    def handle_command(self, name, value, addr=None):
+    def handle_command(self, name, value, addr=None, from_fsm=False):
         if name in self.sp:                      # surge/sway/yaw/heave
-            # Kill-switch: axis nyata dari operator (bukan loopback CommandSender milik
-            # FSM sendiri) di atas deadzone, saat autonomous berjalan → override manual.
-            is_loopback = addr is not None and addr[0] in ("127.0.0.1", "::1")
-            if (self.control_mode == "autonomous" and not is_loopback
+            # Kill-switch: axis nyata dari operator (bukan CommandSender milik FSM
+            # sendiri, yang menandai frame-nya src='fsm') di atas deadzone, saat
+            # autonomous berjalan → override manual.
+            if (self.control_mode == "autonomous" and not from_fsm
                     and abs(float(value)) > KILL_SWITCH_DEADZONE):
                 print(f"[KILL-SWITCH] axis manual {name}={value} dari {addr} — abort autonomy")
                 self.control_mode = "manual"
@@ -196,6 +196,24 @@ class RovLink:
                 self.sp[name] = float(value)
             return
         if name == "stop":                       # FAILSAFE
+            # Hentikan FSM DULU, baru netral+disarm.
+            #
+            # Urutannya penting: fsm.abort() sendiri memanggil emergency_stop()
+            # yang menulis setpoint lewat loopback. Kalau dinolkan lebih dulu,
+            # tulisan itu datang SESUDAHNYA dan kita kirim manual_control dari
+            # nilai yang sudah basi.
+            #
+            # Tanpa baris ini (perilaku sampai 2026-08-21), STOP hanya
+            # menetralkan + disarm sementara thread FSM TERUS jalan dan terus
+            # menulis self.sp. Wahana diam karena disarm — tapi begitu operator
+            # menekan ARM (refleks wajar setelah STOP tak sengaja), gerakan
+            # langsung lanjut dari state FSM terakhir tanpa peringatan apa pun.
+            # E-Stop yang bisa hidup lagi sendiri bukan E-Stop.
+            #
+            # stop_mission5() idempotent (return cepat bila fsm None), jadi aman
+            # dipanggil saat autonomy tidak jalan. Pola yang sama sudah dipakai
+            # cabang KILL-SWITCH di atas dan cabang control_mode→manual di bawah.
+            self.stop_mission5()
             with self.lock:
                 for k in self.sp:
                     self.sp[k] = 0.0
@@ -240,7 +258,13 @@ class RovLink:
         """Spawn Mission5FSM sbg thread daemon in-process, bicara ke diri sendiri via
         loopback UDP (protokol sama persis dgn tools/launch_sitl.py --fsm, hanya
         diorkestrasi otomatis oleh toggle GUI, bukan proses terpisah)."""
+        # Guard ini pernah diam-diam menolak toggle-on: thread FSM lama masih
+        # sekarat (stop_mission5 tak join sampai tuntas) saat operator menyalakan
+        # lagi, jadi start dilewati TANPA jejak — badge & mode bilang autonomous,
+        # tapi tak ada FSM yang jalan. Kebalikan persis dari bug STOP 2026-08-21,
+        # dan sama tak kelihatannya. Sekarang minimal dia teriak.
         if self.mission5_thread and self.mission5_thread.is_alive():
+            print("[M5] start dilewati — thread FSM sebelumnya masih hidup")
             return
         vision_source = vision_source or getattr(self.args, "fsm_vision_source", "usb")
         device = self.args.fsm_vision_device if device is None else device
@@ -305,7 +329,8 @@ class RovLink:
                 msg = json.loads(data.decode())
             except ValueError:
                 continue
-            self.handle_command(msg.get("name"), msg.get("value"), addr)
+            self.handle_command(msg.get("name"), msg.get("value"), addr,
+                                from_fsm=(msg.get("src") == "fsm"))
 
     def loop_mavlink_rx(self):
         while True:

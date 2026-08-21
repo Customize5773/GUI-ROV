@@ -16,8 +16,12 @@ Cara kerja:
                    [Misi 5] M5_REDIVE → M5_DOCK → M5_ENGAGE → M5_UNHOOK → M5_ASCEND → DONE
                    (Misi 5 = docking closed-loop ke QR payload; M5_FALLBACK = jalur timed degraded)
 
-Command JSON format (sama dengan server.js):
-  {"surge": 0-100, "sway": 0-100, "yaw": 0-100, "vert": 0-100, "gripper": 0|1}
+API internal (parameter CommandSender.send): surge/sway/yaw/vert dalam PERSEN
+(-100..100), sama seperti PID/VisualServo di modul ini. Di boundary wire,
+CommandSender mengalikan ×10 dan mengirim key "heave" (bukan "vert") supaya
+cocok dengan konvensi rov_link.py/server.js yang pakai skala -1000..1000:
+  {"surge": -1000..1000, "sway": -1000..1000, "yaw": -1000..1000,
+   "heave": -1000..1000, "gripper": 0|1}
 
 Nilai positif/negatif: surge+ = maju, vert+ = naik, gripper 1 = tutup, 0 = buka
 
@@ -54,7 +58,8 @@ HOOK_DEPTH            = 0.45   # m — kedalaman hook DARI PERMUKAAN. Lihat _der
                                #     di sini hanya benar bila kolam persis 0.9 m.
 
 # ── Geometri kolam (opsional, via config `pool:`) ─────────────────────────────
-# Diisi dari file config lokasi (pool_trial.yaml / pool_kki.yaml). Bila terisi,
+# Diisi dari file config lokasi (pool_trial.yaml / pool_kki_trial.yaml /
+# pool_kki_running.yaml). Bila terisi,
 # _derive_depths() menghitung HOOK_DEPTH & DEPTH_TARGET_BOTTOM dari sini — supaya
 # hasil tuning di kolam latihan bisa dipindah ke arena lomba cukup dgn menukar
 # angka kedalaman kolam, tanpa menghitung ulang setpoint absolut.
@@ -209,18 +214,35 @@ class CommandSender:
         self._port = port
         self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # abort() punya dua jalur pemanggil independen yang bisa nyaris
+        # bersamaan (rov_link.handle_command('control_mode') DAN self-check
+        # Mission5FSM._loop() sendiri — keduanya sengaja rangkap, lihat komentar
+        # di _loop). Lock ini bikin close() idempotent & _emit() setelah close
+        # jadi no-op alih-alih race lempar OSError Bad file descriptor yang
+        # mematikan thread loop_rx_json rov_link.
+        self._lock = threading.Lock()
+        self._closed = False
 
     def _emit(self, name, value):
         """Kirim SATU command {name,value} — format yang dipahami rov_link/server.js."""
-        raw = json.dumps({'name': name, 'value': value}).encode()
-        self._sock.sendto(raw, (self._host, self._port))
+        with self._lock:
+            if self._closed:
+                return
+            # src='fsm' menandai frame ini datang dari autonomy, bukan operator.
+            # Kill-switch di rov_link.handle_command pakai tanda ini — DULU dia
+            # nebak dari alamat pengirim (127.0.0.1 = loopback = FSM), yang diam-diam
+            # mati begitu server.js jalan sehost dgn rov_link (SITL/GUI di Pi):
+            # axis operator ikut ber-IP loopback, dianggap FSM, abort tak pernah nyala.
+            raw = json.dumps({'name': name, 'value': value, 'src': 'fsm'}).encode()
+            self._sock.sendto(raw, (self._host, self._port))
         log.debug("[cmd] %s=%s", name, value)
 
     def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
-        self._emit('surge', surge)
-        self._emit('sway', sway)
-        self._emit('yaw', yaw)
-        self._emit('vert', vert)
+        # Internal FSM pakai skala persen (-100..100); rov_link/server.js pakai -1000..1000.
+        self._emit('surge', surge * 10)
+        self._emit('sway', sway * 10)
+        self._emit('yaw', yaw * 10)
+        self._emit('heave', vert * 10)
         if gripper is not None:
             # gripper truthy = tutup (jepit), falsy = buka
             self._emit('gripper', 'close' if gripper else 'open')
@@ -237,7 +259,11 @@ class CommandSender:
         self._emit('stop', True)
 
     def close(self):
-        self._sock.close()
+        with self._lock:
+            if self._closed:
+                return
+            self._closed = True
+            self._sock.close()
 
 
 # ── State Machine Utama ───────────────────────────────────────────────────────
@@ -325,11 +351,22 @@ class Mission5FSM:
         self._loop()
 
     def _wait_for_autonomous(self, timeout: Optional[float] = None) -> bool:
-        """Blok sampai operator menekan toggle GUI → mode 'autonomous' (via rov_link telem)."""
+        """Blok sampai operator menekan toggle GUI → mode 'autonomous' (via rov_link telem).
+
+        Membaca `control_mode`, BUKAN `mode`. Keduanya ada di telemetry dan
+        mudah tertukar, tapi artinya berbeda (lihat rov_link.py loop_telem_tx):
+            mode          = mode ArduSub dari HEARTBEAT — 'MANUAL'/'ALT_HOLD'/...
+            control_mode  = gate otoritas GUI          — 'manual'/'autonomous'
+        Sampai 2026-08-21 fungsi ini membandingkan `mode` dengan 'autonomous',
+        nilai yang TIDAK PERNAH muncul di field itu, jadi ia menunggu selamanya.
+        Tidak ketahuan karena satu-satunya jalur GUI yang nyata
+        (rov_link.start_mission5) memakai wait_mode=False sehingga melewati
+        fungsi ini sama sekali.
+        """
         log.info("[FSM] Menunggu mode AUTONOMOUS dari GUI (toggle header)... Ctrl+C batal")
         t0 = time.time()
         while self._running:
-            if self.telem.get().get('mode') == 'autonomous':
+            if self.telem.get().get('control_mode') == 'autonomous':
                 log.info("[FSM] Mode AUTONOMOUS terdeteksi — mulai eksekusi misi 5")
                 return True
             if timeout and (time.time() - t0) > timeout:
@@ -339,8 +376,13 @@ class Mission5FSM:
 
     def abort(self):
         """Hentikan semua gerak dan masuk ABORT (failsafe + disarm)."""
-        self._running = False
+        # Kirim emergency_stop SEBELUM _running=False: begitu _running jadi False,
+        # thread FSM sendiri (lihat rov_link.start_mission5 _run finally) langsung
+        # cmd.close() — kalau urutannya kebalik, sendto() di atas race dengan
+        # close() itu dan lempar OSError Bad file descriptor (mematikan thread
+        # loop_rx_json rov_link, jadi semua command GUI berhenti masuk).
         self.cmd.emergency_stop()
+        self._running = False
         self._state = State.ABORT
         log.warning("[FSM] ABORT — failsafe, thruster netral + disarm")
 
@@ -362,7 +404,14 @@ class Mission5FSM:
             self.telemetry_out['qr_wall'] = qr['wall'] if qr else None
 
             # Handoff GUI: bila operator kembalikan ke MANUAL saat autonomous → abort.
-            if self._require_auto and telem.get('mode') == 'manual':
+            #
+            # `control_mode`, bukan `mode` — lihat catatan di _wait_for_autonomous().
+            # Cek ini adalah lapis KEDUA: rov_link.handle_command('control_mode')
+            # sudah memanggil stop_mission5() lebih dulu. Sengaja dibiarkan
+            # rangkap, supaya FSM tetap berhenti sendiri kalau suatu saat ia
+            # dijalankan sebagai proses terpisah (mission5.py CLI) di mana
+            # rov_link tidak memegang referensi ke thread-nya.
+            if self._require_auto and telem.get('control_mode') == 'manual':
                 log.warning("[FSM] Mode kembali ke MANUAL — abort autonomous")
                 self.abort()
                 break

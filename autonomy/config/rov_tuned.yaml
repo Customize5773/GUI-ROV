@@ -2,12 +2,15 @@
 #
 # Isi file ini HANYA parameter yang tergantung pada ROV, kamera, dan air —
 # BUKAN pada ukuran kolam. Karena itu nilai yang diasah saat trial di kolam
-# 2,2 × 4,4 × 0,8 m dipakai APA ADANYA di arena lomba 5 × 5 m. Geometri lokasi
-# dipisah ke config/pool_trial.yaml dan config/pool_kki.yaml.
+# 2,2 × 4,4 × 0,8 m dipakai APA ADANYA di kedua babak lomba (Trial 5×5 m,
+# Running/final 10×10 m). Geometri tiap lokasi dipisah ke file tersendiri:
+# config/pool_trial.yaml (latihan), config/pool_kki_trial.yaml (lomba 5×5 m),
+# config/pool_kki_running.yaml (lomba 10×10 m).
 #
 # Pakai (file belakangan menang):
 #   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_trial.yaml
-#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki.yaml
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki_trial.yaml
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/pool_kki_running.yaml
 #
 # File ini DI-COMMIT (beda dgn *.local.yaml) — riwayat git-nya adalah catatan
 # tuning antar trial, dan tools/analyze_run.py memakainya untuk mengaitkan skor
