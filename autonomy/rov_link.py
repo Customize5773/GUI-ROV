@@ -42,8 +42,8 @@ from fsm.mission5 import (Mission5FSM, State, CommandSender, TelemetryReceiver,
                           QR_SIDE_M, HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA, HOOK_PIPE_DIAM_M)
 from vision.qr_detect import VisionPipeline
 
-CALIB_BOTTOM_DEFAULT = "vision/calibration/bottom.npz"
-CALIB_WALL_DEFAULT   = "vision/calibration/wall.npz"
+CALIB_BOTTOM_DEFAULT = "vision/calibration/dwe_underwater.npz"
+CALIB_WALL_DEFAULT   = "vision/calibration/dwe_underwater.npz"
 
 # ───────────────────────── Konfigurasi yang perlu DIVERIFIKASI ke setup ArduSub kalian ──
 WATER_RHO = 997.0          # kg/m³ air tawar (kolam). Air laut ≈ 1025.
