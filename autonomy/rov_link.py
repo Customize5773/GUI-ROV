@@ -69,6 +69,7 @@ PILOT_MODE_MAP = {
     "manual": "MANUAL",
     "stabilize": "STABILIZE",
     "depth_hold": "ALT_HOLD",
+    "poshold": "ALT_HOLD",  # overlay heading-hold sisi Python, lihat rov_modes.py
 }
 
 # Kill-switch: axis operator di atas ambang ini membatalkan autonomy. Skalanya
@@ -117,8 +118,9 @@ class RovLink:
         self.telem = {
             "heading": None, "roll": None, "pitch": None, "depth": None,
             "temp": None, "voltage": None, "armed": False,
-            "light": False, "mode": "manual",
+            "light": False, "mode": "manual", "poshold": False,
         }
+        self.pilot_mode_name = "manual"   # nama GUI terakhir diminta lewat "pilot_mode"
 
         # MAVLink
         print(f"[MAV] connecting: {args.mavlink}")
@@ -246,6 +248,7 @@ class RovLink:
             if ardusub_mode is None:
                 print(f"[MODE] pilot_mode tidak dikenal: {value}")
             else:
+                self.pilot_mode_name = str(value).strip().lower()
                 self.set_mode(ardusub_mode)
         elif name == "control_mode":
             self.control_mode = str(value)
@@ -373,6 +376,10 @@ class RovLink:
                     self.telem["mode"] = mavutil.mode_string_v10(msg)
                 except Exception:
                     pass
+                # ALT_HOLD melayani dua tab GUI ("depth_hold" & "poshold");
+                # bedakan pakai permintaan pilot_mode terakhir, lihat rov_modes.py.
+                self.telem["poshold"] = (self.telem["mode"] == "ALT_HOLD"
+                                          and self.pilot_mode_name == "poshold")
 
     def loop_manual_tx(self):
         while True:
