@@ -113,6 +113,18 @@ def is_poshold_request(name):
     return name.strip().lower() == POSHOLD_MODE
 
 
+# Mode yang memakai koreksi BERKELANJUTAN (bukan pulsa sekali-tembak).
+# Hanya STABILIZE: tidak ada cascade PID ArduSub yang menahan kedalaman di
+# sana, jadi bias harus terus aktif. ALT_HOLD (depth_hold/poshold) sudah
+# dipegang cascade ArduSub sendiri — lihat DEPTH_PULSE_* di rov_pid.py.
+DEPTH_CONTINUOUS_BIAS_MODES = frozenset({"STABILIZE"})
+
+
+def depth_bias_is_continuous(mode):
+    """True kalau `mode` memakai koreksi z berkelanjutan, bukan pulsa."""
+    return mode in DEPTH_CONTINUOUS_BIAS_MODES
+
+
 def depth_hold_allowed(mode):
     """True kalau bias depth-set boleh aktif di `mode`.
 

@@ -16,6 +16,7 @@ from rov_axes import (
 
 from rov_modes import (
     depth_bias_engaged,
+    depth_bias_is_continuous,
     depth_hold_allowed,
     is_poshold_request,
     poshold_mode_ok,
@@ -36,13 +37,15 @@ from rov_pid import (
     DEPTH_BIAS_LIMIT,
     DEPTH_BIAS_MAX_CORRECTION,
     DEPTH_BIAS_RELEASE,
+    DEPTH_PULSE_DURATION_S,
+    DEPTH_PULSE_MAGNITUDE,
     clamp_depth_target,
     depth_bias_active,
     depth_hold_bias,
     resolve_pid_writes,
     smooth_depth,
     valid_pool_depth,
-    
+
 )
 
 from attitude_filter import AttitudeFilter
@@ -243,6 +246,12 @@ joystick = {
 # tidak boleh mengirim bias apa pun.
 depth_target = None
 
+# Pulsa sekali-tembak depth_up/down di ALT_HOLD (lihat DEPTH_PULSE_* di
+# rov_pid.py) — beda dari depth_target/bias berkelanjutan yang dipakai
+# STABILIZE. _depth_pulse_until = 0.0 berarti tidak ada pulsa aktif.
+_depth_pulse_until = 0.0
+_depth_pulse_dir = 0
+
 # Tanda gantungan (command `mark_hook`): heading & depth SAAT operator menekan
 # MARK, yaitu tepat ketika payload tergantung di hook pada misi 3. Dipakai
 # Mission5FSM.M5_REDIVE untuk kembali ke sana saat misi 5 autonomous.
@@ -407,6 +416,22 @@ def apply_depth_hold_bias(mc, axes):
     """
     global depth_target
     global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
+    global _depth_pulse_until, _depth_pulse_dir
+
+    # Pulsa sekali-tembak (ALT_HOLD) diperiksa SEBELUM gerbang bias
+    # berkelanjutan (STABILIZE) — keduanya tidak pernah aktif bersamaan,
+    # lihat DEPTH_PULSE_* di rov_pid.py untuk alasannya.
+    if time.time() < _depth_pulse_until:
+        _mode_now = _effective_requested_mode() or state["mode"]
+        if (abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON
+                or not depth_hold_allowed(_mode_now)):
+            # Operator menyentuh stik heave menang mutlak, atau mode berubah
+            # (mis. ke MANUAL) sebelum pulsa selesai — batalkan pulsa.
+            _depth_pulse_until = 0.0
+        else:
+            out = dict(mc)
+            out["z"] = max(0, min(1000, int(round(mc["z"] + _depth_pulse_dir * DEPTH_PULSE_MAGNITUDE))))
+            return out
 
     with depth_lock:
         target = depth_target
@@ -860,6 +885,7 @@ def command_listener():
     global poshold_active
     global heading_target
     global thruster_gain
+    global _depth_pulse_until, _depth_pulse_dir
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -1098,6 +1124,17 @@ def command_listener():
                     )
 
                     shown = depth_target
+
+                # STABILIZE: depth_target di atas SUDAH cukup, apply_depth_hold_bias()
+                # per-tick yang mendorong terus-menerus (tak ada cascade PID ArduSub
+                # di mode ini). ALT_HOLD (depth_hold/poshold): cascade ArduSub
+                # sendiri yang menahan, jadi kita cuma memicu pulsa sekali-tembak
+                # yang meniru operator menyentuh-lalu-lepas stik heave — lihat
+                # DEPTH_PULSE_* di rov_pid.py.
+                _mode_now = _current_pixhawk_mode()
+                if depth_hold_allowed(_mode_now) and not depth_bias_is_continuous(_mode_now):
+                    _depth_pulse_until = time.time() + DEPTH_PULSE_DURATION_S
+                    _depth_pulse_dir = -1 if name == "depth_up" else 1
 
                 arah = "NAIK 5 cm" if step < 0 else "TURUN 5 cm"
 

@@ -262,6 +262,19 @@ DEPTH_BIAS_DAMPING = 300.0  # unit z per (m/s) laju error mengecil
 # terbesar 0.39 m. Melonggarkannya tidak membeli apa pun.
 DEPTH_BIAS_MAX_CORRECTION = 0.35  # meter
 
+# Pulsa sekali-tembak untuk depth_up/down di ALT_HOLD (bukan STABILIZE):
+# ArduSub sudah punya cascade PID kedalaman di mode ini, jadi bias
+# berkelanjutan (DEPTH_BIAS_* di atas) akan berebut channel z dengannya —
+# osilasi yang dilaporkan pilot 2026-08-22. Pulsa pendek meniru operator
+# menyentuh-lalu-lepas stik heave: dorong z sesaat, lalu netral, biarkan
+# cascade ArduSub menahan sendiri kedalaman baru.
+# ponytail: magnitude & durasi tebakan awal (belum divalidasi data kolam
+# seperti DEPTH_BIAS_*) — kalibrasi di kolam: kalau step 0.05m terasa
+# terlalu kecil/besar per pulsa, sesuaikan DEPTH_PULSE_DURATION_S dulu
+# (bukan magnitude, supaya tidak ikut mengubah rasa dorongan STABILIZE).
+DEPTH_PULSE_MAGNITUDE = 150   # unit z terhadap Z_NEUTRAL (500), searah DEPTH_BIAS_LIMIT
+DEPTH_PULSE_DURATION_S = 0.35
+
 
 def depth_bias_active(error, was_active):
     """Apakah bias boleh mengalir untuk `error` ini, mengingat keadaan sebelumnya.
