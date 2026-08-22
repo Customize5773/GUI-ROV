@@ -15,6 +15,7 @@ from rov_axes import (
     NEUTRAL,
     Z_NEUTRAL,
     axes_to_manual_control,
+    axis_released,
     clamp_axis,
     resolve_manual_packet,
     resolve_shape_updates,
@@ -136,6 +137,34 @@ class TestResolveManualPacket(unittest.TestCase):
         self.assertEqual(packet["y"], 0)
         self.assertEqual(packet["r"], 0)
         self.assertEqual(packet["z"], Z_NEUTRAL)
+
+
+class TestAxisReleased(unittest.TestCase):
+    """Edge-detect rem surge/sway (rasa 'brake' ala DJI, lihat rov_agent.py
+    apply_translation_brake): True hanya persis di tick stick baru dilepas."""
+
+    EPS = 20
+
+    def test_lepas_dari_penuh_terdeteksi(self):
+        self.assertTrue(axis_released(800, 0, self.EPS))
+
+    def test_lepas_dari_negatif_terdeteksi(self):
+        self.assertTrue(axis_released(-800, 5, self.EPS))
+
+    def test_stick_masih_ditahan_tidak_terdeteksi(self):
+        self.assertFalse(axis_released(800, 800, self.EPS))
+
+    def test_sudah_netral_sebelumnya_tidak_terdeteksi(self):
+        # prev sudah <= epsilon -> bukan event "baru dilepas".
+        self.assertFalse(axis_released(0, 0, self.EPS))
+        self.assertFalse(axis_released(10, 0, self.EPS))
+
+    def test_tepat_di_ambang_epsilon_belum_release(self):
+        # prev == epsilon dianggap belum "dipegang" (butuh > epsilon).
+        self.assertFalse(axis_released(self.EPS, 0, self.EPS))
+
+    def test_curr_tepat_di_ambang_epsilon_sudah_release(self):
+        self.assertTrue(axis_released(800, self.EPS, self.EPS))
 
 
 class TestShapeAxes(unittest.TestCase):

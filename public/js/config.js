@@ -10,9 +10,13 @@ export const CONFIG = {
 
   // sumber kamera untuk halaman Camera (label + peran + url)
   // KKI 2026: camera 1 = bottom (lantai/QR), camera 2 = wall (dinding)
+  // PERBAIKAN 23 Agu 2026: url dulu tertukar — dikonfirmasi operator bahwa
+  // :8080 menghadap DEPAN (gripper) dan :8081 menghadap BAWAH (dasar kolam).
+  // rov_agent.py M5_BOTTOM_URL/M5_WALL_URL (dipakai QR docking + drift
+  // sensing) ikut diperbaiki bersamaan — lihat rov_agent.py.
   CAMERAS: [
-    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8080/stream" },
-    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8081/stream" },
+    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream" },
+    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream" },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".
@@ -77,8 +81,11 @@ export const CONFIG = {
      tidak pernah muncul di layar sejak awal. */
   PID: {
     yaw:   { p: 0.18,  i: 0.018, d: 0.0 },
-    roll:  { p: 0.135, i: 0.09,  d: 0.0036 },
-    pitch: { p: 0.135, i: 0.09,  d: 0.0036 },
+    // ang_p = ATC_ANG_RLL_P / ATC_ANG_PIT_P, loop LUAR (angle -> target rate)
+    // yang menentukan seberapa keras ROV mendorong dirinya tegak; komplemen
+    // p/i/d di atas (loop rate/dalam). Default 6.0 dari parameters_ardusub.params.
+    roll:  { p: 0.135, i: 0.09,  d: 0.0036, ang_p: 6.0 },
+    pitch: { p: 0.135, i: 0.09,  d: 0.0036, ang_p: 6.0 },
     /* depth.i sengaja 0,4 — SATU-SATUNYA nilai di blok ini yang BUKAN default
        FC (0,1). Alasannya terukur, bukan selera:
 

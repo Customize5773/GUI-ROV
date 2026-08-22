@@ -48,9 +48,15 @@ PID_PARAM_MAP = {
     ("roll", "p"): ("ATC_RAT_RLL_P", REAL32, 0.0, 1.0),
     ("roll", "i"): ("ATC_RAT_RLL_I", REAL32, 0.0, 1.0),
     ("roll", "d"): ("ATC_RAT_RLL_D", REAL32, 0.0, 0.05),
+    # Loop LUAR (angle -> target rate), komplemen ATC_RAT_RLL_* (rate -> output)
+    # di atas. Default FC (parameters_ardusub.params) = 6.0; 3.0-12.0 ditulis
+    # tangan sama seperti gain lain di file ini, longgar di kedua arah tapi
+    # menyaring salah orde-besaran.
+    ("roll", "ang_p"): ("ATC_ANG_RLL_P", REAL32, 3.0, 12.0),
     ("pitch", "p"): ("ATC_RAT_PIT_P", REAL32, 0.0, 1.0),
     ("pitch", "i"): ("ATC_RAT_PIT_I", REAL32, 0.0, 1.0),
     ("pitch", "d"): ("ATC_RAT_PIT_D", REAL32, 0.0, 0.05),
+    ("pitch", "ang_p"): ("ATC_ANG_PIT_P", REAL32, 3.0, 12.0),
     ("depth", "p"): ("PSC_ACCZ_P", REAL32, 0.2, 1.5),
     ("depth", "i"): ("PSC_ACCZ_I", REAL32, 0.0, 3.0),
     ("depth", "d"): ("PSC_ACCZ_D", REAL32, 0.0, 0.4),
@@ -61,8 +67,8 @@ PID_PARAM_MAP = {
 # percobaan.
 PID_WRITE_ORDER = (
     ("yaw", "p"), ("yaw", "i"), ("yaw", "d"),
-    ("roll", "p"), ("roll", "i"), ("roll", "d"),
-    ("pitch", "p"), ("pitch", "i"), ("pitch", "d"),
+    ("roll", "p"), ("roll", "i"), ("roll", "d"), ("roll", "ang_p"),
+    ("pitch", "p"), ("pitch", "i"), ("pitch", "d"), ("pitch", "ang_p"),
     ("depth", "p"), ("depth", "i"), ("depth", "d"),
 )
 
@@ -274,6 +280,33 @@ DEPTH_BIAS_MAX_CORRECTION = 0.35  # meter
 # (bukan magnitude, supaya tidak ikut mengubah rasa dorongan STABILIZE).
 DEPTH_PULSE_MAGNITUDE = 150   # unit z terhadap Z_NEUTRAL (500), searah DEPTH_BIAS_LIMIT
 DEPTH_PULSE_DURATION_S = 0.35
+
+# Pulsa rem sekali-tembak untuk surge/sway saat stick dilepas (rasa "brake"
+# ala DJI): begitu |axis| turun dari atas epsilon ke bawahnya, dorong sesaat
+# ke ARAH BERLAWANAN dari axis terakhir, lalu netral. Ini HANYA menghentikan
+# momentum ROV sendiri lebih cepat — tidak ada DVL/GPS di bawah air, jadi
+# TIDAK menahan posisi x/y melawan arus (lihat rov_modes.py baris 34-48).
+# ponytail: magnitude & durasi tebakan awal, sama alasannya dengan
+# DEPTH_PULSE_* di atas — kalibrasi di kolam.
+# Naik dari 150/0.3s (trial 23 Agu 2026): tak terasa karena (a) slew klien
+# (AXIS_SLEW_PER_SEC di joystick-state.js) sudah meluncurkan perintah ke 0
+# dalam ~0,25s SEBELUM rilis terdeteksi, jadi momentum sudah banyak meluruh
+# duluan, dan (b) 150 unit (~15% otoritas) kalah lawan drag air + lag ESC.
+BRAKE_PULSE_MAGNITUDE = 450   # unit x/y terhadap netral (0)
+BRAKE_PULSE_DURATION_S = 0.45
+
+# Pulsa rem heave — pola sama persis dengan BRAKE_PULSE_* di atas, TAPI axis
+# terpisah karena encoding z beda (0..1000, netral 500 — lihat to_mavlink_z
+# di rov_axes.py) dan jumlah thruster vertikal beda (3 vs 2 horizontal),
+# jadi kebutuhan magnitude/durasinya kemungkinan tidak sama. Beroperasi DI
+# LUAR cascade depth-hold ArduSub (apply_depth_hold_bias) — pulsa ini murni
+# menghentikan momentum vertikal sesaat sebelum cascade/bias sempat bereaksi,
+# bukan pengganti keduanya.
+# ponytail: mulai dari nilai yang sama dengan BRAKE_PULSE_* (sudah terbukti
+# perlu dinaikkan dari tebakan pertama) — tala ulang di kolam kalau heave
+# ternyata butuh besaran berbeda dari surge/sway.
+HEAVE_BRAKE_PULSE_MAGNITUDE = 450   # unit z terhadap netral (500)
+HEAVE_BRAKE_PULSE_DURATION_S = 0.45
 
 
 def depth_bias_active(error, was_active):

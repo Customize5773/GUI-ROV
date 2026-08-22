@@ -5,10 +5,14 @@ plus analisis apa yang masih kurang di tiap fase (Fase 0–4, lihat `ROADMAP_MIS
 Dokumen hidup: perbarui status saat item dikerjakan.
 
 > Ringkas status: kode logika (FSM, servo, deteksi QR & hook, docking closed-loop misi
-> 3b/4/5, simulator, evaluasi) **matang & teruji** (135 pytest hijau, 2 skip). Yang tersisa
-> mayoritas **butuh hardware/kolam** — tak bisa
-> diselesaikan tanpa perangkat. Item yang bisa dikerjakan tanpa hardware sudah/akan dibuat
-> (config tunable, launch_sitl, CSV logging, preprocessing QR, run-book).
+> 3b/4/5, simulator, evaluasi) **matang & teruji** (146 pytest hijau, 2 skip). **Trial
+> kolam pertama sudah berlangsung 22 Agu 2026** (log `log-m5/journal-22agu.txt`) — Fase
+> 2/3 bukan lagi "menunggu hardware/kolam", tapi **sedang jalan**: empat bug ditemukan &
+> ditutup di hari yang sama (`BRIDGE-01`, `CALIB-01`, `HOOK-02`, `GRIPPER-01` di bawah),
+> plus dua fitur baru (MARK/M5_REDIVE, depth-pulse ALT_HOLD) yang belum divalidasi ulang
+> di kolam. Sisa backlog mayoritas **butuh trial kolam lagi** — tak bisa diselesaikan dari
+> meja. Item yang bisa dikerjakan tanpa hardware sudah/akan dibuat (config tunable,
+> launch_sitl, CSV logging, preprocessing QR, run-book).
 
 ---
 
@@ -172,6 +176,133 @@ posisi sisi (A/B/C/D) diacak tiap run. `_state_hang` & `_state_dock` dulu **murn
 Referensi: `vision/hook_detect.py`, `fsm/mission5.py` (`_state_hang`/`_state_dock`,
 `_hook_servo_step`), `tests/sim_plant.py` (model hook), `VERIFIKASI_ARDUSUB.md` M3/M7.
 
+### BRIDGE-01 — `rov_agent.py` (program yang jalan di Pi) tak pernah menjalankan FSM (CLOSED 2026-08-22)
+
+**Gejala** (trial kolam 22 Agu, run 1 & 2): tombol Autonomous ditekan di GUI, ROV
+diam total — log menunjukkan depth rata 0,08–0,14 m selama 57 detik.
+
+**Root cause**: ada dua program sisi-ROV di repo ini. `rov_agent.py` — yang
+BENAR-BENAR jalan di Pi via `rov-agent.service` — tidak pernah mengimpor
+`Mission5FSM` sama sekali; handler `control_mode` cuma mengganti string dan
+mencetaknya. FSM lengkap & tervalidasi SITL ada, tapi di `autonomy/rov_link.py`,
+program terpisah yang tak pernah dijalankan di Pi (dependensi `fsm/`, `vision/`
+belum ter-deploy ke sana).
+
+**Ditutup**: `rov_mission5_bridge.py` — menjalankan `Mission5FSM` **in-process**
+di dalam `rov_agent.py` (bukan proses kedua yang akan rebutan `/dev/ttyACM0`
+dengan `rov_agent.py`). `Mission5CommandAdapter` menumpang `command_listener`
+yang sudah ada, jadi kill-switch operator tetap otomatis (tak ada tag `src`
+yang bisa lupa dipasang, beda dari jalur loopback UDP `rov_link.py`).
+
+**Susulan ditemukan & ditutup di hari yang sama** (run 3 & 4, jenis bug sama:
+dua bagian tak sepakat, tanpa test yang menyeberang):
+1. `joystick` dict menyimpan nilai TERAKHIR dari GUI dan tak pernah pulang ke
+   nol sendiri — sisa >deadzone dari sesi manual sebelumnya dibaca sebagai
+   "operator nyetir" pada iterasi pertama masuk autonomous, kill-switch abort
+   sebelum FSM sempat gerak. → axis operator & axis FSM dinolkan sekaligus
+   saat masuk autonomous.
+2. `current_control_mode` diset SEBELUM `runner.start()` — selama ~1 detik
+   `VisionPipeline.start()` membuka kamera, STOP dari kill-switch di jendela
+   itu menemukan `_fsm` masih `None` dan diam, meninggalkan thread FSM yatim.
+   → mode dipindah SESUDAH `start()` berhasil.
+
+Dikunci `test_rov_agent_autonomous.py` (uji tingkat AST, karena `rov_agent.py`
+butuh `pymavlink`/socket untuk diimpor).
+
+Referensi: `rov_mission5_bridge.py`, `rov_agent.py` (handler `control_mode`),
+`test_rov_agent_autonomous.py`, `log-m5/journal-22agu.txt`.
+
+### CALIB-01 — Kalibrasi kamera dibuat pada resolusi salah (MITIGATED 2026-08-22, belum solusi asli)
+
+**Gejala**: potensi tabrakan payload — PBVS `SERVO_TARGET_DIST=0.30 m` berhenti
+jauh lebih dekat dari yang diperintahkan.
+
+**Root cause**: `dwe_underwater.npz` dikalibrasi pada 4080×3072 (resolusi FOTO),
+sedangkan stream kamera 1280×720 → `fx` ~3,2× terlalu besar → PBVS mengira QR
+3,2× lebih jauh dari jarak asli. Pada `SERVO_TARGET_DIST=0.30 m`, ROV baru
+berhenti di jarak asli ~9 cm.
+
+**Sudah ditangani**: dipilih `dwe_trial2.npz` — dgn dua syarat (bukan rms saja,
+yang cuma mengukur kecocokan model thd gambar kalibrasinya sendiri): resolusi
+harus cocok stream, dan geometri (fx/cy) harus masuk akal dibanding kandidat
+lain. Ditambah guard `_verify_calib_size()` di `vision/qr_detect.py`: mismatch
+resolusi → PBVS dimatikan + ERROR di log, bukan gagal diam-diam.
+
+**Bukan solusi asli** — `dwe_trial2.npz` "tidak berbahaya", belum akurat: `cy`
+masih meleset +29,5% dari tengah frame.
+
+**Sisa backlog (butuh kolam)**:
+- [ ] Kalibrasi ulang DI AIR pada 1280×720 (`calibrate_camera.py`, papan
+      tahan air) — lihat juga QR-01.
+
+Referensi: `autonomy/rov_link.py` (`CALIB_*_DEFAULT`), `vision/qr_detect.py`
+(`_verify_calib_size`).
+
+### HOOK-02 — Deteksi hook mengembalikan seluruh frame di air keruh (CLOSED 2026-08-22)
+
+**Gejala** (uji kolam 22 Agu): `detect_hook()` mengembalikan center persis di
+tengah frame, area 917.542/921.600 px² (99,6%), confidence 1,00 — di TIAP
+frame. Fatal utk FSM (bukan cuma berisik): `_hook_servo_step` membaca "hook
+tepat di tengah, sangat dekat", `_state_hang`/`_state_dock` mengira sudah
+sejajar sempurna sejak frame pertama dan mendudukkan payload di tempat salah.
+
+**Root cause**: air keruh + kontras rendah membuat Canny menghasilkan satu
+contour raksasa yang membungkus seluruh frame; solidity-nya ≈1 (bounding box =
+frame) dan suku ukuran di `_score_contour` sudah jenuh, jadi skornya justru
+"sempurna".
+
+**Ditutup**: `HOOK_MAX_AREA_FRAC=0.25` — batas atas luas contour sbg fraksi
+luas frame, diterapkan di ketiga jenjang deteksi (`_detect_by_color`,
+`_detect_by_contour`, `_detect_by_hough`). Longgar dgn sengaja: hook pada jarak
+docking hanya ~0,33% frame (`HOOK_TARGET_AREA`), bahkan di separuh jarak itu
+~1,3% — 25% tak memotong deteksi sah, tapi membunuh kasus patologis di atas.
+
+**Sisa backlog (butuh kolam)**:
+- [ ] Verifikasi di docking sungguhan bahwa batas 25% tak ikut menolak
+      deteksi sah jarak dekat (ukur area terukur vs batas, pola sama QR-01).
+
+Referensi: `autonomy/vision/hook_detect.py`, `autonomy/tests/test_hook_detect.py`.
+
+### GRIPPER-01 — Mismatch PWM gripper antar dua program (CLOSED 2026-08-22)
+
+**Gejala**: tak ada gejala runtime langsung — potensi servo didorong melebihi
+batas fisik.
+
+**Root cause**: `autonomy/rov_link.py` mengirim PWM 1900/1100 ke gripper,
+sedangkan `gripper_controller.py` (dipakai di Pi) sudah lama memakai 1580/1350
+hasil kalibrasi nyata di tepi kolam (22 Agu). Travel aman gripper cuma sampai
+1580/1350 — `rov_link.py` mendorong servo ~2× lebih jauh dari itu.
+
+**Ditutup**: `GRIPPER_PWM_OPEN`/`GRIPPER_PWM_CLOSE` di `autonomy/rov_link.py`
+disamakan ke 1580/1350.
+
+Referensi: `autonomy/rov_link.py`, `gripper_controller.py`.
+
+### DEPTH-PULSE-01 — Bias depth-set kontinu berebut channel-z dgn ArduSub di ALT_HOLD (fitur baru, belum divalidasi kolam)
+
+**Gejala** (laporan pilot, 22 Agu): osilasi kedalaman saat `depth_up`/`depth_down`
+ditekan di mode `ALT_HOLD`.
+
+**Root cause**: bias depth-set kontinu (`DEPTH_BIAS_*` di `rov_pid.py`) cocok
+utk `STABILIZE` (tak ada cascade PID kedalaman ArduSub di mode itu), tapi di
+`ALT_HOLD`/`poshold` ArduSub SUDAH punya cascade PID sendiri yang menahan
+kedalaman — bias kontinu jadi berebut channel `z` dengannya.
+
+**Ditangani**: mode pulsa sekali-tembak khusus non-`STABILIZE`
+(`depth_bias_is_continuous()` di `rov_modes.py` memilih jalur) — meniru
+operator menyentuh-lalu-lepas stik heave: dorong `z` sesaat
+(`DEPTH_PULSE_MAGNITUDE`/`DEPTH_PULSE_DURATION_S` di `rov_pid.py`), lalu
+netral, biarkan cascade ArduSub menahan kedalaman baru sendiri.
+
+**Sisa backlog (butuh kolam)**:
+- [ ] `DEPTH_PULSE_MAGNITUDE`/`DEPTH_PULSE_DURATION_S` ditandai `ponytail:` di
+      kode — tebakan awal, belum divalidasi data kolam. Kalibrasi
+      `DEPTH_PULSE_DURATION_S` dulu (bukan magnitude, supaya rasa dorongan
+      `STABILIZE` tak ikut berubah).
+
+Referensi: `rov_pid.py` (`DEPTH_PULSE_*`), `rov_modes.py`
+(`depth_bias_is_continuous`), `rov_agent.py` (`apply_depth_hold_bias`).
+
 ---
 
 ## 2. Analisis gap per fase (Fase 0–4)
@@ -179,12 +310,12 @@ Referensi: `vision/hook_detect.py`, `fsm/mission5.py` (`_state_hang`/`_state_doc
 | Fase | Status | Sudah ada | Yang kurang / TODO | Blocker |
 |------|--------|-----------|--------------------|---------|
 | **0** Visi di meja | ✅ hampir | servo+pose webcam test jalan; kalibrasi papan catur OK; deteksi QR JSON | Rekam nilai `invert_*` hasil uji ke config; formalkan pass/fail; **QR-01** (ditangani PR ini) | — |
-| **1** SITL | ✅ VERIFIED 2026-08-21 | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE, `verify_handoff.mjs` | 3/3 run `DONE` 100/100; handoff & STOP 3/3 LULUS; 124 test hijau. Sisa: **checklist browser** (gerak 3D, tombol fisik, F12) — butuh mata | — (tak lagi blocker) |
-| **2** Bring-up bench | ⏳ siap dimulai | `VERIFIKASI_ARDUSUB.md` #1–7; `PERSIAPAN_FASE2-4.md` (run-book, PR ini) | Eksekusi cek arah 6–8 thruster, servo gripper/lampu (channel/PWM), depth, arming | **Hardware** (Pixhawk/ROV) |
-| **3** Uji kolam & tuning | 🔒 blocked | `VERIFIKASI_ARDUSUB.md` M1–M8; config tunable (`--config`); CSV logging (PR ini) | Kalibrasi kamera DI AIR; verif ulang `invert_*`; tuning jarak/depth/timing/`WALL_HEADING`; uji unhook | **Kolam + hardware** |
+| **1** SITL | ✅ VERIFIED 2026-08-21 | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE, `verify_handoff.mjs` | 3/3 run `DONE` 100/100; handoff & STOP 3/3 LULUS; 146 test hijau. Sisa: **checklist browser** (gerak 3D, tombol fisik, F12) — butuh mata | — (tak lagi blocker) |
+| **2** Bring-up bench | 🟡 SEDANG JALAN | `VERIFIKASI_ARDUSUB.md` #1–7; `PERSIAPAN_FASE2-4.md` (run-book); Pixhawk tersambung, thruster/gripper direspons MAVLink; PWM gripper terkalibrasi tepi kolam 1580/1350 (**GRIPPER-01**); toggle Autonomous di Pi benar-benar menjalankan FSM (**BRIDGE-01**) | Cek arah 6–8 thruster belum lengkap tercatat; depth plateau 0,37 m belum ter-root-cause (lihat Fase 3); servo lampu (channel/PWM) belum diverifikasi | **Sisa hardware/waktu di kolam** |
+| **3** Uji kolam & tuning | 🟡 SEDANG JALAN (trial 1: 22 Agu 2026) | `VERIFIKASI_ARDUSUB.md` M1–M8; config tunable (`--config`, `pool_kki_running.yaml`); CSV logging; **trial kolam 1** (`log-m5/journal-22agu.txt`) — 4 bug ditemukan & ditutup hari yang sama (**BRIDGE-01, CALIB-01, HOOK-02, GRIPPER-01**); fitur baru MARK/M5_REDIVE + depth-pulse ALT_HOLD | 7 item terbuka: root-cause depth plateau 0,37 m; kalibrasi kamera DI AIR (bukan tambalan `dwe_trial2.npz`); validasi `DEPTH_PULSE_*`; uji MARK→M5_REDIVE di kolam; verifikasi `HOOK_MAX_AREA_FRAC` tak menolak deteksi sah; verif ulang `invert_*`; sisa QR-01 (kurva jarak/exposure/fiducial) | **Trial kolam lanjutan** |
 | **4** Latihan & lomba | 🔒 blocked (sebagian siap) | run-book hari-H + scoresheet; **logika M5_FALLBACK terverifikasi & dikunci 2 pytest**; checklist boot/pra-dive/umbilical sudah tertulis | Rehearsal 3× run; **drill fisik** tutup-lensa di kolam; eksekusi & hafalkan checklist | **Setup penuh + kolam** |
 
-Legenda: ✅ selesai · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · 🔒 menunggu hardware/kolam.
+Legenda: ✅ selesai · 🟡 sedang jalan (kolam/hardware sudah mulai dipakai) · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · 🔒 menunggu hardware/kolam.
 
 ---
 
@@ -198,13 +329,34 @@ Legenda: ✅ selesai · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · �
       (badge mode, gerak ROV 3D, F12 bersih, joystick fisik).
 
 **Fase 2 (butuh hardware kering):**
-- [ ] Kerjakan `VERIFIKASI_ARDUSUB.md` #1–7; catat konstanta `rov_link.py` yang perlu dibalik/disesuaikan
-      (`Z_NEUTRAL`, tanda sumbu, `GRIPPER_SERVO_CH`/PWM, `LIGHT_SERVO_CH`, `WATER_RHO`, mode `ALT_HOLD`).
+- [x] `GRIPPER_SERVO_CH`/PWM — dikalibrasi nyata di tepi kolam (1580/1350),
+      disamakan di kedua program (**GRIPPER-01**, 2026-08-22).
+- [ ] Kerjakan sisa `VERIFIKASI_ARDUSUB.md` #1–7; catat konstanta `rov_link.py` yang perlu dibalik/disesuaikan
+      (`Z_NEUTRAL`, tanda sumbu, `LIGHT_SERVO_CH`, `WATER_RHO`, mode `ALT_HOLD`).
 
-**Fase 3 (butuh kolam):**
-- [ ] Kerjakan `VERIFIKASI_ARDUSUB.md` M1–M8; tuang hasil tuning ke `config/mission5.local.yaml`.
-- [ ] Selesaikan sisa **QR-01** (kurva jarak, exposure, fiducial, benchmark detektor).
-- [ ] Kalibrasi kamera DI AIR (`calibrate_camera.py`, papan tahan air) → `.npz` PBVS venue.
+**Fase 3 — trial 1 (22 Agu 2026), sisa terbuka:**
+- [ ] **Root cause depth plateau 0,37 m.** `dive: 30→45` di
+      `autonomy/config/pool_kki_running.yaml` sudah terpasang sbg diagnostik —
+      jalankan run berikutnya: plateau bergeser lebih dalam → keterbatasan daya
+      (3 thruster heave); plateau tetap 0,37 m → curigai tare/ballast (offset
+      sensor depth saat armed di permukaan, trim berat ROV).
+- [ ] Kalibrasi kamera DI AIR pada 1280×720 (`calibrate_camera.py`, papan
+      tahan air) → ganti tambalan `dwe_trial2.npz` (**CALIB-01**), verifikasi
+      `cy` tak lagi meleset 29,5% dari tengah.
+- [ ] Validasi `DEPTH_PULSE_MAGNITUDE`/`DEPTH_PULSE_DURATION_S` (`rov_pid.py`,
+      **DEPTH-PULSE-01**) dgn data kolam — kalibrasi durasi dulu, bukan
+      magnitude.
+- [ ] Uji **MARK→M5_REDIVE** di kolam sungguhan: tekan MARK saat payload
+      tergantung di hook (misi 3 manual), jalankan misi 5 autonomous, cek log
+      `[FSM] MARK gantungan dipakai` dan ROV kembali ke arah gantungan (bukan
+      sapu buta timeout).
+- [ ] Verifikasi `HOOK_MAX_AREA_FRAC=0.25` (**HOOK-02**) tak menolak deteksi
+      sah jarak dekat — ukur area terukur vs batas saat docking sungguhan
+      (`--csv`, pola sama QR-01).
+- [ ] Kerjakan sisa `VERIFIKASI_ARDUSUB.md` M1–M8; verif ulang `invert_*`;
+      tuang hasil tuning ke `config/mission5.local.yaml`.
+- [ ] Selesaikan sisa **QR-01** (kurva jarak, exposure, fiducial, benchmark
+      detektor).
 
 **Fase 4 (butuh setup penuh):**
 - [ ] Rehearsal 3× run + drill fallback; isi scoresheet di `PERSIAPAN_FASE2-4.md`.
@@ -217,6 +369,12 @@ Legenda: ✅ selesai · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · �
 - [x] Fail-safe: netral saat disconnect / idle > 0.5 s. Unit test `test_rov_axes.py`.
 - [ ] **Butuh keputusan Rasya / uji hardware:** verifikasi tanda & skala sumbu (surge/sway/yaw/heave)
       cocok dengan orientasi thruster di kolam; bitmask tombol masih placeholder.
+
+**Perlu 1 trial kolam lagi utk validasi (bukan lagi opsional murni):**
+- [ ] MARK/M5_REDIVE — ditulis 22 Agu 2026, belum pernah dicoba di kolam
+      sungguhan (lihat checklist Fase 3 di atas).
+- [ ] Depth-pulse ALT_HOLD (**DEPTH-PULSE-01**) — magnitude/durasi masih
+      tebakan awal (lihat checklist Fase 3 di atas).
 
 **Peningkatan opsional (nice-to-have):**
 - [ ] Resolusi/preprocessing `VisionPipeline` (bukan hanya tool webcam) bila deteksi di Pi kurang.

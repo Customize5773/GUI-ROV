@@ -203,3 +203,18 @@ def test_detect_hook_max_area_frac_configurable():
     # Ambang mustahil (0.0001 = 30 px²) harus membuang bahkan hook yang sah,
     # membuktikan parameternya benar-benar mengalir sampai ke penyaring.
     assert detect_hook(hook, max_area_frac=0.0001) is None
+
+
+def test_detect_hook_close_range_not_rejected():
+    """Hook sah yang jauh LEBIH DEKAT (lebih besar) dari jarak docking nyata
+    (~10% frame, ~8x lebih besar dari kasus setengah-jarak-docking) tetap
+    lolos — HOOK_MAX_AREA_FRAC=0.25 hanya membuang blob patologis, bukan
+    deteksi sah jarak dekat."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.hook_detect import detect_hook
+    det = detect_hook(_make_hook(cv2, np, scale=2.0))
+    assert det is not None, "hook jarak-dekat sah ikut tertolak oleh HOOK_MAX_AREA_FRAC"
+    frame_area = 480 * 640
+    frac = det['area'] / frame_area
+    assert 0.05 < frac < 0.25, f"area {frac:.3f} di luar rentang uji yang dimaksud"

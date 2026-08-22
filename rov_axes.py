@@ -70,6 +70,16 @@ NEUTRAL = axes_to_manual_control(**AXIS_NEUTRAL)
 IDLE_TIMEOUT = 0.5
 
 
+def axis_released(prev_value, curr_value, epsilon):
+    """True kalau axis baru saja turun dari |prev| > epsilon ke |curr| <= epsilon.
+
+    Edge-detect murni untuk memicu pulsa rem surge/sway (BRAKE_PULSE_* di
+    rov_pid.py, dipakai apply_translation_brake di rov_agent.py) begitu
+    operator melepas stick — testable tanpa state global maupun waktu.
+    """
+    return abs(prev_value) > epsilon and abs(curr_value) <= epsilon
+
+
 def resolve_manual_packet(axes, last_update, now, timeout=IDLE_TIMEOUT):
     """Tentukan paket MANUAL_CONTROL yang harus dikirim saat ini.
 

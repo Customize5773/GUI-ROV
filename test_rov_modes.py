@@ -193,6 +193,116 @@ class TestCallSiteCocokDenganDefinisi(unittest.TestCase):
                 f"depth_bias_engaged(), padahal definisinya butuh {len(wajib)}: "
                 f"{[p.name for p in wajib]}")
 
+    def test_cabang_kontinu_dipagari_depth_bias_is_continuous(self):
+        """22 Agu 2026: cabang bias KONTINU di apply_depth_hold_bias sempat
+        cuma dipagari depth_bias_engaged(), yang meloloskan ALT_HOLD (lihat
+        DEPTH_HOLD_MODES). Akibatnya bias Python terus mendorong z di
+        ALT_HOLD, berebut channel dengan cascade PSC_ACCZ_*/VELZ_* ArduSub
+        sendiri — dikonfirmasi log trial (bias=+140 z=360 saat mode=ALT_HOLD).
+        depth_bias_is_continuous() (STABILIZE saja) sudah ada & dipakai benar
+        buat menyalakan pulsa ALT_HOLD (baris ~1162), tapi tak pernah dipakai
+        memagari cabang kontinu itu sendiri. Test ini menjaga supaya `if` yang
+        memanggil depth_bias_engaged() di rov_agent.py SELALU ikut memanggil
+        depth_bias_is_continuous() di kondisi yang sama.
+        """
+        src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "rov_agent.py")
+        with open(src_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+
+        def calls_in(node):
+            return {
+                n.func.id for n in ast.walk(node)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            }
+
+        gerbang = [
+            node for node in ast.walk(tree)
+            if isinstance(node, ast.If)
+            and "depth_bias_engaged" in calls_in(node.test)
+        ]
+        self.assertTrue(
+            gerbang,
+            "tak ada if yang memanggil depth_bias_engaged di rov_agent.py — "
+            "kalau memang dipindah, perbarui test ini, jangan hapus")
+
+        for node in gerbang:
+            self.assertIn(
+                "depth_bias_is_continuous", calls_in(node.test),
+                f"rov_agent.py baris {node.lineno}: if depth_bias_engaged(...) "
+                "tanpa depth_bias_is_continuous(...) di kondisi yang sama -> "
+                "cabang bias kontinu akan ikut menyala di ALT_HOLD lagi")
+
+    def test_auto_follow_heave_dipagari_depth_bias_is_continuous(self):
+        """Riwayat berulang: `update_depth_target_from_manual_heave()` (nama
+        lama) sudah pernah dihapus (commit 13c1d4a, 10 Agu 2026) karena diam-
+        diam menimpa depth_target ke depth aktual tiap stik heave disentuh --
+        bertentangan dengan model "hanya SET (depth_up/down) yang boleh ubah
+        depth_target". Tapi ditulis ulang tanpa sengaja di redesign 21 Agu
+        (8a23060), bikin depth-set kelihatan "dekorasi" di ALT_HOLD: apa pun
+        yang diatur lewat depth_up/down langsung tertimpa begitu stik heave
+        disentuh. 22 Agu: dipersempit lagi ke STABILIZE saja (di sana
+        depth_target satu-satunya yang menahan kedalaman, jadi harus ikut
+        stik supaya tak "menyelam balik" begitu stik dilepas). Di ALT_HOLD,
+        cascade ArduSub sendiri yang menahan -- depth_target cuma dipakai
+        sebagai arah pulsa depth_up/down, jadi harus diam kecuali tombol itu
+        ditekan. Test ini menjaga assignment auto-follow selalu dipagari
+        depth_bias_is_continuous(), supaya tak tertulis ulang polos lagi.
+        """
+        src_path = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "rov_agent.py")
+        with open(src_path, encoding="utf-8") as f:
+            tree = ast.parse(f.read())
+
+        func = next(
+            (n for n in ast.walk(tree)
+             if isinstance(n, ast.FunctionDef)
+             and n.name == "apply_depth_hold_bias"),
+            None)
+        self.assertIsNotNone(
+            func, "tak ada apply_depth_hold_bias di rov_agent.py -- "
+            "kalau dipindah/di-rename, perbarui test ini")
+
+        def calls_in(node):
+            return {
+                n.func.id for n in ast.walk(node)
+                if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+            }
+
+        def is_follow_assign(node):
+            if not (isinstance(node, ast.Assign)
+                    and len(node.targets) == 1
+                    and isinstance(node.targets[0], ast.Name)
+                    and node.targets[0].id == "depth_target"
+                    and isinstance(node.value, ast.Call)
+                    and isinstance(node.value.func, ast.Name)
+                    and node.value.func.id == "clamp_depth_target"
+                    and node.value.args):
+                return False
+            arg0 = node.value.args[0]
+            return (isinstance(arg0, ast.Subscript)
+                    and isinstance(arg0.value, ast.Name)
+                    and arg0.value.id == "state")
+
+        assigns = [n for n in ast.walk(func) if is_follow_assign(n)]
+        self.assertTrue(
+            assigns,
+            "tak ada assignment depth_target = clamp_depth_target(state[...], ...) "
+            "di apply_depth_hold_bias -- kalau memang dihapus/dipindah, "
+            "perbarui test ini, jangan hapus")
+
+        dipagari = [
+            node for node in ast.walk(func)
+            if isinstance(node, ast.If)
+            and "depth_bias_is_continuous" in calls_in(node.test)
+            and any(a in list(ast.walk(node)) for a in assigns)
+        ]
+        self.assertTrue(
+            dipagari,
+            "assignment auto-follow depth_target di apply_depth_hold_bias "
+            "tidak dipagari depth_bias_is_continuous(...) -- ALT_HOLD akan "
+            "ikut menimpa depth_target tiap stik heave disentuh lagi")
+
 
 if __name__ == "__main__":
     unittest.main()

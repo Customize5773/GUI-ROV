@@ -892,6 +892,8 @@ body[data-theme="light"] .theme__icon::after {
 }
 .hud__rp { display: flex; gap: 14px; color: var(--ink); }
 .hud__gain { color: var(--ink); letter-spacing: 1px; }
+.hud__drift { color: var(--ink); letter-spacing: 1px; }
+.hud__drift[data-stale="1"] { color: var(--ink-dim); }
 
 /* Banner fail-safe: Pi berhenti menerima axis dan mengirim netral sendiri.
    Sengaja mencolok & di tengah — operator harus melihatnya tanpa mencari. */

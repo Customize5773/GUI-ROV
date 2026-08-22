@@ -145,7 +145,8 @@
               <!-- mode tabs: mode ArduSub sungguhan. Sorotan tab TIDAK diset
                    lokal saat diklik — ia mengikuti HEARTBEAT dari Pixhawk,
                    sehingga tab GUI dan tombol D-pad gamepad selalu sinkron. -->
-              <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode">
+              <div class="modebar" id="modeBar" role="tablist" aria-label="Pilot mode"
+                   title="Rem: lepas stik surge/sway = pulsa dorong balik sesaat di SEMUA mode (menghentikan laju sendiri, BUKAN menahan posisi x/y — tidak ada DVL/GPS di bawah air, arus tetap menggeser wahana).">
                 <button class="mode" data-mode="manual" role="tab">Manual</button>
                 <!-- STABILIZE: attitude (roll/pitch) distabilkan, kedalaman
                      TIDAK — tidak ada cascade PID ArduSub yang menahannya di
@@ -170,6 +171,11 @@
                   <div class="hud__compass" id="hudHeading">HDG —°</div>
                   <div class="hud__rp"><span id="hudRoll">R —°</span><span id="hudPitch">P —°</span></div>
                   <div class="hud__gain" id="hudGain">GAIN —</div>
+                  <!-- Kecepatan drift dari kamera BOTTOM (optical flow, lihat
+                       rov_drift.py). Sengaja tampil terus (bukan cuma di mode
+                       poshold) — pilot butuh tahu dirinya hanyut di mode apa
+                       pun. quality=0 (belum ada bacaan segar) -> "DRIFT —". -->
+                  <div class="hud__drift" id="hudDrift" title="Kecepatan drift hasil optical flow kamera bawah. Bukan GPS/DVL — cuma menghentikan momentum sendiri, arus tetap bisa menggeser wahana.">DRIFT —</div>
                 </div>
                 <div class="cmdlink" id="cmdLinkBanner" hidden>LINK PERINTAH TERPUTUS — THRUSTER NETRAL</div>
 
