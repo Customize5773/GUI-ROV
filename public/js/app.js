@@ -10,7 +10,7 @@ import { setupPage, loadSetup } from "./pages/setup.js";
 import { vehiclePage } from "./pages/vehicle.js";
 import { analyzePage } from "./pages/analyze.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
-import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,resetAxisSlew,} from "./joystick-state.js";
+import { joystickState,updateJoystickStateFromGamepad,getActiveButtonLayerName,isJoystickUsable,} from "./joystick-state.js";
 import { Manipulator } from "./manipulator/manipulator.js";
 import { ARDUSUB_MODE_TO_TAB } from "/shared/rov-modes.js";
 import { HEADING_DEADBAND_DEG, headingError } from "/shared/rov-heading.js";
@@ -1307,9 +1307,6 @@ function neutralizeGamepadAxes() {
   // Keyboard akan langsung "jatuh tempo" begitu kembali ke Gamepad.
   for (const k in gpRepeatAt) delete gpRepeatAt[k];
 
-  // Lihat resetAxisSlew(): riwayat rate-limit harus ikut dibuang, kalau tidak
-  // perintah lama bocor kembali saat kendali dipulihkan.
-  resetAxisSlew();
 }
 
 function executeJoystickAction(action, mode = "toggle") {

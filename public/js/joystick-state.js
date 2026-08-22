@@ -22,8 +22,6 @@ import {
   parseAxisIndex,
 } from "/shared/joystick-profile.js";
 
-import { slewToward } from "./axis-shaping.js";
-
 export {
   AXIS_OPTIONS,
   BUTTON_ACTIONS,
@@ -222,8 +220,6 @@ export function updateJoystickStateFromGamepad() {
     joystickState.rawAxes = [];
     joystickState.rawButtons = [];
     joystickState.mapped = { surge: 0, sway: 0, yaw: 0, heave: 0, grip: 0 };
-    slewLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
-    slewStamp = 0;
     return;
   }
 
@@ -238,14 +234,10 @@ export function updateJoystickStateFromGamepad() {
     value: Number(b.value || 0),
   }));
 
-  const now = (typeof performance !== "undefined" ? performance.now() : Date.now());
-  const dt = slewStamp ? (now - slewStamp) / 1000 : 0;
-  slewStamp = now;
-
-  joystickState.mapped.surge = slew("surge", readAssignedAxis("Axis X"), dt);
-  joystickState.mapped.sway  = slew("sway",  readAssignedAxis("Axis Y"), dt);
-  joystickState.mapped.yaw   = slew("yaw",   readAssignedAxis("Axis R"), dt);
-  joystickState.mapped.heave = slew("heave", readAssignedAxis("Axis Z"), dt);
+  joystickState.mapped.surge = readAssignedAxis("Axis X");
+  joystickState.mapped.sway  = readAssignedAxis("Axis Y");
+  joystickState.mapped.yaw   = readAssignedAxis("Axis R");
+  joystickState.mapped.heave = readAssignedAxis("Axis Z");
 
   /* Grip analog: di standard mapping LT/RT adalah TOMBOL dengan nilai analog
      0..1, bukan axis — jadi baris "axis 4 -> Grip" di profil lama tidak pernah
