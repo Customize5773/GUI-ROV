@@ -295,6 +295,19 @@ DEPTH_PULSE_DURATION_S = 0.35
 BRAKE_PULSE_MAGNITUDE = 450   # unit x/y terhadap netral (0)
 BRAKE_PULSE_DURATION_S = 0.45
 
+# Pulsa rem heave — pola sama persis dengan BRAKE_PULSE_* di atas, TAPI axis
+# terpisah karena encoding z beda (0..1000, netral 500 — lihat to_mavlink_z
+# di rov_axes.py) dan jumlah thruster vertikal beda (3 vs 2 horizontal),
+# jadi kebutuhan magnitude/durasinya kemungkinan tidak sama. Beroperasi DI
+# LUAR cascade depth-hold ArduSub (apply_depth_hold_bias) — pulsa ini murni
+# menghentikan momentum vertikal sesaat sebelum cascade/bias sempat bereaksi,
+# bukan pengganti keduanya.
+# ponytail: mulai dari nilai yang sama dengan BRAKE_PULSE_* (sudah terbukti
+# perlu dinaikkan dari tebakan pertama) — tala ulang di kolam kalau heave
+# ternyata butuh besaran berbeda dari surge/sway.
+HEAVE_BRAKE_PULSE_MAGNITUDE = 450   # unit z terhadap netral (500)
+HEAVE_BRAKE_PULSE_DURATION_S = 0.45
+
 
 def depth_bias_active(error, was_active):
     """Apakah bias boleh mengalir untuk `error` ini, mengingat keadaan sebelumnya.

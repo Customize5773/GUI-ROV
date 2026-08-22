@@ -42,6 +42,8 @@ from rov_pid import (
     DEPTH_PULSE_MAGNITUDE,
     BRAKE_PULSE_DURATION_S,
     BRAKE_PULSE_MAGNITUDE,
+    HEAVE_BRAKE_PULSE_DURATION_S,
+    HEAVE_BRAKE_PULSE_MAGNITUDE,
     clamp_depth_target,
     depth_bias_active,
     depth_hold_bias,
@@ -201,6 +203,9 @@ state = {
     # dan bukan koordinat x/y.
     "marked_heading": None,
     "marked_depth": None,
+    # Flag mentah toggle poshold operator — lihat send_telemetry() untuk
+    # kenapa GUI butuh ini terpisah dari "mode"/"depth_hold".
+    "poshold": False,
     # Kecepatan drift dari kamera BOTTOM (optical flow, lihat rov_drift.py).
     # quality 0 berarti tak ada bacaan segar (cv2/kamera tak ada, atau
     # pool_depth belum di-set) — vx/vy TETAP 0.0, bukan angka basi yang bisa
@@ -391,6 +396,13 @@ _surge_pulse_until = 0.0
 _surge_pulse_dir = 0
 _sway_pulse_until = 0.0
 _sway_pulse_dir = 0
+
+# Sama seperti di atas tapi untuk heave — lihat HEAVE_BRAKE_PULSE_* di
+# rov_pid.py untuk kenapa axis ini punya konstanta magnitude/durasi sendiri
+# (encoding z beda dari x/y, 0..1000 netral 500).
+_prev_heave = 0
+_heave_pulse_until = 0.0
+_heave_pulse_dir = 0
 
 # Kill-switch autonomy: axis operator di atas ambang ini saat mode autonomous
 # membatalkan FSM dan mengembalikan kendali manual. Skalanya SAMA dengan axis
@@ -649,24 +661,34 @@ def apply_heading_hold(mc, axes):
 # (lihat rov_modes.py baris 34-48). Pola pulsa sama persis dengan
 # depth_up/down (_depth_pulse_until/_depth_pulse_dir di apply_depth_hold_bias).
 def apply_translation_brake(mc, axes):
-    """Dorong pulsa balik singkat di x/y begitu stick surge/sway dilepas.
+    """Dorong pulsa balik singkat di x/y/z begitu stick surge/sway/heave
+    dilepas.
 
     Operator selalu menang mutlak: menyentuh stick axis itu lagi — searah
     ataupun berlawanan — langsung membatalkan pulsa yang sedang jalan.
     Hanya aktif saat kendali manual; axis FSM (autonomous) tidak diberi rem
     yang tak diminta.
+
+    Heave BEROPERASI DI LUAR cascade depth-hold ArduSub/bias STABILIZE
+    (apply_depth_hold_bias, sudah jalan lebih dulu di mc sebelum fungsi ini
+    dipanggil — lihat joystick_sender) — pulsa ini murni menghentikan
+    momentum vertikal SESAAT sebelum cascade/bias sempat bereaksi, bukan
+    pengganti keduanya.
     """
-    global _prev_surge, _prev_sway
+    global _prev_surge, _prev_sway, _prev_heave
     global _surge_pulse_until, _surge_pulse_dir
     global _sway_pulse_until, _sway_pulse_dir
+    global _heave_pulse_until, _heave_pulse_dir
 
     surge = axes.get("surge", 0)
     sway = axes.get("sway", 0)
+    heave = axes.get("heave", 0)
 
     if current_control_mode != "manual":
-        _prev_surge, _prev_sway = surge, sway
+        _prev_surge, _prev_sway, _prev_heave = surge, sway, heave
         _surge_pulse_until = 0.0
         _sway_pulse_until = 0.0
+        _heave_pulse_until = 0.0
         return mc
 
     now = time.time()
@@ -688,7 +710,16 @@ def apply_translation_brake(mc, axes):
     elif now < _sway_pulse_until:
         out["y"] = max(-1000, min(1000, out["y"] + _sway_pulse_dir * BRAKE_PULSE_MAGNITUDE))
 
-    _prev_surge, _prev_sway = surge, sway
+    if axis_released(_prev_heave, heave, BRAKE_MANUAL_EPSILON):
+        _heave_pulse_until = now + HEAVE_BRAKE_PULSE_DURATION_S
+        _heave_pulse_dir = -1 if _prev_heave > 0 else 1
+    if abs(heave) > BRAKE_MANUAL_EPSILON:
+        _heave_pulse_until = 0.0
+    elif now < _heave_pulse_until:
+        # z: 0..1000, netral 500 (BUKAN -1000..1000 seperti x/y) — clamp beda.
+        out["z"] = max(0, min(1000, out["z"] + _heave_pulse_dir * HEAVE_BRAKE_PULSE_MAGNITUDE))
+
+    _prev_surge, _prev_sway, _prev_heave = surge, sway, heave
     return out
 
 
@@ -798,6 +829,14 @@ def send_telemetry():
         state["depth_target"] = depth_target
 
     state["depth_hold"] = depth_hold_mode_ok()
+
+    # Flag mentah dari toggle operator (bukan poshold_engaged()): GUI
+    # membutuhkan ini APA ADANYA untuk membedakan tab "poshold" dari
+    # "depth_hold" — keduanya sama-sama ArduSub ALT_HOLD, HEARTBEAT tidak
+    # bisa membedakan (lihat docstring rov_modes.py). BUG lama: field ini tak
+    # pernah dikirim sama sekali, jadi tab Pos Hold di GUI tak pernah
+    # terkonfirmasi walau overlay heading-hold-nya sudah benar-benar aktif.
+    state["poshold"] = poshold_active
 
     with heading_lock:
         state["heading_target"] = heading_target
