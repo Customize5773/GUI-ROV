@@ -436,16 +436,25 @@ def apply_depth_hold_bias(mc, axes):
     with depth_lock:
         target = depth_target
 
-    if not depth_bias_engaged(
+    _mode_now = _effective_requested_mode() or state["mode"]
+    if not (depth_bias_is_continuous(_mode_now) and depth_bias_engaged(
         target,
-        _effective_requested_mode() or state["mode"],
+        _mode_now,
         axes.get("heave", 0),
         HEAVE_MANUAL_EPSILON,
-    ):
-        # Saat operator memegang heave, depth target mengikuti
-        # kedalaman aktual. Begitu stik dilepas, target berhenti
-        # mengikuti dan menjadi setpoint yang ditahan.
-        if abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON:
+    )):
+        # Auto-follow depth_target ke stik heave HANYA di mode kontinu
+        # (STABILIZE): di sana depth_target satu-satunya yang menahan
+        # kedalaman, jadi harus ikut supaya tak "menyelam balik" ke target
+        # lama begitu stik dilepas tanpa sempat depth_up/down. Di ALT_HOLD
+        # cascade ArduSub sendiri yang menahan -- depth_target di sana cuma
+        # dipakai sebagai arah pulsa depth_up/down (rov_pid.py DEPTH_PULSE_*),
+        # jadi HARUS diam kecuali operator menekan depth_up/down. Riwayat:
+        # auto-follow ini sempat dihapus (13c1d4a, 10 Agu) dengan alasan
+        # yang sama, lalu tertulis ulang tanpa sengaja di redesign 21 Agu
+        # (8a23060) -- sekarang dipersempit lagi ke STABILIZE saja.
+        if (depth_bias_is_continuous(_mode_now)
+                and abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON):
             with depth_lock:
                 depth_target = clamp_depth_target(
                     state["depth"],
