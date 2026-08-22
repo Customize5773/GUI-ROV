@@ -820,10 +820,16 @@ def _fsm_read_state():
 # kosong untuk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
 M5_CALIB_DEFAULT = "vision/calibration/dwe_trial2.npz"
 
-# Config geometri arena, dipisah koma. Kosong = konstanta default fsm/mission5.py,
-# yang HANYA benar bila kolam persis 0,9 m (Guidebook mengukur hook 0,45 m dari
-# DASAR, sedangkan HOOK_DEPTH default 0,45 m dari PERMUKAAN).
-M5_CONFIG_DEFAULT = ""
+# Config geometri arena, dipisah koma. Default menunjuk config lomba, BUKAN
+# kosong: default kosong berarti konstanta modul fsm/mission5.py, yang HANYA
+# benar bila kolam persis 0,9 m (Guidebook mengukur hook 0,45 m dari DASAR,
+# sedangkan HOOK_DEPTH default 0,45 m dari PERMUKAAN).
+#
+# Sengaja di sini, bukan Environment= di unit systemd: unit hanya ada di Pi dan
+# tidak ikut ter-deploy, jadi env yang lupa dipasang = diam-diam pakai default
+# modul. Path relatif thd WorkingDirectory service (=~/rov-agent). Gagal-lunak
+# bila file tak ada (lihat Mission5Runner._apply_configs).
+M5_CONFIG_DEFAULT = "config/rov_tuned.yaml,config/pool_kki_running.yaml"
 
 
 def setup_mission5_runner():
@@ -943,27 +949,47 @@ def command_listener():
                     print(f"[CONTROL] Unknown mode: {requested}")
                     continue
 
-                current_control_mode = requested
-                print(f"[CONTROL] {current_control_mode}")
+                print(f"[CONTROL] {requested}")
 
-                # Sampai 22 Agu 2026 baris di atas adalah SATU-SATUNYA efek
-                # toggle ini: string diubah, dicetak, selesai. Tak ada FSM yang
-                # pernah dijalankan rov_agent.py, jadi menekan Autonomous di GUI
-                # tidak menggerakkan wahana sama sekali (trial 22 Agu: depth
-                # rata 0.08-0.14 m selama 57 detik). FSM-nya ada, tapi di
+                # Sampai 22 Agu 2026 satu-satunya efek toggle ini adalah baris
+                # cetak di atas: string diubah, selesai. FSM-nya ada, tapi di
                 # autonomy/rov_link.py — program terpisah yang tak pernah jalan
                 # di Pi. Sekarang toggle benar-benar menyalakan/mematikannya.
-                if mission5_runner is None:
-                    print("[M5] runner tidak tersedia — toggle autonomous tidak "
-                          "menjalankan FSM (kontrol manual tetap normal)")
-                elif current_control_mode == "autonomous":
+                if requested == "autonomous":
                     # Axis FSM dinolkan DULU: sisa setpoint dari sesi
                     # sebelumnya tidak boleh ikut terbawa saat FSM baru mulai.
                     with fsm_axes_lock:
                         fsm_axes.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
-                    mission5_runner.start()
+
+                    # Axis OPERATOR juga dinolkan — ini yang menjatuhkan run 3 & 4
+                    # trial 22 Agu. `joystick` menyimpan nilai TERAKHIR yang
+                    # dikirim GUI dan tak pernah kembali ke nol sendiri, jadi sisa
+                    # >1,5% dari sesi manual sebelumnya langsung dibaca gerbang
+                    # kill-switch di joystick_sender sebagai "operator nyetir" —
+                    # abort pada detik yang sama dengan toggle, sebelum FSM
+                    # sempat menggerakkan apa pun (journal 11:48:05, 11:50:35).
+                    # Kill-switch memang harus memicu pada gerakan BARU; nilai
+                    # basi bukan gerakan.
+                    with joystick_lock:
+                        joystick.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+
+                    # Mode dipindah SESUDAH start() berhasil. Kalau lebih dulu,
+                    # joystick_sender melihat "autonomous" selama ~1 detik yang
+                    # dihabiskan VisionPipeline.start() membuka kamera — dan
+                    # stop() dari kill-switch di jendela itu menemukan _fsm masih
+                    # None, lalu diam, meninggalkan thread FSM yatim yang jalan
+                    # sampai timeout tanpa satu pun perintahnya dipakai.
+                    if mission5_runner is None:
+                        print("[M5] runner tidak tersedia — toggle autonomous "
+                              "tidak menjalankan FSM (kontrol manual tetap normal)")
+                    elif not mission5_runner.start():
+                        print("[M5] start GAGAL — tetap di mode manual")
+                        continue
+                    current_control_mode = "autonomous"
                 else:
-                    mission5_runner.stop()
+                    current_control_mode = "manual"
+                    if mission5_runner is not None:
+                        mission5_runner.stop()
 
             elif name == "pilot_mode":
 

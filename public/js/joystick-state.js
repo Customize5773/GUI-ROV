@@ -77,15 +77,21 @@ export const joystickState = {
    sampai ke thruster dalam satu frame (16 ms).
 
    4000 = sekali slam dari netral ke penuh butuh 0,25 detik. HEAVE dibatasi
-   setengahnya karena dorongan vertikal adalah pengganggu attitude terbesar
+   lebih ketat karena dorongan vertikal adalah pengganggu attitude terbesar
    yang terukur (trial 21 Agu 2026: saat heave+, pitch -4,88 ± 5,13 — sd
    terburuk dari semua axis, di atas manuver rata-rata 4,69).
+
+   1200 (bukan lagi 2000): trial 22 Agu 2026 mode ALT_HOLD, heave saturasi
+   penuh (±1000) di 12,6% sampel [CMD] dan pilot minta gerak lebih pelan
+   tanpa kehilangan respons. Slam neutral->penuh naik dari 0,5 s ke ~0,83 s;
+   input kecil di dekat tengah tidak kena delay tambahan, cuma hentakan
+   penuh yang diperlambat.
 
    INI KNOB KALIBRASI, bukan konstanta suci: naikkan kalau pilot merasa
    wahana jadi lamban merespons, turunkan kalau hentakan masih menggoyang
    attitude. Ukur hasilnya di tools/analyze_trial.py kolom sd per axis. */
 const AXIS_SLEW_PER_SEC = 4000;
-const HEAVE_SLEW_PER_SEC = 2000;
+const HEAVE_SLEW_PER_SEC = 1200;
 
 let slewLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
 let slewStamp = 0;

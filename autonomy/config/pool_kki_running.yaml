@@ -41,6 +41,12 @@ timeouts:
 # ── Kecepatan jelajah — sedikit lebih pelan, ruang pengereman lebih jauh dari dinding ─
 speed:
   surge: 30         # default mission5.py 35
+  # UJI DIAGNOSTIK (trial 22 Agu): kedalaman mentok datar di 0,37 m dengan dive 30,
+  # sehingga M5_REDIVE tak pernah mencapai HOOK_DEPTH dan selalu timeout di 40 s.
+  # Naikkan ke 45 untuk MEMISAHKAN dua penyebab:
+  #   plateau bergeser lebih dalam -> keterbatasan daya angkat (3 thruster heave)
+  #   plateau tetap di 0,37        -> tare/ballast, JANGAN naikkan lagi
+  dive: 45          # default mission5.py 30
 
 hook_docking:
   approach_speed: 17   # default mission5.py 20
