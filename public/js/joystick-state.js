@@ -91,7 +91,7 @@ export const joystickState = {
    wahana jadi lamban merespons, turunkan kalau hentakan masih menggoyang
    attitude. Ukur hasilnya di tools/analyze_trial.py kolom sd per axis. */
 const AXIS_SLEW_PER_SEC = 4000;
-const HEAVE_SLEW_PER_SEC = 1200;
+const HEAVE_SLEW_PER_SEC = 2000;
 
 let slewLast = { surge: 0, sway: 0, yaw: 0, heave: 0 };
 let slewStamp = 0;
