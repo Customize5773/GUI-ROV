@@ -10,6 +10,7 @@ from rov_axes import (
     AXIS_NEUTRAL,
     AXIS_RANGE,
     axes_to_manual_control,
+    axis_released,
     clamp_axis,
     resolve_manual_packet,
 )
@@ -39,6 +40,8 @@ from rov_pid import (
     DEPTH_BIAS_RELEASE,
     DEPTH_PULSE_DURATION_S,
     DEPTH_PULSE_MAGNITUDE,
+    BRAKE_PULSE_DURATION_S,
+    BRAKE_PULSE_MAGNITUDE,
     clamp_depth_target,
     depth_bias_active,
     depth_hold_bias,
@@ -50,6 +53,7 @@ from rov_pid import (
 
 from attitude_filter import AttitudeFilter
 from gripper_controller import GripperController
+from rov_drift import flow_to_velocity, integrate_accel, IMU_GAP_FILL_MAX_S
 
 # =========================
 # Konfigurasi jaringan
@@ -197,6 +201,16 @@ state = {
     # dan bukan koordinat x/y.
     "marked_heading": None,
     "marked_depth": None,
+    # Kecepatan drift dari kamera BOTTOM (optical flow, lihat rov_drift.py).
+    # quality 0 berarti tak ada bacaan segar (cv2/kamera tak ada, atau
+    # pool_depth belum di-set) — vx/vy TETAP 0.0, bukan angka basi yang bisa
+    # disalahartikan operator sebagai "sedang diam".
+    "drift_vx": 0.0,
+    "drift_vy": 0.0,
+    "drift_quality": 0,
+    # "flow" = bacaan optical flow segar, "imu" = tambalan celah singkat
+    # (integrate_accel, lihat rov_drift.py), "none" = tak ada keduanya.
+    "drift_source": "none",
 }
 
 master = None
@@ -229,6 +243,17 @@ fsm_axes_lock = threading.Lock()
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
 attitude_filter = AttitudeFilter()
 prev_attitude_ts = None
+
+# Body rate (roll/pitch/yaw, rad/s) mentah dari ATTITUDE terakhir — dipakai
+# suku gyro OPTICAL_FLOW_RAD di drift_estimator_thread() (Tahap 2). Sengaja
+# TIDAK dari attitude_filter (itu sudah di-EMA untuk tampilan, bukan untuk
+# kompensasi rotasi per-frame flow).
+_last_body_rates = (0.0, 0.0, 0.0)
+
+# Akselerasi body-frame (m/s^2, x=depan/surge, y=kanan/sway) dari SCALED_IMU2
+# terakhir — dipakai integrate_accel() di drift_estimator_thread() untuk
+# menambal celah SINGKAT saat optical flow kosong (lihat rov_drift.py).
+_last_body_accel = (0.0, 0.0)
 
 joystick = {
     "surge": 0,
@@ -351,6 +376,21 @@ requested_mode_ts = 0.0
 REQUESTED_MODE_TIMEOUT = 3.0
 
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
+
+# |surge|/|sway| di atas ini dianggap operator sedang memegang stik — dipakai
+# apply_translation_brake untuk deteksi edge-release. Filosofi sama dengan
+# HEAVE_MANUAL_EPSILON.
+BRAKE_MANUAL_EPSILON = 20
+
+# State pulsa rem surge/sway (rasa "brake" ala DJI, lihat apply_translation_brake).
+# _prev_surge/_prev_sway menyimpan axis tick sebelumnya untuk deteksi edge;
+# _*_pulse_until = 0.0 berarti tidak ada pulsa aktif untuk axis itu.
+_prev_surge = 0
+_prev_sway = 0
+_surge_pulse_until = 0.0
+_surge_pulse_dir = 0
+_sway_pulse_until = 0.0
+_sway_pulse_dir = 0
 
 # Kill-switch autonomy: axis operator di atas ambang ini saat mode autonomous
 # membatalkan FSM dan mengembalikan kendali manual. Skalanya SAMA dengan axis
@@ -598,6 +638,59 @@ def apply_heading_hold(mc, axes):
     out = dict(mc)
     out["r"] = max(-1000, min(1000, int(mc["r"]) + bias))
     return out
+
+
+# =========================
+# BRAKE (rem surge/sway ala DJI)
+# =========================
+# TIDAK ADA DVL/GPS di bawah air, jadi ini BUKAN position hold: hanya
+# menghentikan momentum ROV sendiri lebih cepat lewat pulsa dorongan balik
+# singkat begitu stick dilepas. Arus lateral tetap menggeser wahana sesudahnya
+# (lihat rov_modes.py baris 34-48). Pola pulsa sama persis dengan
+# depth_up/down (_depth_pulse_until/_depth_pulse_dir di apply_depth_hold_bias).
+def apply_translation_brake(mc, axes):
+    """Dorong pulsa balik singkat di x/y begitu stick surge/sway dilepas.
+
+    Operator selalu menang mutlak: menyentuh stick axis itu lagi — searah
+    ataupun berlawanan — langsung membatalkan pulsa yang sedang jalan.
+    Hanya aktif saat kendali manual; axis FSM (autonomous) tidak diberi rem
+    yang tak diminta.
+    """
+    global _prev_surge, _prev_sway
+    global _surge_pulse_until, _surge_pulse_dir
+    global _sway_pulse_until, _sway_pulse_dir
+
+    surge = axes.get("surge", 0)
+    sway = axes.get("sway", 0)
+
+    if current_control_mode != "manual":
+        _prev_surge, _prev_sway = surge, sway
+        _surge_pulse_until = 0.0
+        _sway_pulse_until = 0.0
+        return mc
+
+    now = time.time()
+    out = dict(mc)
+
+    if axis_released(_prev_surge, surge, BRAKE_MANUAL_EPSILON):
+        _surge_pulse_until = now + BRAKE_PULSE_DURATION_S
+        _surge_pulse_dir = -1 if _prev_surge > 0 else 1
+    if abs(surge) > BRAKE_MANUAL_EPSILON:
+        _surge_pulse_until = 0.0
+    elif now < _surge_pulse_until:
+        out["x"] = max(-1000, min(1000, out["x"] + _surge_pulse_dir * BRAKE_PULSE_MAGNITUDE))
+
+    if axis_released(_prev_sway, sway, BRAKE_MANUAL_EPSILON):
+        _sway_pulse_until = now + BRAKE_PULSE_DURATION_S
+        _sway_pulse_dir = -1 if _prev_sway > 0 else 1
+    if abs(sway) > BRAKE_MANUAL_EPSILON:
+        _sway_pulse_until = 0.0
+    elif now < _sway_pulse_until:
+        out["y"] = max(-1000, min(1000, out["y"] + _sway_pulse_dir * BRAKE_PULSE_MAGNITUDE))
+
+    _prev_surge, _prev_sway = surge, sway
+    return out
+
 
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
 # IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus), berhenti
@@ -861,8 +954,16 @@ def setup_mission5_runner():
     telem = Mission5TelemetryAdapter(read_state=_fsm_read_state)
     cfg = {
         "vision_source": os.environ.get("M5_VISION_SOURCE", "usb"),
-        "bottom_url": os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8080/stream"),
-        "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8081/stream"),
+        # PERBAIKAN 23 Agu 2026: default lama (bottom=8080, wall=8081) TERBALIK
+        # dari pemasangan fisik — dikonfirmasi operator: 8080 menghadap DEPAN
+        # (gripper), 8081 menghadap BAWAH (dasar kolam). QR docking (butuh
+        # kamera BAWAH) & drift sensing (rov_drift.py) sama-sama memakai
+        # bottom_url ini, jadi keduanya ikut salah kamera sebelum baris ini
+        # diperbaiki. public/js/config.js CONFIG.CAMERAS punya label
+        # BOTTOM/WALL yang SAMA salahnya — belum ikut dibetulkan di sini,
+        # lihat percakapan sesi ini sebelum menyalin asumsi role dari sana.
+        "bottom_url": os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8081/stream"),
+        "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8080/stream"),
         # Path relatif thd WorkingDirectory service (=~/rov-agent). Kalibrasi
         # HARUS sepadan resolusi stream (1280x720). Lihat alasan pemilihan
         # dwe_trial2.npz (dan kenapa BUKAN rms terendah) di autonomy/rov_link.py.
@@ -881,6 +982,130 @@ def setup_mission5_runner():
     }
     mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
     return mission5_runner
+
+
+# =========================
+# Drift sensing — kamera BOTTOM, optical flow (lihat rov_drift.py)
+# =========================
+# Beda dari Mission5Runner: HIDUP TERUS sejak boot, tidak menunggu toggle
+# Autonomous — pilot butuh tahu dirinya hanyut saat terbang MANUAL, bukan
+# cuma saat misi otonom jalan. Gagal-lunak di setiap langkah (import
+# opencv/numpy, muat kalibrasi, buka kamera): kontrol manual tidak pernah
+# ikut terganggu, lihat pola yang sama di setup_mission5_runner().
+DRIFT_FPS = 10
+DRIFT_LOOP_INTERVAL = 1.0 / DRIFT_FPS
+
+# Tahap 2 (kirim OPTICAL_FLOW_RAD ke EKF ArduSub, EK3_SRC1_VELXY=5): default
+# OFF. Nyalakan lewat M5_OPTFLOW_TO_EKF=1 HANYA setelah drift_vx/vy di HUD
+# sudah divalidasi di kolam beberapa sesi — data flow yang salah tanda/
+# berisik di jalur ini akan membuat thruster auto-koreksi ke arah salah,
+# beda dari sekadar "kurang berasa" seperti BRAKE_PULSE_*.
+OPTFLOW_TO_EKF = os.environ.get("M5_OPTFLOW_TO_EKF", "0") == "1"
+
+
+def drift_estimator_thread():
+    """Baca flow kamera BOTTOM, ubah ke m/s, tulis ke state['drift_vx'/'vy'
+    /'quality'/'source']. Kalau OPTFLOW_TO_EKF aktif, relai juga ke EKF
+    ArduSub lewat OPTICAL_FLOW_RAD di loop yang sama (satu polling
+    latest_flow(), bukan dua thread terpisah yang berebut data).
+
+    Penambal celah IMU: begitu flow kosong (air keruh, fitur hilang, kamera
+    freeze), integrate_accel() menambal drift_vx/vy dari SCALED_IMU2 selama
+    maksimal IMU_GAP_FILL_MAX_S detik supaya HUD tidak langsung jatuh ke
+    "tidak ada data" untuk gangguan sesaat. Begitu flow segar muncul lagi,
+    integrator IMU di-snap ke nilai flow itu (bukan menumpuk dari nilai lama)
+    — lihat rov_drift.py untuk kenapa ini TIDAK dimaksudkan sebagai dead-
+    reckoning berkepanjangan.
+    """
+    try:
+        import numpy as np
+        from vision.optical_flow import FlowTracker
+    except Exception as e:
+        print(f"[DRIFT] TIDAK BISA START — opencv/numpy gagal diimpor: {e}")
+        return
+
+    calib_path = os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_DEFAULT)
+    try:
+        data = np.load(calib_path)
+        focal_px = float(data["K"][0, 0])
+    except Exception as e:
+        print(f"[DRIFT] gagal muat kalibrasi {calib_path}: {e} — drift sensing nonaktif")
+        return
+
+    # Default 8081 (bukan 8080) — lihat catatan perbaikan port kamera BOTTOM
+    # di setup_mission5_runner(), M5_BOTTOM_URL dipakai bersama.
+    url = os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8081/stream")
+    tracker = FlowTracker(url=url, fps=DRIFT_FPS)
+    tracker.start()
+    print(f"[DRIFT] FlowTracker aktif di {url} (focal={focal_px:.1f}px, "
+          f"ke-EKF={OPTFLOW_TO_EKF})")
+
+    # Kecepatan yang sedang ditambal integrate_accel() selama celah flow, dan
+    # sejak kapan celah itu mulai (None = tidak sedang dalam celah).
+    imu_vx, imu_vy = 0.0, 0.0
+    gap_started_at = None
+
+    while True:
+        flow = tracker.latest_flow(max_age=0.5)
+        altitude = (pool_depth - state["depth"]) if pool_depth is not None else None
+        have_flow = flow is not None and altitude is not None and altitude > 0
+
+        if have_flow:
+            vx, vy = flow_to_velocity(flow["dx"], flow["dy"], flow["dt"], altitude, focal_px)
+            state["drift_vx"] = vx
+            state["drift_vy"] = vy
+            state["drift_quality"] = flow["quality"]
+            state["drift_source"] = "flow"
+            # Snap-back: begitu flow segar lagi, integrator IMU mulai lagi
+            # dari SINI (bukan menumpuk dari tambalan celah sebelumnya).
+            imu_vx, imu_vy = vx, vy
+            gap_started_at = None
+
+            if OPTFLOW_TO_EKF and master is not None:
+                # ponytail: integrated_xgyro/ygyro/zgyro pakai rate SESAAT * dt
+                # (bukan integral sungguhan sepanjang window), dan
+                # time_delta_distance_us=0 (anggap altitude sinkron dgn flow).
+                # Penyederhanaan yang perlu divalidasi di kolam — lihat Tahap 2
+                # di plan drift sensing sebelum dipercaya penuh.
+                rr, pr, yr = _last_body_rates
+                dt = flow["dt"]
+                quality = max(0, min(255, flow["quality"]))
+                try:
+                    with master_lock:
+                        master.mav.optical_flow_rad_send(
+                            int(time.time() * 1e6),   # time_usec
+                            0,                          # sensor_id
+                            int(dt * 1e6),              # integration_time_us
+                            flow["dx"] / focal_px,      # integrated_x (rad)
+                            flow["dy"] / focal_px,       # integrated_y (rad)
+                            rr * dt, pr * dt, yr * dt,   # integrated_x/y/zgyro (rad)
+                            0.0,                        # temperature
+                            quality,                    # quality 0-255
+                            0,                           # time_delta_distance_us
+                            altitude,                    # distance (m)
+                        )
+                except Exception as e:
+                    print(f"[DRIFT] gagal kirim optical_flow_rad: {e}")
+        else:
+            now = time.time()
+            if gap_started_at is None:
+                gap_started_at = now
+            if (now - gap_started_at) <= IMU_GAP_FILL_MAX_S:
+                ax, ay = _last_body_accel
+                imu_vx, imu_vy = integrate_accel(ax, ay, DRIFT_LOOP_INTERVAL, imu_vx, imu_vy)
+                state["drift_vx"] = imu_vx
+                state["drift_vy"] = imu_vy
+                state["drift_quality"] = 0   # flow feature count sungguhan, bukan tambalan
+                state["drift_source"] = "imu"
+            else:
+                # Celah kelewat lama — jangan terus berkembang tanpa batas.
+                imu_vx, imu_vy = 0.0, 0.0
+                state["drift_vx"] = 0.0
+                state["drift_vy"] = 0.0
+                state["drift_quality"] = 0
+                state["drift_source"] = "none"
+
+        time.sleep(DRIFT_LOOP_INTERVAL)
 
 
 # =========================
@@ -1753,6 +1978,10 @@ def joystick_sender():
         # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
         mc = apply_heading_hold(mc, eff_axes)
 
+        # Rem surge/sway ala DJI — lihat apply_translation_brake untuk batas
+        # fisiknya (bukan position hold, cuma menghentikan momentum sendiri).
+        mc = apply_translation_brake(mc, eff_axes)
+
         try:
             with master_lock:
                 master.mav.manual_control_send(
@@ -1791,6 +2020,12 @@ def connect_pixhawk():
     if setup_mission5_runner() is not None:
         print("[M5] runner siap — toggle Autonomous di GUI akan menjalankan FSM")
 
+    # Tahap 2 drift sensing (default OFF, lihat OPTFLOW_TO_EKF di atas): arahkan
+    # EKF ArduSub memakai optical flow sebagai sumber kecepatan horizontal.
+    # Kalau OFF, param FC ini tidak disentuh sama sekali.
+    if OPTFLOW_TO_EKF:
+        set_param("EK3_SRC1_VELXY", 5, mavutil.mavlink.MAV_PARAM_TYPE_INT8)
+
     # Minta stream data secara periodik
     try:
         link.mav.request_data_stream_send(
@@ -1816,6 +2051,21 @@ def connect_pixhawk():
         )
     except Exception as e:
         print("[MAV] AHRS2 request warning:", e)
+
+    # Request SCALED_IMU2 (akselerasi body-frame, penambal celah drift IMU —
+    # lihat _last_body_accel & drift_estimator_thread)
+    try:
+        link.mav.command_long_send(
+            link.target_system,
+            link.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavutil.mavlink.MAVLINK_MSG_ID_SCALED_IMU2,
+            100000,      # 10 Hz (100000 µs)
+            0, 0, 0, 0, 0
+        )
+    except Exception as e:
+        print("[MAV] SCALED_IMU2 request warning:", e)
 
     # Request SERVO_OUTPUT_RAW (PWM thruster, untuk CSV tuning depth-hold)
     try:
@@ -1894,6 +2144,8 @@ def main():
     global prev_attitude_ts
     global _raw_depth
     global depth_target
+    global _last_body_rates
+    global _last_body_accel
 
     connect_pixhawk()
 
@@ -1901,6 +2153,7 @@ def main():
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=qgc_command_receiver, daemon=True).start()
+    threading.Thread(target=drift_estimator_thread, daemon=True).start()
 
     last_send = 0
     last_hb = 0
@@ -1973,6 +2226,7 @@ def main():
         # ATTITUDE: roll, pitch, yaw
         # --------------------------------
         if mtype == "ATTITUDE":
+            _last_body_rates = (msg.rollspeed, msg.pitchspeed, msg.yawspeed)
             now_ts = msg._timestamp
             dt = (now_ts - prev_attitude_ts) if prev_attitude_ts is not None else 0.1
             roll_f, pitch_f, yaw_f = attitude_filter.update(
@@ -1988,6 +2242,16 @@ def main():
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
             prev_attitude_ts = now_ts
+
+        # --------------------------------
+        # SCALED_IMU2: akselerasi body-frame mentah, penambal celah drift IMU
+        # (lihat _last_body_accel & drift_estimator_thread). mg -> m/s^2.
+        # --------------------------------
+        if mtype == "SCALED_IMU2":
+            _last_body_accel = (
+                msg.xacc * 9.80665 / 1000.0,
+                msg.yacc * 9.80665 / 1000.0,
+            )
 
         # --------------------------------
         # LOCAL_POSITION_NED: estimasi posisi EKF (utara/timur, meter).

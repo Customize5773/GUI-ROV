@@ -29,6 +29,7 @@ const els = {
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
+  hudDrift: $("hudDrift"),
   miniInstruments: $("miniInstruments"),
   miniCompass: $("miniCompass"), miniCompassDial: $("miniCompassDial"),
   miniCompassStatus: $("miniCompassStatus"), miniCompassBug: $("miniCompassBug"),
@@ -279,6 +280,27 @@ function applyTelemetry(d) {
   els.hudHeading.textContent = "HDG " + num(d.heading, 0) + "°";
   els.hudRoll.textContent = "R " + num(d.roll, 0) + "°";
   els.hudPitch.textContent = "P " + num(d.pitch, 0) + "°";
+
+  // Drift dari optical flow kamera bawah (rov_drift.py). drift_source:
+  // "flow" = bacaan visual segar, "imu" = tambalan celah singkat (accel
+  // terintegrasi, lihat integrate_accel di rov_drift.py — bukan dead-
+  // reckoning berkepanjangan, cuma jaga HUD tidak jatuh ke "tidak ada data"
+  // untuk gangguan sesaat), "none" = benar-benar tak ada bacaan.
+  if (els.hudDrift) {
+    const source = d.drift_source;
+    const hasDrift = (source === "flow" || source === "imu")
+      && Number.isFinite(d.drift_vx) && Number.isFinite(d.drift_vy);
+    if (hasDrift) {
+      const speed = Math.hypot(d.drift_vx, d.drift_vy);
+      const dirDeg = Math.round((Math.atan2(d.drift_vy, d.drift_vx) * 180 / Math.PI + 360) % 360);
+      const tag = source === "imu" ? " (IMU)" : "";
+      els.hudDrift.textContent = `DRIFT ${speed.toFixed(2)} m/s ${dirDeg}°${tag}`;
+      els.hudDrift.removeAttribute("data-stale");
+    } else {
+      els.hudDrift.textContent = "DRIFT —";
+      els.hudDrift.setAttribute("data-stale", "1");
+    }
+  }
 
   // Kompas gaya QGroundControl: dial berputar berlawanan arah heading,
   // pointer merah tetap diam di atas menunjukkan heading saat ini.

@@ -39,6 +39,7 @@ autonomy/Cleaned_underwater
 # Model 3D besar
 public/models/rov.obj
 log-m5
+log-GUI
 
 # Planning
 Planning/ANALISIS-PID-ROLL-PITCH.md
@@ -102,3 +103,12 @@ server/ROV10.log
 log-ROV/GUI12.log
 log-ROV/ROV01.log
 log-ROV/ROV02.log
+log-ROV/ROV3.log
+log-ROV/ROV5.log
+log-ROV/ROV8.log
+log-ROV/ROV9.log
+log-ROV/ROV10.log
+log-ROV/ROV11.log
+log-ROV/ROV12.log
+server/GUI01.log
+server/GUI21.log

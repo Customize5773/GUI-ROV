@@ -28,8 +28,8 @@ from rov_pid import (
 # Nilai gain yang benar-benar ada di Pixhawk wahana (parameters_ardusub.params).
 FC_NYATA = {
     "yaw": {"p": 0.18, "i": 0.018, "d": 0.0},
-    "roll": {"p": 0.135, "i": 0.09, "d": 0.0036},
-    "pitch": {"p": 0.135, "i": 0.09, "d": 0.0036},
+    "roll": {"p": 0.135, "i": 0.09, "d": 0.0036, "ang_p": 6.0},
+    "pitch": {"p": 0.135, "i": 0.09, "d": 0.0036, "ang_p": 6.0},
     "depth": {"p": 0.5, "i": 0.1, "d": 0.0},
 }
 
@@ -41,22 +41,22 @@ GUI_DEFAULT_LAMA = {
 
 
 class TestPeta(unittest.TestCase):
-    def test_dua_belas_gain_terpetakan(self):
-        self.assertEqual(len(PID_PARAM_MAP), 12)
-        self.assertEqual(len(PID_WRITE_ORDER), 12)
+    def test_empat_belas_gain_terpetakan(self):
+        self.assertEqual(len(PID_PARAM_MAP), 14)
+        self.assertEqual(len(PID_WRITE_ORDER), 14)
         self.assertEqual(set(PID_WRITE_ORDER), set(PID_PARAM_MAP))
 
     def test_nama_param_tanpa_duplikat(self):
         # Menjaga agar penambahan gain baru tidak menimpa param lama diam-diam.
         names = pid_param_names()
         self.assertEqual(len(set(names)), len(names))
-        self.assertEqual(len(PARAM_TO_PID), 12)
+        self.assertEqual(len(PARAM_TO_PID), 14)
 
     def test_nama_param_sesuai_keputusan(self):
         self.assertEqual(pid_param_names(), [
             "ATC_RAT_YAW_P", "ATC_RAT_YAW_I", "ATC_RAT_YAW_D",
-            "ATC_RAT_RLL_P", "ATC_RAT_RLL_I", "ATC_RAT_RLL_D",
-            "ATC_RAT_PIT_P", "ATC_RAT_PIT_I", "ATC_RAT_PIT_D",
+            "ATC_RAT_RLL_P", "ATC_RAT_RLL_I", "ATC_RAT_RLL_D", "ATC_ANG_RLL_P",
+            "ATC_RAT_PIT_P", "ATC_RAT_PIT_I", "ATC_RAT_PIT_D", "ATC_ANG_PIT_P",
             "PSC_ACCZ_P", "PSC_ACCZ_I", "PSC_ACCZ_D",
         ])
 
@@ -75,7 +75,7 @@ class TestPeta(unittest.TestCase):
         # BERJALAN di wahana, rentangnya yang salah.
         writes, rejects = resolve_pid_writes(FC_NYATA)
         self.assertEqual(rejects, [])
-        self.assertEqual(len(writes), 12)
+        self.assertEqual(len(writes), 14)
 
 
 class TestResolvePidWrites(unittest.TestCase):
