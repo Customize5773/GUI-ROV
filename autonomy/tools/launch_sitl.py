@@ -113,6 +113,10 @@ def build_plan(args):
                         "--fsm-vision-source", args.vision]
         if args.fsm:
             rov_link_cmd += ["--telem-extra", f"127.0.0.1:{args.fsm_telem_port}"]
+            # FSM di bawah adalah proses TERPISAH, jadi tak ada yang mengirim
+            # control_mode=autonomous ke rov_link. Tanpa flag ini gerbang
+            # anti-frame-basi di handle_command() membuang seluruh perintahnya.
+            rov_link_cmd += ["--external-fsm"]
         plan.append(("ROV_LINK", rov_link_cmd, AUTONOMY, None))
 
     if not args.no_gui:

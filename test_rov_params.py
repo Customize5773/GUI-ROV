@@ -22,7 +22,12 @@ INT8 = 2
 INT16 = 4
 INT32 = 6
 
-DUMP_PATH = os.path.join(os.path.dirname(__file__), "parameters_ardusub.params")
+# 22 Agu 2026: dump dipindah dari root repo ke parameter-pixhawk/ (tiga dump
+# dikumpulkan di satu folder). server/sim-params.js menunjuk lokasi yang sama —
+# keduanya HARUS ikut kalau file ini dipindah lagi, dan yang di server gagal
+# LUNAK (cuma warning), jadi test inilah yang menangkapnya.
+DUMP_PATH = os.path.join(os.path.dirname(__file__),
+                         "parameter-pixhawk", "parameters_ardusub.params")
 
 
 class TestTipeParam(unittest.TestCase):

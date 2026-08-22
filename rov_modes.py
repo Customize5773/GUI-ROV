@@ -69,14 +69,19 @@ POSHOLD_MODE = "poshold"
 
 # Mode yang jadi syarat bias depth-set (lihat depth_bias_engaged()).
 #
-# INI BUKAN saklar depth-set. Berada di STABILIZE tidak menyalakan depth-set,
+# INI BUKAN saklar depth-set. Berada di mode ini tidak menyalakan depth-set,
 # dan menyalakan depth-set tidak memindahkan mode — lihat depth_bias_engaged().
 #
 # MANUAL tidak masuk: tidak ada yang menahan kedalaman, bias hanya akan
 # mendorong wahana tanpa umpan balik.
-# ALT_HOLD/POSHOLD tidak masuk lagi: kedalaman sudah ditahan cascade PID
-# ArduSub sendiri di mode itu, depth-set kini dipasangkan ke STABILIZE.
-DEPTH_HOLD_MODES = frozenset({"STABILIZE"})
+# STABILIZE: bias jadi satu-satunya yang menahan kedalaman (tidak ada cascade
+# PID ArduSub di mode ini).
+# ALT_HOLD (menaungi GUI "depth_hold" & "poshold"): bias mendorong
+# MANUAL_CONTROL.z menjauh dari netral — mekanisme yang SAMA dengan operator
+# menyentuh stik heave untuk memindahkan target ALT_HOLD (lihat gerbang #3 di
+# apply_depth_hold_bias, rov_agent.py). Permintaan pilot 2026-08-22: depth
+# up/down harus aktif di semua mode kecuali Manual.
+DEPTH_HOLD_MODES = frozenset({"STABILIZE", "ALT_HOLD"})
 
 # Mode ArduSub tempat overlay POSHOLD menumpang. SENGAJA BUKAN DEPTH_HOLD_MODES:
 # itu syarat bias depth-set (kini STABILIZE), ini syarat overlay heading-hold

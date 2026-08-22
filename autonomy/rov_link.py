@@ -136,6 +136,14 @@ class RovLink:
         self.sp = {"surge": 0.0, "sway": 0.0, "yaw": 0.0, "heave": 0.0}
         self.light_on = False
         self.control_mode = "manual"
+        # FSM dijalankan sebagai PROSES TERPISAH (tools/launch_sitl.py --fsm),
+        # bukan lewat start_mission5() internal. Gerbang di handle_command()
+        # ada untuk membuang frame dari thread FSM internal yang belum benar-
+        # benar mati sesudah operator kembali ke manual — FSM eksternal bukan
+        # kasus itu, dan tak ada satu pun yang mengirim control_mode=autonomous
+        # ke sini pada jalur SITL, sehingga tanpa flag ini SELURUH perintahnya
+        # dibuang diam-diam (gejala: depth tetap 0.00, M5_REDIVE selalu timeout).
+        self.external_fsm = bool(getattr(args, "external_fsm", False))
         self.surface_hpa = SURFACE_HPA_DEFAULT
         self.last_press_abs = SURFACE_HPA_DEFAULT   # tekanan absolut terbaru (utk set_surface)
         self.lock = threading.Lock()
@@ -232,7 +240,8 @@ class RovLink:
             # timeout di stop_mission5) tidak boleh lolos begitu operator sudah
             # kembali ke manual — kalau tidak, axis autonomous lama terus
             # menimpa self.sp diam-diam.
-            if from_fsm and self.control_mode != "autonomous":
+            if (from_fsm and not self.external_fsm
+                    and self.control_mode != "autonomous"):
                 return
             # Kill-switch: axis nyata dari operator (bukan CommandSender milik FSM
             # sendiri, yang menandai frame-nya src='fsm') di atas deadzone, saat
@@ -470,6 +479,10 @@ def main():
     ap.add_argument("--mavlink", default="udpin:0.0.0.0:14555", help="endpoint MAVLink ke vehicle/SITL/mock")
     ap.add_argument("--baud", type=int, default=115200, help="baud (jika serial, mis. /dev/ttyACM0)")
     ap.add_argument("--hb-timeout", type=int, default=10, help="detik menunggu heartbeat vehicle sebelum menyerah")
+    ap.add_argument("--external-fsm", action="store_true",
+                    help="FSM misi 5 dijalankan sbg proses terpisah (tools/launch_sitl.py "
+                         "--fsm), bukan start_mission5() internal. Menerima frame src='fsm' "
+                         "tanpa menunggu toggle control_mode dari GUI.")
     ap.add_argument("--fsm-telem-port", type=int, default=FSM_TELEM_PORT_DEFAULT,
                      help="port loopback tempat Mission5FSM in-process menerima telemetri (auto-dikelola oleh toggle GUI)")
     ap.add_argument("--fsm-vision-source", default="usb", choices=["mock", "usb", "rtsp"],

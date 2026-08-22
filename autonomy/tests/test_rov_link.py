@@ -22,9 +22,10 @@ import rov_link
 from rov_link import RovLink, KILL_SWITCH_DEADZONE
 
 
-def _link(control_mode="autonomous"):
+def _link(control_mode="autonomous", external_fsm=False):
     """RovLink minimal tanpa MAVLink — cukup untuk menguji handle_command."""
     link = object.__new__(RovLink)
+    link.external_fsm = external_fsm
     link.sp = {"surge": 0.0, "sway": 0.0, "yaw": 0.0, "heave": 0.0}
     link.control_mode = control_mode
     link.lock = threading.Lock()
@@ -113,3 +114,37 @@ def test_konstanta_dan_axis_memakai_skala_yang_sama():
         "skala clamp di send_manual_control berubah — tinjau ulang "
         "KILL_SWITCH_DEADZONE bersamaan"
     )
+
+
+# ── Gerbang frame FSM: internal vs proses terpisah ──────────────────────────
+def test_frame_fsm_dibuang_saat_manual():
+    """Frame dari thread FSM INTERNAL yang belum mati (join timeout di
+    stop_mission5) tak boleh menimpa sp sesudah operator kembali ke manual."""
+    link = _link("manual", external_fsm=False)
+    link.handle_command("heave", -300, from_fsm=True)
+    assert link.sp["heave"] == 0.0, "frame FSM basi lolos padahal mode manual"
+
+
+def test_frame_fsm_eksternal_diterima_tanpa_toggle():
+    """FSM sebagai PROSES TERPISAH (tools/launch_sitl.py --fsm) harus diterima
+    walau control_mode masih 'manual'.
+
+    22 Agu 2026: gerbang di atas ditambahkan tanpa pengecualian ini, dan pada
+    jalur SITL tak ada satu pun yang mengirim control_mode=autonomous ke
+    rov_link (mengirimnya justru akan memanggil start_mission5() dan
+    memunculkan FSM KEDUA yang bentrok). Akibatnya SELURUH perintah FSM
+    dibuang diam-diam: depth tetap 0.00 dan M5_REDIVE selalu timeout ke
+    M5_FALLBACK — skenario B/C berhenti lolos jalur visual tanpa satu pun
+    pesan error."""
+    link = _link("manual", external_fsm=True)
+    link.handle_command("heave", -300, from_fsm=True)
+    assert link.sp["heave"] == -300, "perintah FSM eksternal dibuang"
+
+
+def test_fsm_eksternal_tidak_mematikan_kill_switch():
+    """--external-fsm melonggarkan gerbang untuk frame FSM, BUKAN untuk
+    operator. Kill-switch harus tetap menyala pada axis manual."""
+    link = _link("autonomous", external_fsm=True)
+    link.handle_command("surge", KILL_SWITCH_DEADZONE + 1, from_fsm=False)
+    assert link.control_mode == "manual"
+    assert ("stop_mission5",) in link.jejak

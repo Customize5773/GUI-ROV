@@ -48,26 +48,25 @@ class TestPoshold(unittest.TestCase):
         # atas ALT_HOLD — lihat docstring rov_modes.py.
         self.assertEqual(resolve_pilot_mode("poshold"), "ALT_HOLD")
 
-    def test_depth_hold_tidak_lagi_aktif_di_poshold(self):
-        # Bias depth-set sekarang dipasangkan ke STABILIZE (lihat
-        # DEPTH_HOLD_MODES), bukan ALT_HOLD/POSHOLD lagi — kedalaman di
-        # Alt Hold/Pos Hold sudah ditahan cascade PID ArduSub sendiri.
-        #
-        # CATATAN: ini TIDAK berarti overlay POSHOLD ikut mati di ALT_HOLD —
-        # gerbangnya poshold_mode_ok(), predikat yang berbeda. Menyatukan
-        # keduanya persis itulah yang dulu mematikan POSHOLD diam-diam.
-        self.assertFalse(depth_hold_allowed(resolve_pilot_mode("poshold")))
+    def test_depth_hold_aktif_di_poshold(self):
+        # Permintaan pilot 2026-08-22: depth up/down harus aktif di semua
+        # mode kecuali Manual — termasuk Pos Hold (ALT_HOLD). Bias di sini
+        # mendorong MANUAL_CONTROL.z sama seperti operator menyentuh stik
+        # heave, jadi bekerja berdampingan dengan cascade PID ArduSub.
+        self.assertTrue(depth_hold_allowed(resolve_pilot_mode("poshold")))
 
-    def test_gerbang_overlay_poshold_lepas_dari_depth_hold_modes(self):
-        # Overlay hidup di mode dasarnya (ALT_HOLD), dan HANYA di sana.
+    def test_gerbang_overlay_poshold_independen_dari_depth_hold_modes(self):
+        # Overlay heading-hold hidup di mode dasarnya (ALT_HOLD), dan HANYA
+        # di sana — predikat terpisah dari depth_hold_allowed(), keduanya
+        # sengaja tidak disatukan (lihat POSHOLD_BASE_MODE di rov_modes.py).
         self.assertTrue(poshold_mode_ok(resolve_pilot_mode("poshold")))
         self.assertTrue(poshold_mode_ok("ALT_HOLD"))
         for other in ("STABILIZE", "MANUAL", "ACRO", "", None):
             self.assertFalse(poshold_mode_ok(other), msg=repr(other))
 
-        # Regresi yang sebenarnya terjadi: DEPTH_HOLD_MODES dipersempit ke
-        # STABILIZE dan gerbang overlay ikut mati karena memakai predikat itu.
-        self.assertNotIn(resolve_pilot_mode("poshold"), DEPTH_HOLD_MODES)
+        # ALT_HOLD kini termasuk DEPTH_HOLD_MODES juga — cek eksplisit
+        # supaya perubahan sengaja ini tidak diam-diam ter-revert.
+        self.assertIn(resolve_pilot_mode("poshold"), DEPTH_HOLD_MODES)
 
     def test_is_poshold_request_membedakan_yang_resolve_tidak_bisa(self):
         # Keduanya berujung di ALT_HOLD, jadi hasil resolve_pilot_mode TIDAK
@@ -86,11 +85,12 @@ class TestDepthHoldGate(unittest.TestCase):
         self.assertTrue(depth_hold_allowed("STABILIZE"))
         self.assertIn("STABILIZE", DEPTH_HOLD_MODES)
 
-    def test_ditolak_di_alt_hold(self):
-        # Kedalaman di ALT_HOLD/POSHOLD sudah ditahan cascade PID ArduSub
-        # sendiri; bias depth-set tidak lagi jadi syarat mode ini.
-        self.assertFalse(depth_hold_allowed("ALT_HOLD"))
-        self.assertNotIn("ALT_HOLD", DEPTH_HOLD_MODES)
+    def test_diizinkan_di_alt_hold(self):
+        # ALT_HOLD (menaungi GUI "depth_hold" & "poshold") ikut diizinkan
+        # sejak 2026-08-22: pilot minta depth up/down aktif di semua mode
+        # kecuali Manual.
+        self.assertTrue(depth_hold_allowed("ALT_HOLD"))
+        self.assertIn("ALT_HOLD", DEPTH_HOLD_MODES)
 
     def test_ditolak_di_manual_dan_mode_tak_dikenal(self):
         for mode in ("MANUAL", "unknown", "", None, "ACRO"):
@@ -125,11 +125,12 @@ class TestDepthBiasEngaged(unittest.TestCase):
         # dianggap "belum di-set" dan depth-set diam-diam tidak bekerja.
         self.assertTrue(self.engaged(target=0.0))
 
-    def test_mode_bukan_stabilize(self):
-        # Sudah SET dan sudah ON, tapi wahana di mode lain: DEPTH_HOLD_MODES
-        # kini hanya STABILIZE — ALT_HOLD/POSHOLD/MANUAL semua ditolak.
-        for mode in ("MANUAL", "ALT_HOLD", None):
+    def test_mode_di_luar_depth_hold_modes(self):
+        # DEPTH_HOLD_MODES = {STABILIZE, ALT_HOLD}: MANUAL dan mode tak
+        # dikenal (None) tetap ditolak; ALT_HOLD sekarang lolos.
+        for mode in ("MANUAL", None):
             self.assertFalse(self.engaged(mode=mode), msg=repr(mode))
+        self.assertTrue(self.engaged(mode="ALT_HOLD"))
 
     def test_operator_memegang_stik_heave_menang(self):
         self.assertFalse(self.engaged(heave=21))

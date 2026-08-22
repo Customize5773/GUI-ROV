@@ -16,7 +16,11 @@
 const fs = require("fs");
 const path = require("path");
 
-const DUMP_PATH = path.join(__dirname, "..", "parameters_ardusub.params");
+// 22 Agu 2026: dump dipindah ke parameter-pixhawk/. Pemuatan ini gagal LUNAK
+// (server.js hanya mencetak warning), jadi path yang salah membuat halaman
+// Vehicle mode simulasi kosong tanpa error yang kelihatan.
+// Dikunci test_rov_params.py::test_dump_asli_di_repo.
+const DUMP_PATH = path.join(__dirname, "..", "parameter-pixhawk", "parameters_ardusub.params");
 
 // Padanan rov_params.PARAM_TYPES di sisi Python. Nilai enum MAV_PARAM_TYPE
 // bagian dari wire format MAVLink, jadi aman disalin.
