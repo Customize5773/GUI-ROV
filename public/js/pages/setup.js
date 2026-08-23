@@ -258,6 +258,25 @@ export const setupPage = {
             <span class="card__info" id="suPoolInfo">Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m</span>
           </div>
 
+          <!-- MISSION SCORING -->
+          <div class="card">
+            <span class="panel__eyebrow">MISSION SCORING</span>
+            <h3 class="card__title">Counter Trial Misi 2 &amp; 3</h3>
+            <p class="card__desc">Sesuai Guidebook KKI 2026 §4.7.4: skor 15/10/5 poin untuk
+              trial ke-1/2/&gt;2 pada Misi 2 (grab) &amp; Misi 3 (hang). Ditekan scorekeeper
+              saat melihat dari kamera percobaan gagal — Control page hanya menampilkan
+              angkanya (indikator), tidak ada tombol di sana supaya tak tersenggol pilot.</p>
+            <div class="card__row card__row--wrap">
+              <span class="card__info">Misi 2: trial <b id="suM2Fails">1</b> · <b id="suM2Score">15</b> pt</span>
+              <button class="btn-wide" id="suM2Fail">Gagal, Ulangi (Misi 2)</button>
+            </div>
+            <div class="card__row card__row--wrap">
+              <span class="card__info">Misi 3: trial <b id="suM3Fails">1</b> · <b id="suM3Score">15</b> pt</span>
+              <button class="btn-wide" id="suM3Fail">Gagal, Ulangi (Misi 3)</button>
+            </div>
+            <button class="btn-wide" id="suResetCounter">Reset Counter (Misi Baru)</button>
+          </div>
+
           <!-- MOBILE COMPANION -->
           <div class="card">
             <span class="panel__eyebrow">MOBILE COMPANION</span>
@@ -640,6 +659,18 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m`, "ok");
     };
 
+    /* MISSION SCORING */
+    this.els.suM2Fails = root.querySelector("#suM2Fails");
+    this.els.suM2Score = root.querySelector("#suM2Score");
+    this.els.suM3Fails = root.querySelector("#suM3Fails");
+    this.els.suM3Score = root.querySelector("#suM3Score");
+    root.querySelector("#suM2Fail").onclick = () => sendCmd("mission_counter", { mission: "m2", event: "fail" });
+    root.querySelector("#suM3Fail").onclick = () => sendCmd("mission_counter", { mission: "m3", event: "fail" });
+    root.querySelector("#suResetCounter").onclick = () => {
+      sendCmd("mission_counter", { event: "reset" });
+      log("Counter trial Misi 2/3 di-reset", "ok");
+    };
+
     /* MOBILE COMPANION */
     root.querySelector("#suCopyLink").onclick = async () => {
       try { await navigator.clipboard.writeText(root.querySelector("#suViewerLink").href); log("Link viewer disalin", "ok"); }
@@ -663,6 +694,17 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
      sesi, jadi tanpa ini form jadi basi setelah FC tersambung ulang atau
      setelah param diubah dari halaman Vehicle. */
   onShow() { this.readPidFromVehicle(); },
+
+  /* Readout live Counter trial Misi 2/3 (lihat card MISSION SCORING) — app.js
+     meneruskan tiap sampel telemetry ke sini lewat m.onTelemetry(d). */
+  onTelemetry(d) {
+    const mc = d.mission_counter;
+    if (!mc || !this.els.suM2Fails) return;
+    this.els.suM2Fails.textContent = mc.m2_fails + 1;
+    this.els.suM2Score.textContent = mc.m2_score;
+    this.els.suM3Fails.textContent = mc.m3_fails + 1;
+    this.els.suM3Score.textContent = mc.m3_score;
+  },
 
   /* param_get bersifat fire-and-forget: agent mengirim param_request_read_send
      tanpa retry, jadi SATU paket hilang di link serial/UDP = tidak ada

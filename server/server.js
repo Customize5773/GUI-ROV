@@ -560,6 +560,14 @@ const simState = {
   poshold: false,
 };
 
+// Counter trial Misi 2/3 palsu (padanan mission_counter_fails di rov_agent.py)
+// — supaya tim bisa latihan pakai Guidebook §4.7.4 tanpa Pixhawk/Pi sama sekali.
+const simMissionCounterFails = { m2: 0, m3: 0 };
+function simTierScore(fails) {
+  const trial = fails + 1;
+  return trial === 1 ? 15 : trial === 2 ? 10 : 5;
+}
+
 /* Tabel param palsu (halaman Vehicle) — diisi saat start() bila mode SIM.
    Sumbernya dump nyata dari Pixhawk, lihat server/sim-params.js. */
 const { SimParams, resolvePidWrites } = require("./sim-params");
@@ -867,6 +875,20 @@ function applySimCommand(name, value, msg) {
       console.log(`[SIM] depth-set ${want ? "ON" : "OFF"}`);
       break;
     }
+
+    // Counter trial Misi 2/3 — padanan handler mission_counter di rov_agent.py.
+    case "mission_counter": {
+      const mission = value && value.mission;
+      const event = value && value.event;
+      if (event === "reset") {
+        simMissionCounterFails.m2 = 0;
+        simMissionCounterFails.m3 = 0;
+      } else if (event === "fail" && mission in simMissionCounterFails) {
+        simMissionCounterFails[mission] += 1;
+      }
+      console.log(`[SIM] Counter ${mission || "ALL"}: ${event} ->`, simMissionCounterFails);
+      break;
+    }
   }
 }
 
@@ -900,6 +922,12 @@ if (SIM) {
         pool_depth: simPoolDepth,
         depth_target: simDepthTarget,
         depth_hold: simDepthHoldEnabled,
+        mission_counter: {
+          m2_fails: simMissionCounterFails.m2,
+          m2_score: simTierScore(simMissionCounterFails.m2),
+          m3_fails: simMissionCounterFails.m3,
+          m3_score: simTierScore(simMissionCounterFails.m3),
+        },
       },
       recv: Date.now(),
     });

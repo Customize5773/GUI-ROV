@@ -643,8 +643,14 @@ class VisionPipeline:
         """
         if self._wall_clf is None:
             return
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
         try:
-            out = self._wall_clf.predict_frame(frame)
+            # locate() dulu (murni cv2.QRCodeDetector.detect — TAK butuh decode
+            # berhasil), lalu oper pts-nya ke predict_frame supaya tak dideteksi
+            # dua kali. pts jugadipakai di bawah utk center/area — sinyal arah
+            # kasar buat SCAN_QR mendekat sebelum decode penuh berhasil.
+            pts = self._wall_clf.locate(gray)
+            out = self._wall_clf.predict_frame(frame, pts=pts) if pts is not None else None
         except Exception as e:            # fallback tak boleh menjatuhkan loop kamera
             log.debug("[vision] wall-CNN error: %s", e)
             return
@@ -653,9 +659,15 @@ class VisionPipeline:
         if stable is None:
             self._last_wall_hint = None
             return
+        center = area = None
+        if pts is not None:
+            center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
+            area = float(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32)))
         self._last_wall_hint = {
             'type': 'wall_hint', 'wall': stable, 'confidence': float(conf),
             'source': 'cnn_fallback', 'validated': False,
+            'center': center, 'area': area,   # lokasi QUAD kasar (bukan dari decode) —
+                                               # SCAN_QR pakai ini utk mendekat, BUKAN target_wall.
             'frame_w': frame.shape[1], 'frame_h': frame.shape[0],
             'timestamp': time.time(),
         }

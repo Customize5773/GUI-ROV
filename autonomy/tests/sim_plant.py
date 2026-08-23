@@ -348,12 +348,18 @@ class SimVision:
         self._hook_last_call_t = None
         self._last = None
         self._last_hook = None
+        self.wall_hint = None         # test bisa set manual utk uji SCAN_QR creep
 
     def start(self):
         pass
 
     def stop(self):
         pass
+
+    def latest_wall_hint(self, max_age=1.0) -> Optional[dict]:
+        """Default None (skenario biasa decode langsung sukses, tak pernah lewat
+        jalur creep). Set `vision.wall_hint = {...}` di test utk mensimulasikannya."""
+        return self.wall_hint
 
     def latest_qr(self, max_age=1.0) -> Optional[dict]:
         self._count += 1

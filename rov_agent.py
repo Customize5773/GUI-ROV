@@ -173,6 +173,9 @@ state = {
     # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
     # ke GUI); yang ini menandai perintah tidak sampai ke Pi.
     "cmd_link": "ok",
+    # Counter trial Misi 2/3 (command `mission_counter`) — default trial 1/skor 15
+    # sebelum pilot menekan "Gagal, Ulangi" atau "Reset" pertama kali.
+    "mission_counter": {"m2_fails": 0, "m2_score": 15, "m3_fails": 0, "m3_score": 15},
     # Untuk tuning PID depth-hold (halaman Telemetry, ekspor CSV): rata-rata
     # PWM T3/T4/T5 dari SERVO_OUTPUT_RAW, dan P/I/D dari PID_TUNING (axis
     # ACCZ). Tetap 0 kalau FC tidak mengirim pesan itu (mis. PID_TUNING_MASK
@@ -304,6 +307,20 @@ _depth_pulse_dir = 0
 # kalau ia terhapus, bukan menemukannya saat wahana sudah menyelam.
 marked_heading = None
 marked_depth = None
+
+# Hitungan trial gagal Misi 2 (grab) & Misi 3 (hang), command `mission_counter`.
+# Skor 15/10/5 per Guidebook KKI 2026 §4.7.4 ditentukan dari jumlah trial —
+# ROV tak punya sensor grip-force, jadi gagal/sukses dilihat & ditandai pilot
+# dari kamera secara langsung. Sengaja HANYA di memori sama seperti marked_*
+# di atas: hilang saat restart, satu run lomba 10 menit.
+mission_counter_fails = {"m2": 0, "m3": 0}
+
+
+def _tier_score(fails: int) -> int:
+    """Skor trial per Guidebook §4.7.4: trial 1=15, trial 2=10, trial >2=5."""
+    trial = fails + 1
+    return 15 if trial == 1 else 10 if trial == 2 else 5
+
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
@@ -1555,6 +1572,31 @@ def command_listener():
                     "text": (f"Gantungan ditandai — heading {marked_heading:.0f}° "
                              f"depth {marked_depth:.2f} m"),
                     "level": "ok",
+                })
+
+            elif name == "mission_counter":
+
+                # Counter trial Misi 2/3 (Guidebook §4.7.4) — pilot menekan
+                # "Gagal, Ulangi" saat melihat sendiri dari kamera bahwa
+                # grab/hang gagal (tak ada sensor grip-force di ROV ini).
+                mission = (value or {}).get("mission")
+                event = (value or {}).get("event")
+                if event == "reset":
+                    mission_counter_fails["m2"] = 0
+                    mission_counter_fails["m3"] = 0
+                elif event == "fail" and mission in mission_counter_fails:
+                    mission_counter_fails[mission] += 1
+                state["mission_counter"] = {
+                    "m2_fails": mission_counter_fails["m2"],
+                    "m2_score": _tier_score(mission_counter_fails["m2"]),
+                    "m3_fails": mission_counter_fails["m3"],
+                    "m3_score": _tier_score(mission_counter_fails["m3"]),
+                }
+                print(f"[COUNTER] {mission or 'ALL'}: {event} → {state['mission_counter']}")
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Counter {mission or 'semua misi'}: {event}",
+                    "level": "warn" if event == "fail" else "ok",
                 })
 
             elif name in ("depth_up", "depth_down"):

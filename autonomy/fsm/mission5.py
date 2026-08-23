@@ -72,6 +72,13 @@ ASCEND_SPEED          = 30     # % thruster vertikal saat naik
 SURGE_SPEED           = 35     # % surge saat navigasi horizontal
 YAW_SPEED             = 25     # % yaw saat rotasi
 
+# SCAN_QR dulu cuma yaw di tempat menunggu decode penuh — di air keruh QR baru terbaca
+# dari jarak jauh lebih dekat drpd air jernih (24 Agu: foto lapangan gagal decode walau QR
+# sudah cukup besar di frame), jadi "spin & hope" sering timeout. SCAN_CREEP_MAX_SPEED
+# membatasi seberapa cepat ROV boleh mendekat ke TEBAKAN CNN wall-hint (BELUM tervalidasi
+# decode, lihat latest_wall_hint) — pelan drpd servo docking biasa krn sumbernya bisa salah.
+SCAN_CREEP_MAX_SPEED  = 18     # % — TUNE di kolam (lebih pelan dari servo docking tervalidasi)
+
 TIMEOUT_DIVE          = 15.0   # detik max untuk menyelam
 TIMEOUT_SCAN          = 20.0   # detik max untuk scan QR
 TIMEOUT_GRAB          = 10.0   # detik max untuk ambil payload
@@ -304,6 +311,14 @@ class Mission5FSM:
         self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
                                     kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
                                     kp_vert=PBVS_KP_VERT, **SERVO_INVERT)        # PBVS (meter)
+        # Servo "creep" SCAN_QR — mendekat ke tebakan CNN wall-hint (BELUM tervalidasi
+        # decode) sebelum decode penuh berhasil, gantikan yaw-di-tempat murni saat air
+        # keruh butuh jarak baca lebih dekat. Target sama dgn SERVO_TARGET_AREA (satu
+        # knob jarak) tapi max_speed jauh lebih pelan & tanpa yaw-align (sumber kasar).
+        self.scan_creep_servo = VisualServo(target_area=SERVO_TARGET_AREA, kp_yaw=0.0,
+                                            kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
+                                            kp_vert=IBVS_KP_VERT, max_speed=SCAN_CREEP_MAX_SPEED,
+                                            **SERVO_INVERT)
         # Servo docking ke HOOK (misi 3b HANG + misi 4 DOCK). Gain sama spt docking QR
         # (reuse kelas yang sama), hanya target area/jarak khusus hook.
         self.hook_servo      = VisualServo(target_area=HOOK_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
@@ -534,8 +549,31 @@ class Mission5FSM:
             self._score['m1'] = 15
             log.info("[FSM] ✓ Misi 1 selesai (+15 poin)")
             self.cmd.stop_all()
+            self.scan_creep_servo.reset()
             self._transition(State.GRAB)
+            return
+
+        # Decode penuh belum berhasil — kalau CNN wall-hint (lihat qr_detect.py
+        # latest_wall_hint) menemukan bentuk QR meski tak terbaca, mendekat ke situ
+        # alih-alih cuma diam berputar (air keruh butuh jarak baca lebih dekat).
+        # Tebakan BELUM tervalidasi: dipakai HANYA utk arah/jarak kasar, TIDAK
+        # pernah mengisi self._target_wall (itu hanya dari decode penuh di atas).
+        hint = self.vision.latest_wall_hint(max_age=1.0)
+        if hint and hint.get('center') is not None and hint.get('area') is not None:
+            out = self.scan_creep_servo.step(hint['center'][0], hint['center'][1],
+                                              hint['area'], hint['frame_w'], hint['frame_h'],
+                                              dt=0.1)
+            if out.aligned:
+                # Sudah sedekat target engage tapi decode masih gagal — jangan terus
+                # maju berbekal tebakan tak tervalidasi (risiko tabrak dinding). Diam,
+                # tetap coba decode tiap tick sampai TIMEOUT_SCAN.
+                self.cmd.stop_all()
+            else:
+                self.cmd.send(surge=out.surge, sway=out.sway, vert=out.vert)
+            log.debug("[FSM] SCAN_QR mendekat ke tebakan wall=%s conf=%.2f aligned=%s",
+                      hint['wall'], hint['confidence'], out.aligned)
         else:
+            self.scan_creep_servo.reset()
             # Rotasi perlahan untuk cari QR
             self.cmd.send(yaw=YAW_SPEED)
             log.debug("[FSM] SCAN_QR mencari QR elapsed=%.1fs", elapsed)

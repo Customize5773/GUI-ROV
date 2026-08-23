@@ -12,6 +12,12 @@ const CHANNELS = [
   { key: "depth", title: "Depth", unit: "m" },
   { key: "pitch", title: "Pitch", unit: "°" },
   { key: "roll", title: "Roll", unit: "°" },
+  { key: "pidRollP", title: "Roll PID P", unit: "" },
+  { key: "pidRollI", title: "Roll PID I", unit: "" },
+  { key: "pidRollD", title: "Roll PID D", unit: "" },
+  { key: "pidPitchP", title: "Pitch PID P", unit: "" },
+  { key: "pidPitchI", title: "Pitch PID I", unit: "" },
+  { key: "pidPitchD", title: "Pitch PID D", unit: "" },
 ];
 
 // Orientasi mengikuti tabel resmi di CONTROL-MAPPING.md §5.1 (Frame & mixing):
@@ -114,6 +120,8 @@ export const telemetryPage = {
       mode: d.mode || "unknown",
       thrusterVerticalPwm: d.thruster_vertical_pwm || 0,
       pidP: d.pid_p_out || 0, pidI: d.pid_i_out || 0, pidD: d.pid_d_out || 0,
+      pidRollP: d.pid_roll_p_out || 0, pidRollI: d.pid_roll_i_out || 0, pidRollD: d.pid_roll_d_out || 0,
+      pidPitchP: d.pid_pitch_p_out || 0, pidPitchI: d.pid_pitch_i_out || 0, pidPitchD: d.pid_pitch_d_out || 0,
       // POSHOLD: setpoint heading + status overlay. Tanpa dua kolom ini,
       // menyetel HEADING_P (rov_heading.py) sesudah trial jadi tebak-tebakan.
       // null (belum di-seed) sengaja diekspor sebagai kolom kosong, bukan 0 —
@@ -133,6 +141,8 @@ export const telemetryPage = {
         real.depthSetpoint === null ? "" : real.depthSetpoint.toFixed(3),
         real.mode, real.thrusterVerticalPwm,
         real.pidP.toFixed(3), real.pidI.toFixed(3), real.pidD.toFixed(3),
+        real.pidRollP.toFixed(3), real.pidRollI.toFixed(3), real.pidRollD.toFixed(3),
+        real.pidPitchP.toFixed(3), real.pidPitchI.toFixed(3), real.pidPitchD.toFixed(3),
         depthError === null ? "" : depthError.toFixed(3),
         real.headingSetpoint === null ? "" : real.headingSetpoint.toFixed(2),
         real.poshold ? 1 : 0,
@@ -195,7 +205,7 @@ export const telemetryPage = {
   },
   _exportCsv() {
     if (!this.csvRows.length) { log("Tidak ada sampel untuk diekspor", "warn"); return; }
-    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,depth_error,heading_setpoint,poshold,depth_hold";
+    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,pid_roll_p_out,pid_roll_i_out,pid_roll_d_out,pid_pitch_p_out,pid_pitch_i_out,pid_pitch_d_out,depth_error,heading_setpoint,poshold,depth_hold";
     const blob = new Blob([header + "\n" + this.csvRows.join("\n")], { type: "text/csv" });
     const trial = parseInt(document.getElementById("teleTrial")?.value, 10) || 1;
     const a = document.createElement("a");

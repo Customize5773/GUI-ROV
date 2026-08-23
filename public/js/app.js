@@ -54,11 +54,13 @@ const els = {
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
+  m2Fails: $("m2Fails"), m2Score: $("m2Score"), m3Fails: $("m3Fails"), m3Score: $("m3Score"),
   runLastFile: $("runLastFile"), runLastResult: $("runLastResult"),
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
-  vQR: $("vQR"), qrReadout: $("qrReadout"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"),
   depthHoldBadge: $("depthHoldBadge"),
+  cmdLinkBanner: $("cmdLinkBanner"),
   markBadge: $("markBadge"),
   modeActual: $("modeActual"),
 };
@@ -385,6 +387,7 @@ function applyTelemetry(d) {
   }
 
   applyMission5(d.mission5);
+  applyMissionCounter(d.mission_counter);
 
   // teruskan sampel ke modul halaman yang sudah di-init (buffering murah;
   // render sebenarnya digerbang oleh onShow/onHide)
@@ -400,6 +403,7 @@ function applyTelemetry(d) {
   els.depthTarget.textContent = num(d.depth_target, 2);
   applyDepthHold(d);
   applyMarkBadge(d);
+  applyCmdLink(d);
 }
 
 /* Badge status depth-hold, read-only — tidak ada saklar manual lagi.
@@ -426,6 +430,13 @@ function applyDepthHold(d) {
 
   els.depthHoldBadge.textContent = holding ? "DEPTH-HOLD ON" : "DEPTH-HOLD OFF";
   els.depthHoldBadge.classList.toggle("badge--ok", holding);
+}
+
+/* banner "LINK PERINTAH TERPUTUS" — nyala saat Pi substitusi axis netral
+   karena link joystick/dashboard timeout (fail-safe di rov_agent.py). */
+function applyCmdLink(d) {
+  if (!els.cmdLinkBanner) return;
+  els.cmdLinkBanner.hidden = d.cmd_link !== "stale";
 }
 
 /* overlay bbox+confidence deteksi hook (kamera WALL) di atas #camImg — nilai
@@ -463,6 +474,7 @@ function drawHookBbox(m5) {
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
   _pyQrData = (m5 && m5.qr_data) || null;
+  _pyQrWall = (m5 && m5.qr_wall) || null;
   _pyQrAt = Date.now();
   renderQrReadout();
 
@@ -494,6 +506,15 @@ function applyMission5(m5) {
   if ((state === "DONE" || state === "ABORT") && state !== _lastM5State)
     setTimeout(refreshLastRun, 1500);
   _lastM5State = state;
+}
+
+/* Counter trial Misi 2/3 (Guidebook KKI 2026 §4.7.4) — mc = {m2_fails, m2_score, m3_fails, m3_score} */
+function applyMissionCounter(mc) {
+  if (!els.m2Fails) return;
+  els.m2Fails.textContent = mc ? mc.m2_fails + 1 : 1;
+  els.m2Score.textContent = mc ? mc.m2_score : 15;
+  els.m3Fails.textContent = mc ? mc.m3_fails + 1 : 1;
+  els.m3Score.textContent = mc ? mc.m3_score : 15;
 }
 
 /* Ringkasan run autonomous terakhir — historis, jadi lewat HTTP (bukan WS live).
@@ -580,7 +601,7 @@ setInterval(() => {
    Python belum/tidak aktif, supaya operator tetap lihat indikasi saat manual. */
 const qrScanCanvas = document.createElement("canvas");
 let _lastQrScan = 0;
-let _pyQrData = null, _pyQrAt = 0;
+let _pyQrData = null, _pyQrWall = null, _pyQrAt = 0;
 let _clientQrData = null;
 const PY_QR_FRESH_MS = 3000;
 
@@ -588,14 +609,21 @@ function renderQrReadout() {
   if (!els.vQR) return;
   const pyFresh = _pyQrData && (Date.now() - _pyQrAt < PY_QR_FRESH_MS);
   const val = pyFresh ? _pyQrData : _clientQrData;
+  const wall = pyFresh ? _pyQrWall : null;
   if (val) {
     els.vQR.textContent = val;
-    els.vQR.title = val;
+    els.vQR.title = `${val} — sumber: ${pyFresh ? "vision Python" : "scan lokal (browser)"}`;
     els.qrReadout.classList.add("is-ok");
   } else {
     els.vQR.textContent = "—";
     els.vQR.removeAttribute("title");
     els.qrReadout.classList.remove("is-ok");
+  }
+  els.qrReadout.classList.toggle("is-py", !!pyFresh);
+  if (els.vQRSide) {
+    els.vQRSide.textContent = wall || "";
+    els.vQRSide.classList.toggle("qr__side--ok", !!wall);
+    els.vQRSide.hidden = !wall;
   }
 }
 
@@ -1784,6 +1812,10 @@ $("btnSetSurface").onclick = () => {
 $("btnMarkHook").onclick = () => {
   sendCmd("mark_hook", true);
 };
+
+/* Counter trial Misi 2/3 — Control HANYA indikator (readout diisi lewat
+   applyMissionCounter). Tombol aksinya ada di Setup, bukan di sini, supaya
+   tidak tersenggol pilot saat pegang stik. */
 
 /* gripper open/close (dipakai misi 2 & 5) — tombol + keyboard H/G */
 /* ===================== MANIPULATOR ===================== */

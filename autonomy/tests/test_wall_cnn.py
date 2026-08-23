@@ -216,12 +216,18 @@ def test_wall_hint_never_leaks_into_latest_qr():
 
     cam = VisionPipeline(source='mock', wall_cnn=True, wall_cnn_votes=1)
     frame = np.full((480, 640, 3), 128, np.uint8)
-    cam._wall_clf = type('F', (), {'predict_frame': staticmethod(lambda f, pts=None: ('C', 0.99))})()
+    _fake_pts = np.array([[280, 200], [360, 200], [360, 280], [280, 280]], dtype=np.float32)
+    cam._wall_clf = type('F', (), {
+        'locate': staticmethod(lambda g: _fake_pts),
+        'predict_frame': staticmethod(lambda f, pts=None: ('C', 0.99)),
+    })()
     cam._try_wall_fallback(frame)
 
     hint = cam.latest_wall_hint()
     assert hint is not None and hint['wall'] == 'C'
     assert hint['validated'] is False, "hint fallback WAJIB ditandai tak tervalidasi"
+    assert hint['center'] == (320, 240), "center dari pts QUAD locate(), utk creep SCAN_QR"
+    assert hint['area'] == 80.0 * 80.0, "area dari pts QUAD locate() (80x80 di _fake_pts)"
     assert cam.latest_qr() is None, "fallback BOCOR ke latest_qr() — bahaya!"
     assert cam.last_result() is None, "fallback tak boleh jadi hasil deteksi QR"
 
@@ -232,7 +238,11 @@ def test_wall_hint_expires_like_other_detections():
     _weights_or_skip()
     from vision.qr_detect import VisionPipeline
     cam = VisionPipeline(source='mock', wall_cnn=True, wall_cnn_votes=1)
-    cam._wall_clf = type('F', (), {'predict_frame': staticmethod(lambda f, pts=None: ('B', 0.95))})()
+    _fake_pts = np.array([[280, 200], [360, 200], [360, 280], [280, 280]], dtype=np.float32)
+    cam._wall_clf = type('F', (), {
+        'locate': staticmethod(lambda g: _fake_pts),
+        'predict_frame': staticmethod(lambda f, pts=None: ('B', 0.95)),
+    })()
     cam._try_wall_fallback(np.full((480, 640, 3), 128, np.uint8))
     assert cam.latest_wall_hint(max_age=10) is not None
     assert cam.latest_wall_hint(max_age=-1) is None, "hint basi harus ditolak"

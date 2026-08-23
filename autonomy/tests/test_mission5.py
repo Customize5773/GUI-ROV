@@ -109,6 +109,46 @@ def test_payload_validation_accepts_legacy_non_json():
     assert fsm._is_target_payload({'payload': None})   # QR string biasa → tak divalidasi
 
 
+# ── SCAN_QR: creep ke wall-hint (belum tervalidasi) vs fallback yaw-sweep ────
+def test_scan_qr_creeps_toward_wall_hint_without_setting_target():
+    fsm = _make_fsm()
+    fsm.vision.wall_hint = {
+        'wall': 'B', 'confidence': 0.9,
+        'center': (500, 240), 'area': 500.0,   # jauh dari tengah & dari target_area
+        'frame_w': 800, 'frame_h': 480,
+    }
+    fsm._state_scan_qr(telem={}, vis=None)
+    axes = fsm.cmd.plant._in
+    assert axes['yaw'] == 0, "creep tak boleh yaw — tebakan CNN kasar, bukan align presisi"
+    assert axes['surge'] > 0, "area << target_area → harus maju mendekat"
+    assert axes['sway'] != 0, "center jauh dari tengah frame → harus geser"
+    assert fsm._target_wall is None, "hint TAK tervalidasi, tak boleh mengisi target_wall"
+
+
+def test_scan_qr_falls_back_to_yaw_sweep_without_hint():
+    fsm = _make_fsm()
+    fsm.vision.wall_hint = None
+    fsm._state_scan_qr(telem={}, vis=None)
+    axes = fsm.cmd.plant._in
+    assert axes['yaw'] == m5.YAW_SPEED, "tanpa hint sama sekali → perilaku lama (yaw di tempat)"
+    assert axes['surge'] == 0
+
+
+def test_scan_qr_stops_creep_once_aligned_without_decode():
+    """Sudah sedekat target engage tapi decode masih gagal → diam, JANGAN terus maju
+    berbekal tebakan tak tervalidasi (risiko tabrak dinding)."""
+    fsm = _make_fsm()
+    fsm.vision.wall_hint = {
+        'wall': 'B', 'confidence': 0.9,
+        'center': (400, 240), 'area': m5.SERVO_TARGET_AREA,   # persis di tengah & di target
+        'frame_w': 800, 'frame_h': 480,
+    }
+    for _ in range(10):   # servo butuh beberapa tick beruntun in-tolerance agar 'aligned'
+        fsm._state_scan_qr(telem={}, vis=None)
+    axes = fsm.cmd.plant._in
+    assert axes['surge'] == 0 and axes['sway'] == 0 and axes['yaw'] == 0
+
+
 # ── Unit: VisualServo (IBVS) konvergen ke aligned ────────────────────────────
 def test_visual_servo_converges_when_centered():
     servo = VisualServo(target_area=3000.0, aligned_frames=3)
