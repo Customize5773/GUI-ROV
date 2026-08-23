@@ -29,7 +29,8 @@ from vision.qr_detect import wall_from_qr, parse_payload
 from fsm.mission5 import Mission5FSM, State
 from config.loader import read_file, flatten, load_config, apply_config
 from tests.evaluate_mission5 import run_scenario
-from tests.sim_plant import FakeClock, SimPlant, SimCommandLink, SimTelemetry, SimVision
+from tests.sim_plant import (FakeClock, SimPlant, SimCommandLink, SimTelemetry,
+                             SimVision, install_fake_time)
 
 
 def _make_fsm():
@@ -698,7 +699,8 @@ def test_gripper_pwm_sama_dengan_gripper_controller():
 
 # ── MARK gantungan: arah M5_REDIVE tanpa koordinat x/y ──────────────────────
 def _fsm_with_mark(heading=None, depth=None):
-    from tests.sim_plant import FakeClock, SimPlant, SimCommandLink, SimTelemetry, SimVision
+    from tests.sim_plant import (FakeClock, SimPlant, SimCommandLink, SimTelemetry,
+                             SimVision, install_fake_time)
     clock, plant = FakeClock(), SimPlant()
     return m5.Mission5FSM(SimCommandLink(plant), SimTelemetry(plant),
                           SimVision(plant, clock),
@@ -764,5 +766,183 @@ def test_mark_depth_dipakai_sebagai_target_selam():
 
     sent.clear()
     fsm._state_m5_redive({'depth': 0.24, 'heading': 90.0})   # sudah di level mark
-    assert sent and sent[-1].get('vert', 0) == 0, (
-        f"pada 0.24 m sudah dianggap sampai (mark 0.25), tak boleh menyelam lagi: {sent[-1]}")
+    # Sampai di level mark → berhenti menyelam & serahkan ke pencarian lateral.
+    assert fsm._state == m5.State.M5_SEARCH, (
+        f"pada 0.24 m sudah dianggap sampai (mark 0.25), harus lanjut mencari: {fsm._state}")
+    assert not any(kw.get('vert', 0) < 0 for kw in sent), (
+        f"tak boleh menyelam lagi setelah sampai: {sent}")
+
+
+# ── M5_SEARCH: pencarian lateral kembali ke gantungan ────────────────────────
+# MARK cuma memberi heading+depth (2 dari 3 DOF). Posisi SEPANJANG dinding tak
+# diketahui — sapu yaw di tempat tak bisa memperbaikinya. Test di bawah mengunci
+# perilaku ladder yang menyisir dimensi ketiga itu.
+
+def _search_fsm(heading=90.0, depth=0.45, lat=0.0, hint=None, wall_heading=90.0):
+    """FSM yang SUDAH berada di M5_SEARCH, dgn plant bersimulasi lateral.
+
+    Jam FSM DIVIRTUALKAN (install_fake_time) — tanpa itu `phase_el` memakai waktu
+    NYATA sementara test memajukan waktu simulasi, jadi sub-fase ladder tak pernah
+    berganti dan testnya jadi bohong."""
+    clock = FakeClock()
+    plant = SimPlant(sim_lateral=True, wall_heading=wall_heading, lat=lat)
+    plant.s.armed = True
+    plant.s.depth = depth
+    plant.s.heading = heading
+    vision = SimVision(plant, clock)
+    vision.wall_hint = hint
+    fsm = m5.Mission5FSM(SimCommandLink(plant), SimTelemetry(plant), vision,
+                         marked_heading=wall_heading, marked_depth=depth)
+    install_fake_time(m5, clock)                 # WAJIB: samakan jam FSM & jam sim
+    fsm._transition(m5.State.M5_SEARCH)          # memakai blok reset sungguhan
+    fsm._state_t = m5.time.time()
+    return fsm, plant, clock
+
+
+def _run_search(fsm, plant, clock, ticks, dt=0.1):
+    """Jalankan _state_m5_search N tick, majukan jam & integrasikan plant."""
+    for _ in range(ticks):
+        if fsm._state != m5.State.M5_SEARCH:
+            break
+        fsm._state_m5_search(plant.telemetry())
+        clock.sleep(dt)
+        plant.step(dt)
+
+
+def test_m5_search_holds_depth():
+    """Pencarian berlangsung puluhan detik — kedalaman TIDAK boleh hanyut.
+
+    Cabang sapu lama mengirim send(yaw=…) tanpa vert sama sekali, jadi ROV yang
+    sedikit apung naik pelan-pelan dan QR keluar dari FOV justru saat dicari."""
+    fsm, plant, clock = _search_fsm(depth=0.45, lat=99.0)     # lat besar = tak akan ketemu
+    plant.s.depth = 0.60                                # mulai 0.15 m di bawah target
+    _run_search(fsm, plant, clock, 400)
+    assert abs(plant.s.depth - 0.45) <= 2 * m5.DEPTH_TOLERANCE, (
+        f"kedalaman hanyut ke {plant.s.depth:.2f} (target 0.45)")
+
+
+def test_m5_search_ladder_widens_and_alternates():
+    """Leg harus MEMBESAR & berganti sisi tiap putaran — itu yang membuat cakupan
+    melebar mengelilingi titik mark, bukan menyisir satu sisi saja."""
+    fsm, plant, clock = _search_fsm(lat=99.0)
+    legs, dirs = [], []
+    prev = fsm._search_phase
+    for _ in range(4000):
+        fsm._state_m5_search(plant.telemetry())
+        if prev == 'turn_back' and fsm._search_phase == 'look':
+            legs.append(fsm._search_leg_t)
+            dirs.append(fsm._search_dir)
+        prev = fsm._search_phase
+        clock.sleep(0.1)
+        plant.step(0.1)
+        if len(legs) >= 3:
+            break
+    assert len(legs) >= 3, f"ladder tak menyelesaikan 3 leg: {legs}"
+    assert legs[0] < legs[1] < legs[2], f"leg tak membesar: {legs}"
+    assert dirs[0] == -dirs[1] and dirs[1] == -dirs[2], f"sisi tak berganti: {dirs}"
+    assert legs[-1] <= m5.SEARCH_LEG_T_MAX
+
+
+def test_m5_search_span_capped():
+    """Pagar keras: kolam kecil — begitu menyusur sejauh batas, surge HARUS berhenti
+    walau leg belum habis, supaya ROV tak menabrak sudut kolam.
+
+    Ladder ditaruh langsung di ambang (leg terpanjang, span nyaris penuh) karena
+    zigzag alami berosilasi di sekitar titik mark & tak pernah menyentuh pagar."""
+    fsm, plant, clock = _search_fsm(lat=99.0)
+    fsm._search_creep_block = True                 # isolasi: uji ladder saja
+    fsm._search_leg_t = m5.SEARCH_LEG_T_MAX
+    fsm._search_pos_t = m5.SEARCH_SPAN_MAX_T - 0.5
+    fsm._search_dir = 1
+    fsm._search_next_phase('traverse')
+    surges = []
+    for _ in range(int(m5.SEARCH_LEG_T_MAX / 0.1)):
+        if fsm._search_phase != 'traverse':
+            break
+        fsm._state_m5_search(plant.telemetry())
+        span = fsm._search_pos_t + fsm._search_dir * (m5.time.time() - fsm._search_phase_t)
+        surges.append((span, plant._in.get('surge', 0.0)))
+        clock.sleep(0.1)
+        plant.step(0.1)
+    beyond = [s for span, s in surges if span >= m5.SEARCH_SPAN_MAX_T]
+    assert beyond, "prasyarat: uji harus benar-benar melewati ambang span"
+    assert all(s == 0 for s in beyond), f"surge tak dihentikan di pagar span: {beyond[:5]}"
+
+
+def test_m5_search_reacquire_via_hint_without_decode():
+    """QR bisa DILOKALISASI jauh sebelum bisa DIBACA — ROV harus merayap mendekat
+    ke quad itu, bukan mengabaikannya sampai timeout."""
+    hint = {'center': (420, 240), 'area': 400.0, 'frame_w': 640, 'frame_h': 480,
+            'wall': 'C', 'confidence': 0.9, 'validated': False}
+    fsm, plant, clock = _search_fsm(lat=99.0, hint=hint)
+    for _ in range(30):
+        fsm._state_m5_search(plant.telemetry())
+        clock.sleep(0.1)
+        plant.step(0.1)
+    assert fsm._search_creep_t is not None, "hint terlihat tapi tak merayap mendekat"
+    assert plant._in.get('surge', 0) > 0, "merayap harus MAJU ke kandidat"
+
+
+def test_m5_search_hint_leads_to_dock_once_decoded():
+    """Setelah cukup dekat, decode berhasil → docking normal."""
+    hint = {'center': (330, 245), 'area': 2900.0, 'frame_w': 640, 'frame_h': 480,
+            'wall': 'C', 'confidence': 0.9, 'validated': False}
+    fsm, plant, clock = _search_fsm(lat=99.0, hint=hint)
+    for _ in range(20):
+        fsm._state_m5_search(plant.telemetry())
+        clock.sleep(0.1)
+        plant.step(0.1)
+    plant.s.lat = 0.0                        # QR akhirnya masuk kerucut → decode jadi
+    for _ in range(10):
+        if fsm._state != m5.State.M5_SEARCH:
+            break
+        fsm._state_m5_search(plant.telemetry())
+        clock.sleep(0.1)
+        plant.step(0.1)
+    assert fsm._state == m5.State.M5_DOCK
+
+
+def test_m5_search_creep_gives_up_and_resumes_ladder():
+    """Kandidat palsu (tangga/pipa) tak boleh menahan ROV menempel dinding sampai
+    timeout — menyerah setelah SEARCH_CREEP_MAX_T lalu lanjut menyisir."""
+    hint = {'center': (330, 240), 'area': 2900.0, 'frame_w': 640, 'frame_h': 480,
+            'wall': 'C', 'confidence': 0.9, 'validated': False}
+    fsm, plant, clock = _search_fsm(lat=99.0, hint=hint)     # decode tak akan pernah jadi
+    for _ in range(int((m5.SEARCH_CREEP_MAX_T + 2.0) / 0.1)):
+        fsm._state_m5_search(plant.telemetry())
+        clock.sleep(0.1)
+        plant.step(0.1)
+    assert fsm._state == m5.State.M5_SEARCH, "tak boleh nyangkut di M5_DOCK"
+    assert fsm._search_creep_t is None, "harus berhenti merayap setelah batas waktu"
+
+
+def test_m5_search_timeout_degrades_to_fallback():
+    """Gagal total → fallback timed (payload tetap dilepas, dapat nilai), bukan ABORT."""
+    fsm, plant, clock = _search_fsm(lat=99.0)
+    fsm._state_t = m5.time.time() - (m5.TIMEOUT_SEARCH + 1)
+    fsm._state_m5_search(plant.telemetry())
+    assert fsm._state == m5.State.M5_FALLBACK
+
+
+def test_m5_redive_hands_over_to_search_not_blind_spin():
+    """Sampai di kedalaman mark tanpa QR → menyisir lateral, BUKAN berputar di tempat."""
+    fsm, plant, clock = _search_fsm(depth=0.45, lat=99.0)
+    fsm._transition(m5.State.M5_REDIVE)
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_redive({'depth': 0.45, 'heading': 90.0})
+    assert fsm._state == m5.State.M5_SEARCH
+
+
+def test_m5_search_finds_laterally_offset_payload_end_to_end():
+    """Bukti utuh: payload lenceng 0.8 m ke samping — di luar kerucut kamera dari
+    titik start — dan ladder benar-benar menemukannya sampai M5_DOCK."""
+    fsm, plant, clock = _search_fsm(depth=0.45, lat=0.8)
+    assert not plant.qr_visible(), "prasyarat: payload harus TAK terlihat di awal"
+    for _ in range(3000):
+        if fsm._state != m5.State.M5_SEARCH:
+            break
+        fsm._state_m5_search(plant.telemetry())
+        clock.sleep(0.1)
+        plant.step(0.1)
+    assert fsm._state == m5.State.M5_DOCK, (
+        f"ladder gagal menemukan payload (lat={plant.s.lat:.2f}, rz={plant.s.rz:.2f})")

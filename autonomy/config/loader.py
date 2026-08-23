@@ -58,6 +58,19 @@ _SCALAR_MAP = {
     ('timeouts', 'unhook'):    'TIMEOUT_UNHOOK',
     ('timeouts', 'm5_ascend'): 'TIMEOUT_M5_ASCEND',
     ('timeouts', 'fallback'):  'TIMEOUT_FALLBACK',
+    ('timeouts', 'search'):    'TIMEOUT_SEARCH',
+
+    # ── M5_SEARCH: pencarian lateral kembali ke gantungan (ladder yaw+surge) ──
+    # Semua satuan DETIK sampai SEARCH_SPEED dikalibrasi ke m/s di kolam.
+    ('search', 'speed'):       'SEARCH_SPEED',
+    ('search', 'backoff_t'):   'SEARCH_BACKOFF_T',
+    ('search', 'look_t'):      'SEARCH_LOOK_T',
+    ('search', 'leg_t0'):      'SEARCH_LEG_T0',
+    ('search', 'leg_grow'):    'SEARCH_LEG_GROW',
+    ('search', 'leg_t_max'):   'SEARCH_LEG_T_MAX',
+    ('search', 'span_max_t'):  'SEARCH_SPAN_MAX_T',
+    ('search', 'yaw_tol'):     'SEARCH_YAW_TOL',
+    ('search', 'creep_max_t'): 'SEARCH_CREEP_MAX_T',
 
     ('docking', 'qr_side_m'):         'QR_SIDE_M',
     ('docking', 'servo_target_area'): 'SERVO_TARGET_AREA',

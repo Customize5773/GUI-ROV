@@ -45,6 +45,7 @@ Uji BERTAHAP, dari sederhana → kompleks. **Selalu siapkan STOP/Spasi** (failsa
 | M6 | **Merayap grab (ENGAGE)** | Payload masuk gripper mulus tanpa mendorong lepas dari hook sebelum tercengkeram. | `M5_ENGAGE_SURGE` + timing fase di `_state_m5_engage`. |
 | M7 | **Yaw squaring (opsional)** | Default `SERVO_KP_YAW=0.0` (NONAKTIF). Yaw dari 1 QR planar AMBIGU (dua solusi IPPE) → JANGAN aktifkan sebelum diverifikasi solid; bila perlu tegak-lurus, andalkan heading-hold ArduSub. Validasi pasif (tanpa kirim command) tersedia: `python -m autonomy.tests.pool_yaw_validation --calib kalib.npz --qr-size 0.04 --device 0 --duration 30`. | `SERVO_KP_YAW` — biarkan 0 kecuali sudah terbukti stabil. |
 | M8 | **Handoff GUI → autonomous** | 1-4 manual, lalu toggle header → AUTONOMOUS. FSM (sudah jalan, `--start-state M5_REDIVE`) harus mulai. Toggle balik ke MANUAL → FSM abort. | pastikan telem `mode` mengalir (rov_link `loop_telem_tx`). |
+| M9 | **Pencarian lateral M5_SEARCH** (kembali ke gantungan) | **(a)** Kalibrasi `SEARCH_SPEED`→m/s: surge 20% selama 10 s, ukur jarak — SEMUA konstanta `search.*` lain diskalakan dari angka ini. **(b)** Deviasi kompas: MARK di gantungan → naik → turun lagi → bandingkan heading; geser >15° = ladder mencari ke arah salah. **(c)** Rasio jarak "quad QR terlihat" vs "QR terbaca" — menentukan `SEARCH_BACKOFF_T`. **(d)** Lebar kolam: back-off ~1,2 m jangan sampai menabrak dinding seberang. | blok `search:` di config (`SEARCH_SPEED`, `SEARCH_BACKOFF_T`, `SEARCH_LEG_*`, `SEARCH_SPAN_MAX_T`, `SEARCH_CREEP_MAX_T`). |
 
 ## Alur uji lomba (rekomendasi)
 ```
@@ -59,4 +60,5 @@ python fsm/mission5.py --server 127.0.0.1 --vision usb --device 0 \
 ## Status
 - [x] Jalur data + rantai state M5 (mock+SITL: M5_REDIVE→…→DONE, m5=40, PBVS & IBVS)
 - [x] Handoff mode=autonomous (uji: FSM menunggu lalu jalan saat toggle)
-- [ ] M1–M8 di atas — **butuh kolam/hardware** (arah sumbu, jarak, geometri unhook)
+- [ ] M1–M9 di atas — **butuh kolam/hardware** (arah sumbu, jarak, geometri unhook,
+      kalibrasi kecepatan & kompas untuk pencarian lateral)
