@@ -997,11 +997,13 @@ def send_telemetry():
     state["control_mode"] = current_control_mode
     state["thruster_gain"] = thruster_gain * 100.0
 
-    # State FSM misi 5 (mis. "M5_DOCK") supaya operator melihat progres misi,
-    # bukan cuma badge autonomous. None = FSM tidak sedang jalan.
-    state["mission5_state"] = (
-        mission5_runner.state_name() if mission5_runner is not None else None
-    )
+    # State FSM misi 5 (mis. "M5_DOCK") + hasil vision (qr_data/qr_wall) supaya
+    # operator melihat progres misi dan readout QR di Control pakai deteksi
+    # pipeline Python (robust), bukan fallback jsQR sisi klien. None = FSM
+    # tidak sedang jalan.
+    m5_telem = mission5_runner.telemetry() if mission5_runner is not None else None
+    state["mission5_state"] = m5_telem.get("state") if m5_telem else None
+    state["mission5"] = m5_telem
     send_to_gui(state)
 
     now = time.time()

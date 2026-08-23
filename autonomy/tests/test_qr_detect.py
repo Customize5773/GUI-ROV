@@ -141,6 +141,25 @@ def test_decode_qr_no_qr_returns_empty():
     assert decode_qr(blank) == []
 
 
+# ── Jenjang-5: median-stack antar-frame (lawan riak/kaustik transien) ──────────
+def test_decode_stacked_needs_full_buffer_then_decodes():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    segno = pytest.importorskip("segno")
+    from vision.qr_detect import VisionPipeline, STACK_N
+    text = '{"mission":5,"team":"HYDROSHIP","type":"payload","id":"D"}'
+    qr = _render_qr_bgr(cv2, np, segno, text, module_px=8)
+    frame, _ = _place_on_canvas(cv2, np, qr)
+
+    vp = VisionPipeline()
+    # buffer belum penuh (STACK_N=3) -> jenjang-5 harus diam, bukan decode dini
+    for _ in range(STACK_N - 1):
+        assert vp._decode_stacked(frame) == []
+    # frame ke-STACK_N melengkapi buffer -> median dari QR identik tetap terbaca
+    res = vp._decode_stacked(frame)
+    assert len(res) == 1 and res[0]['data'] == text
+
+
 def test_decode_qr_enhance_false_is_raw_only():
     """A/B pada FRAME yang SAMA: enhance=False (hanya pyzbar mentah) GAGAL, tapi
     enhance=True (default, CLAHE/upscale) BERHASIL → membuktikan preprocessing-lah

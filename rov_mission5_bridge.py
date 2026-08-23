@@ -279,12 +279,12 @@ class Mission5Runner:
                 self._log("[M5] PERINGATAN: thread FSM belum berhenti dalam 2s")
         self._log("[M5] Mission5 FSM dihentikan")
 
-    def state_name(self):
-        """Nama state FSM saat ini untuk telemetri GUI, None kalau tak jalan."""
+    def telemetry(self):
+        """Telemetri live FSM (state, qr_data, qr_wall, ...) untuk GUI, None kalau tak jalan."""
         fsm = self._fsm
         if fsm is None:
             return None
         try:
-            return fsm.telemetry_out.get("state")
+            return dict(fsm.telemetry_out)
         except Exception:
             return None

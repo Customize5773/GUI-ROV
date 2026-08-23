@@ -35,6 +35,7 @@ import re
 import json
 import threading
 import logging
+from collections import deque
 from typing import Callable, Optional
 import numpy as np
 
@@ -105,6 +106,7 @@ except Exception as _e:
 CLAHE_CLIP   = 2.0     # kekuatan penyetaraan kontras lokal (CLAHE) — lawan glare/cahaya tak rata
 CLAHE_TILE   = 8       # ukuran grid CLAHE (tile CLAHE_TILE×CLAHE_TILE)
 UPSCALE      = 2.0     # faktor perbesaran saat QR terlalu kecil utk pyzbar
+STACK_N      = 3       # jumlah frame utk median-stack jenjang-5 (lawan riak/kaustik transien)
 
 
 def _to_gray_clahe(frame):
@@ -262,6 +264,7 @@ class VisionPipeline:
         self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
         self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
         self._last_wall_hint: Optional[dict] = None   # tebakan CNN saat decode GAGAL (opt-in)
+        self._frame_buf = deque(maxlen=STACK_N)   # buffer utk jenjang-5 median-stack (lawan riak)
 
         # ── Dual-camera (BOTTOM utk QR, WALL utk hook) ─────────────────────────
         qr_src = qr_url if qr_url is not None else qr_device
@@ -474,6 +477,8 @@ class VisionPipeline:
             # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
             dets = decode_qr(frame)
             if not dets:
+                dets = self._decode_stacked(frame)   # jenjang-5: median antar-frame
+            if not dets:
                 self._try_wall_fallback(frame)
             elif self._wall_voter is not None:
                 self._wall_voter.reset()      # decode sungguhan jalan lagi → mulai dari nol
@@ -538,6 +543,8 @@ class VisionPipeline:
                 continue
 
             dets = decode_qr(frame)
+            if not dets:
+                dets = self._decode_stacked(frame)   # jenjang-5: median antar-frame
             if not dets:
                 self._try_wall_fallback(frame)
             elif self._wall_voter is not None:
@@ -613,6 +620,18 @@ class VisionPipeline:
         if not r or (time.time() - r['timestamp']) > max_age:
             return None
         return r
+
+    def _decode_stacked(self, frame):
+        """Jenjang-5: decode_qr() gagal di semua jenjangnya → coba median dari
+        STACK_N frame terakhir. Riak berubah tiap frame, QR+ROV relatif diam
+        saat SCAN_QR/hover, jadi median menekan distorsi transien yang jadi
+        penyebab dominan gagal decode di air (lihat catatan lapangan riak)."""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+        self._frame_buf.append(gray)
+        if len(self._frame_buf) < self._frame_buf.maxlen:
+            return []
+        stacked = np.median(np.stack(self._frame_buf), axis=0).astype(np.uint8)
+        return decode_qr(stacked, enhance=True)
 
     def _try_wall_fallback(self, frame):
         """decode_qr() gagal → coba tebak SISI KOLAM saja lewat CNN (vision/wall_cnn.py).

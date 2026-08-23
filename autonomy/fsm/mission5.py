@@ -336,6 +336,9 @@ class Mission5FSM:
         self.telemetry_out = {
             'state': self._state.name, 'active_cam': None,
             'distance_z': None, 'offset_x': None, 'offset_y': None,
+            # bbox (x,y,w,h) + confidence (0..1) dari detect_hook() — overlay
+            # kepercayaan pilot di GUI selama docking HOOK (kamera WALL saja).
+            'bbox': None, 'confidence': None,
             # Hasil decode QR terakhir dari pipeline vision Python (bukan scan
             # jsQR di browser) — dibaca readout QR di halaman Control.
             'qr_data': None, 'qr_wall': None,
@@ -785,6 +788,7 @@ class Mission5FSM:
         Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Dipakai M5_DOCK & M5_ENGAGE (hold x/y)."""
         pose = det.get('pose')
         self.telemetry_out['active_cam'] = 'BOTTOM'
+        self.telemetry_out.update(bbox=None, confidence=None)  # bbox hook cuma dari cam WALL
         if pose is not None:                       # PBVS — pose 3D (m) bila terkalibrasi
             out = self.pose_servo.step(pose['x'], pose['y'], pose['z'],
                                        pose.get('yaw_deg', 0.0), dt=0.1)
@@ -805,6 +809,7 @@ class Mission5FSM:
         target khusus hook (lihat _servo_step untuk versi QR)."""
         pose = det.get('pose')
         self.telemetry_out['active_cam'] = 'WALL'
+        self.telemetry_out.update(bbox=det.get('bbox'), confidence=det.get('confidence'))
         if pose is not None:                       # PBVS — pose 3D (m) bila kamera terkalibrasi
             out = self.hook_pose_servo.step(pose['x'], pose['y'], pose['z'],
                                             pose.get('yaw_deg', 0.0), dt=0.1)

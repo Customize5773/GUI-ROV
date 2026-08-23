@@ -38,6 +38,7 @@ const els = {
   camRes: $("camRes"), camRecIndicator: $("camRecIndicator"),
   tapeScale: $("tapeScale"), tapeVal: $("tapeVal"),
   camImg: $("camImg"), camNoSignal: $("camNoSignal"), camTag: $("camTag"),
+  hookBboxCanvas: $("hookBboxCanvas"),
   camContrast: $("camContrast"),
   modelTag: $("modelTag"), log: $("log"),
   btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
@@ -427,6 +428,38 @@ function applyDepthHold(d) {
   els.depthHoldBadge.classList.toggle("badge--ok", holding);
 }
 
+/* overlay bbox+confidence deteksi hook (kamera WALL) di atas #camImg — nilai
+   tambah kepercayaan pilot saat autonomous, tak cuma angka offset/distance
+   sebagai teks. #camImg pakai object-fit:cover jadi skala harus max(sx,sy)
+   + centering letterbox, BUKAN stretch naif seperti buffer scanControlQR. */
+function drawHookBbox(m5) {
+  const cv = els.hookBboxCanvas;
+  if (!cv) return;
+  const ctx = cv.getContext("2d");
+  const rect = els.camImg.getBoundingClientRect();
+  if (cv.width !== rect.width) cv.width = rect.width;
+  if (cv.height !== rect.height) cv.height = rect.height;
+  ctx.clearRect(0, 0, cv.width, cv.height);
+
+  const bbox = m5 && m5.bbox, conf = m5 && m5.confidence;
+  const sw = els.camImg.naturalWidth, sh = els.camImg.naturalHeight;
+  if (!bbox || !sw || !sh || !m5 || m5.active_cam !== "WALL") return;
+
+  const scale = Math.max(cv.width / sw, cv.height / sh);
+  const ox = (cv.width - sw * scale) / 2, oy = (cv.height - sh * scale) / 2;
+  const [x, y, w, h] = bbox;
+  const rx = x * scale + ox, ry = y * scale + oy, rw = w * scale, rh = h * scale;
+
+  const c = conf == null ? 0 : conf;
+  const color = c >= 0.7 ? "#2ee6a6" : c >= 0.4 ? "#f5c518" : "#ff4d4f";
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(rx, ry, rw, rh);
+  ctx.fillStyle = color;
+  ctx.font = "12px 'JetBrains Mono', monospace";
+  ctx.fillText(`HOOK ${(c * 100).toFixed(0)}%`, rx, ry > 14 ? ry - 4 : ry + rh + 14);
+}
+
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
   _pyQrData = (m5 && m5.qr_data) || null;
@@ -441,6 +474,7 @@ function applyMission5(m5) {
     els.mission5Z.textContent = "—";
     els.mission5OffX.textContent = "—";
     els.mission5OffY.textContent = "—";
+    drawHookBbox(null);
     return;
   }
   const state = m5.state || "IDLE";
@@ -453,6 +487,7 @@ function applyMission5(m5) {
   els.mission5Z.textContent = num(m5.distance_z, 2);
   els.mission5OffX.textContent = num(m5.offset_x, 1);
   els.mission5OffY.textContent = num(m5.offset_y, 1);
+  drawHookBbox(m5);
 
   // Run baru saja berakhir → tarik ringkasannya. Ditunda sesaat karena FSM menulis
   // event `end` setelah state jadi DONE/ABORT (saat proses menutup run log).
