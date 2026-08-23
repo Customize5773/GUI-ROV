@@ -21,6 +21,14 @@ Mapping → command (-100..100):
 
 CATATAN VERIFIKASI (hardware): arah tanda sumbu & orientasi kamera bisa berbeda —
 gunakan flag invert_* dan cek di kolam (lihat VERIFIKASI_ARDUSUB.md).
+
+ORIENTASI KAMERA (dikonfirmasi 24 Agu 2026): kamera "BOTTOM" — yang dipakai
+docking QR payload — MENGHADAP DEPAN, bukan ke bawah; namanya menyesatkan.
+Karena itu pemetaan sumbu di bawah BENAR apa adanya:
+    x citra → sway, y citra → vert, luas/z → surge.
+Kalau kamera itu menghadap bawah, y citra akan memetakan ke SURGE dan
+pemetaan ini harus ditukar — pertukaran sumbu semacam itu TIDAK bisa
+diperbaiki oleh flag invert_* mana pun (invert cuma membalik tanda).
 """
 
 from dataclasses import dataclass

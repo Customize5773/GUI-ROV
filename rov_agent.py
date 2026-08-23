@@ -1113,7 +1113,11 @@ def _fsm_read_state():
 # Kalibrasi default misi 5. HARUS cocok resolusi stream kamera (1280x720).
 # Override per-kamera lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke string
 # kosong untuk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
-M5_CALIB_DEFAULT = "vision/calibration/dwe_trial2.npz"
+# dwe_v3 (24 Agu, dataset "Calib image/" — 7 sesi rekaman checkerboard 10x7
+# SUNGGUHAN DI DALAM AIR): RMS 0.87px dari 58 pose (tools/calibrate_camera.py
+# --trim-rounds 4), jauh lebih baik drpd dwe_trial2 (RMS 2.36px) yang aktif
+# sebelumnya.
+M5_CALIB_DEFAULT = "vision/calibration/dwe_v3.npz"
 
 # Config geometri arena, dipisah koma. Default menunjuk config lomba, BUKAN
 # kosong: default kosong berarti konstanta modul fsm/mission5.py, yang HANYA
@@ -1172,6 +1176,13 @@ def setup_mission5_runner():
         # Dibaca SAAT toggle autonomous, bukan sekarang: operator menekan MARK
         # di tengah misi 3, jauh sesudah runner ini dibuat.
         "read_mark": lambda: (marked_heading, marked_depth),
+        # Dibaca SAAT trial berakhir (bukan disimpan sekarang): skor manual
+        # misi 2/3 bisa berubah kapan saja sebelum FSM misi 5 selesai, jadi
+        # nilai final harus diambil live utk masuk ke run_log.
+        "read_mission_counter": lambda: {
+            "m2": _tier_score(mission_counter_fails["m2"]),
+            "m3": _tier_score(mission_counter_fails["m3"]),
+        },
     }
     mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
     return mission5_runner

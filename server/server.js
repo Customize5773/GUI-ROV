@@ -23,6 +23,11 @@ const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
 const UDP_IN   = parseInt(process.env.UDP_IN   || "14551", 10); // telemetry dari ROV
 const UDP_OUT  = parseInt(process.env.UDP_OUT  || "14550", 10); // command ke ROV
 const RPI_ADDR = process.env.RPI_ADDR || "192.168.2.2";
+// Dipakai /api/runs utk narik log trial JSONL dari Pi via rsync/ssh — lihat
+// bagian "Ambil Log Trial" di connect_raspi.md utk kenapa ini perlu (log
+// ditulis rov_mission5_bridge.py di FILESYSTEM PI, bukan di laptop).
+const RPI_SSH_USER = process.env.RPI_SSH_USER || "hydroships";
+const RPI_LOG_DIR  = process.env.RPI_LOG_DIR  || "rov-agent/logs";
 const SIM = process.argv.includes("--sim");
 
 const PUBLIC = path.join(__dirname, "..", "public");
@@ -204,7 +209,7 @@ const httpServer = http.createServer((req, res) => {
   // supaya angka di panel GUI persis sama dgn laporan CLI yang dibaca saat analisis
   // trial. Run jarang & filenya kecil, jadi spawn per-request cukup murah.
   if (urlPath === "/api/runs") {
-    return execFile("python3",
+    const runAnalyze = () => execFile("python3",
       [path.join(AUTONOMY, "tools", "analyze_run.py"),
        path.join(AUTONOMY, "logs", "*.jsonl"), "--json"],
       { maxBuffer: 8 * 1024 * 1024 },
@@ -218,6 +223,18 @@ const httpServer = http.createServer((req, res) => {
         list.reverse();                  // terbaru dulu (nama file berurut waktu)
         res.end(JSON.stringify(list));
       });
+
+    // Tarik dulu run_*.jsonl terbaru dari ~/rov-agent/logs/ di Pi — file itu
+    // ditulis rov_mission5_bridge.py di DISK PI, bukan laptop, jadi tanpa
+    // langkah ini panel selalu menampilkan trial basi/lama. Gagal-lunak:
+    // Pi mati/kabel putus/SSH belum di-setup TIDAK BOLEH bikin /api/runs
+    // hang atau error — timeout pendek, lanjut baca file lokal apa adanya.
+    return execFile("rsync",
+      ["-az", "-e", "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new",
+       `${RPI_SSH_USER}@${RPI_ADDR}:${RPI_LOG_DIR}/*.jsonl`,
+       path.join(AUTONOMY, "logs")],
+      { timeout: 5000 },
+      () => runAnalyze());
   }
 
   // Satu frame JPEG dari sesi: /replay/frame?session=<id>&cam=<bottom|wall>&i=<idx>

@@ -362,12 +362,6 @@ function applyTelemetry(d) {
   depthAlarm(danger);
   els.depth.parentElement.classList.toggle("readout--danger", danger);
 
-  // auto data-logging (saat autonomous + armed)
-  if (autoCap.logging && Number.isFinite(d.depth)) {
-    const alt = Math.max(0, CONFIG.POOL_DEPTH - d.depth);
-    autoCap.rows.push([Date.now(), num(d.heading, 0), num(d.depth, 3), num(alt, 3), num(d.roll, 2), num(d.pitch, 2)].join(","));
-  }
-
   if (typeof d.armed === "boolean") confirmArm(d.armed);
   if (typeof d.light === "boolean") confirmLight(d.light);
 
@@ -541,11 +535,9 @@ async function refreshLastRun() {
 }
 
 function reflectArm(on) {
-  const changed = state.armed !== on;
   state.armed = on;
   els.btnArm.setAttribute("aria-pressed", String(on));
   els.armLabel.textContent = on ? "ARMED" : "DISARMED";
-  if (changed && typeof updateAutoCapture === "function") updateAutoCapture();
 }
 function reflectLight(on) {
   state.light = on;
@@ -1391,6 +1383,7 @@ function executeJoystickAction(action, mode = "toggle") {
     /* ================= CONTROL MODE ================= */
     case "mode_manual": {
       requestPilotMode("manual", "MANUAL");
+      setControlMode("manual"); // abort sistem AUTONOMOUS kalau sedang aktif
       return;
     }
 
@@ -1921,51 +1914,17 @@ els.btnMute.onclick = () => {
 
 /* ============ toggle Manual / Autonomous ============ */
 let controlMode = "manual";
-els.btnMode.onclick = () => {
-  controlMode = controlMode === "manual" ? "autonomous" : "manual";
+function setControlMode(mode) {
+  if (controlMode === mode) return;
+  controlMode = mode;
   els.modeLabel.textContent = controlMode.toUpperCase();
   els.btnMode.setAttribute("aria-pressed", String(controlMode === "autonomous"));
   sendCmd("control_mode", controlMode);
   log(`Mode kontrol: ${controlMode.toUpperCase()}`, "ok");
-  updateAutoCapture();
+}
+els.btnMode.onclick = () => {
+  setControlMode(controlMode === "manual" ? "autonomous" : "manual");
 };
-
-/* ============ auto data logging (autonomous) ============
-   Snapshot otomatis tiap 15 detik DIHAPUS 22 Agu 2026: tiap frame diunduh
-   sebagai PNG ~1,9 MB lewat dialog download browser, jadi satu run misi 5
-   (~4 menit) memuntahkan belasan file besar sementara isinya cuma view kamera
-   yang sudah terekam di stream. Selama trial ia menutupi log yang benar-benar
-   dipakai untuk diagnosa.
-
-   CSV telemetri SENGAJA DIPERTAHANKAN — itu yang dipakai membaca perilaku run
-   (mis. log-m5/ 22 Agu membuktikan wahana tak pernah menyelam: depth rata
-   0,08-0,14 m selama 57 detik). Snapshot manual tetap ada lewat tombol kamera.
-
-   CATATAN: ROADMAP_MISI5.md Fase 4 & TEST_CHECKLIST menyebut "auto screenshot
-   & logging" sbg satu butir. Yang tinggal sekarang bagian LOGGING-nya. */
-const autoCap = { logging: false, rows: [] };
-function updateAutoCapture() {
-  const shouldRun = controlMode === "autonomous" && state.armed;
-  if (shouldRun && !autoCap.logging) {
-    autoCap.logging = true;
-    autoCap.rows = [];
-    log("Auto-log ON (autonomous + armed): telemetri CSV", "ok");
-  } else if (!shouldRun && autoCap.logging) {
-    autoCap.logging = false;
-    exportAutoLog();
-  }
-}
-function exportAutoLog() {
-  if (!autoCap.rows.length) return;
-  const header = "timestamp,heading,depth,altitude,roll,pitch";
-  const blob = new Blob([header + "\n" + autoCap.rows.join("\n")], { type: "text/csv" });
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = `hydroship_autolog_${Date.now()}.csv`;
-  a.click();
-  URL.revokeObjectURL(a.href);
-  log(`Auto-log diekspor (${autoCap.rows.length} baris)`, "ok");
-}
 
 /*  mulai  */
 log("HYDROSHIP dashboard siap", "ok");
