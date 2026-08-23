@@ -271,9 +271,20 @@ export const setupPage = {
               <button class="btn-wide" id="suM2Fail">Gagal, Ulangi (Misi 2)</button>
             </div>
             <div class="card__row card__row--wrap">
+              ${numField("suM2Trial", "Set trial ke-", 1, "1")}
+              <button class="btn-wide" id="suM2SetTrial">Set</button>
+            </div>
+            <div class="card__row card__row--wrap">
               <span class="card__info">Misi 3: trial <b id="suM3Fails">1</b> · <b id="suM3Score">15</b> pt</span>
               <button class="btn-wide" id="suM3Fail">Gagal, Ulangi (Misi 3)</button>
             </div>
+            <div class="card__row card__row--wrap">
+              ${numField("suM3Trial", "Set trial ke-", 1, "1")}
+              <button class="btn-wide" id="suM3SetTrial">Set</button>
+            </div>
+            <p class="card__desc">Input angka di atas untuk mengoreksi salah klik atau
+              mengetes langsung nilai trial tertentu (mis. saat cari setting yang cocok
+              di kolam latihan sebelum ke ukuran kolam lomba).</p>
             <button class="btn-wide" id="suResetCounter">Reset Counter (Misi Baru)</button>
           </div>
 
@@ -664,8 +675,22 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
     this.els.suM2Score = root.querySelector("#suM2Score");
     this.els.suM3Fails = root.querySelector("#suM3Fails");
     this.els.suM3Score = root.querySelector("#suM3Score");
+    this.els.suM2Trial = root.querySelector("#suM2Trial");
+    this.els.suM3Trial = root.querySelector("#suM3Trial");
     root.querySelector("#suM2Fail").onclick = () => sendCmd("mission_counter", { mission: "m2", event: "fail" });
     root.querySelector("#suM3Fail").onclick = () => sendCmd("mission_counter", { mission: "m3", event: "fail" });
+
+    // Input angka manual — pilot/scorekeeper ketik trial ke-berapa langsung
+    // (koreksi salah klik, atau coba-coba nilai saat cari setting di kolam).
+    const setTrial = (mission, input) => {
+      const trial = parseInt(input.value, 10);
+      if (!Number.isFinite(trial) || trial < 1) { log("Nomor trial tidak valid", "warn"); return; }
+      sendCmd("mission_counter", { mission, event: "set", trial });
+      log(`Misi ${mission.slice(1)}: trial di-set ke ${trial}`, "ok");
+    };
+    root.querySelector("#suM2SetTrial").onclick = () => setTrial("m2", this.els.suM2Trial);
+    root.querySelector("#suM3SetTrial").onclick = () => setTrial("m3", this.els.suM3Trial);
+
     root.querySelector("#suResetCounter").onclick = () => {
       sendCmd("mission_counter", { event: "reset" });
       log("Counter trial Misi 2/3 di-reset", "ok");
@@ -704,6 +729,10 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
     this.els.suM2Score.textContent = mc.m2_score;
     this.els.suM3Fails.textContent = mc.m3_fails + 1;
     this.els.suM3Score.textContent = mc.m3_score;
+    // Jangan menimpa input yang sedang diketik operator (pola sama param_batch
+    // di readPidFromVehicle) — hanya isi ulang saat field itu tidak difokuskan.
+    if (document.activeElement !== this.els.suM2Trial) this.els.suM2Trial.value = mc.m2_fails + 1;
+    if (document.activeElement !== this.els.suM3Trial) this.els.suM3Trial.value = mc.m3_fails + 1;
   },
 
   /* param_get bersifat fire-and-forget: agent mengirim param_request_read_send

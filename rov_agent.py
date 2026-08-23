@@ -1579,6 +1579,9 @@ def command_listener():
                 # Counter trial Misi 2/3 (Guidebook §4.7.4) — pilot menekan
                 # "Gagal, Ulangi" saat melihat sendiri dari kamera bahwa
                 # grab/hang gagal (tak ada sensor grip-force di ROV ini).
+                # Event "set" mengisi trial ke-N langsung (input angka manual
+                # di Setup) — dipakai untuk koreksi salah klik atau eksperimen
+                # nilai saat uji coba di kolam sebelum ukuran lomba sebenarnya.
                 mission = (value or {}).get("mission")
                 event = (value or {}).get("event")
                 if event == "reset":
@@ -1586,6 +1589,13 @@ def command_listener():
                     mission_counter_fails["m3"] = 0
                 elif event == "fail" and mission in mission_counter_fails:
                     mission_counter_fails[mission] += 1
+                elif event == "set" and mission in mission_counter_fails:
+                    try:
+                        trial = int((value or {}).get("trial"))
+                    except (TypeError, ValueError):
+                        trial = None
+                    if trial is not None and trial >= 1:
+                        mission_counter_fails[mission] = trial - 1
                 state["mission_counter"] = {
                     "m2_fails": mission_counter_fails["m2"],
                     "m2_score": _tier_score(mission_counter_fails["m2"]),

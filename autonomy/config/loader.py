@@ -88,6 +88,14 @@ _SCALAR_MAP = {
     ('pid_pbvs', 'kp_surge'): 'PBVS_KP_SURGE',
     ('pid_pbvs', 'kp_vert'):  'PBVS_KP_VERT',
 
+    # Peredam approach docking (halus vs cepat) — lihat blok "Peredam" di mission5.py
+    ('servo_smooth', 'kd_ibvs'):        'SERVO_KD_IBVS',
+    ('servo_smooth', 'kd_pbvs'):        'SERVO_KD_PBVS',
+    ('servo_smooth', 'slew'):           'SERVO_SLEW',
+    ('servo_smooth', 'deadband_norm'):  'SERVO_DEADBAND_NORM',
+    ('servo_smooth', 'deadband_m'):     'SERVO_DEADBAND_M',
+    ('servo_smooth', 'approach_floor'): 'SERVO_APPROACH_FLOOR',
+
     ('m5_mechanics', 'engage_surge'):  'M5_ENGAGE_SURGE',
     ('m5_mechanics', 'unhook_vert'):   'M5_UNHOOK_VERT',
     ('m5_mechanics', 'unhook_surge'):  'M5_UNHOOK_SURGE',

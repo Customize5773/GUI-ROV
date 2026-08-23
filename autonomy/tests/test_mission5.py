@@ -175,6 +175,44 @@ def test_pose_servo_converges_at_target_distance():
     assert out.aligned
 
 
+# ── Unit: peredam approach (deadband / slew / gate surge / hysteresis) ───────
+def test_pid_deadband_diam_di_dekat_target():
+    """Error mikro (riak menggeser centroid) tak boleh menggerakkan thruster."""
+    pid = PID(kp=100.0, deadband=0.02)
+    assert pid.step(0.01, 0.1) == 0.0
+    assert pid.step(0.05, 0.1) != 0.0
+
+
+def test_pid_slew_membatasi_lonjakan_command():
+    """Command 0→penuh dalam satu tick membuat ROV menyentak & miring."""
+    pid = PID(kp=1000.0, out_limit=100.0, slew=120.0)
+    assert pid.step(1.0, 0.1) == pytest.approx(12.0)     # 120 %/s × 0.1 s
+    assert pid.step(1.0, 0.1) == pytest.approx(24.0)     # naik bertahap, bukan melompat
+    tanpa_slew = PID(kp=1000.0, out_limit=100.0, slew=0.0)
+    assert tanpa_slew.step(1.0, 0.1) == pytest.approx(100.0)
+
+
+def test_surge_ditahan_selagi_masih_melenceng_lateral():
+    """Maju sambil melenceng = gripper datang menyerong & meleset dari payload.
+    Surge saat off-center harus jauh lebih kecil drpd surge saat sudah center,
+    pada error jarak yang SAMA."""
+    kw = dict(target_dist=0.30, tol_xy=0.05, slew=0.0)
+    jauh_melenceng = PoseServo(**kw).step(0.25, 0.0, 0.90, dt=0.1).surge
+    jauh_center    = PoseServo(**kw).step(0.00, 0.0, 0.90, dt=0.1).surge
+    assert jauh_melenceng < jauh_center * 0.5
+    assert jauh_melenceng > 0                     # tetap merayap, tak mandek total
+
+
+def test_aligned_bertahan_dari_satu_frame_berisik():
+    """Satu dropout/frame kotor di air keruh tak boleh menghapus seluruh streak
+    (dulu bikin ALIGNED tak pernah terkunci → docking jatuh ke fallback timed)."""
+    servo = PoseServo(target_dist=0.30, aligned_frames=3)
+    for _ in range(3):
+        servo.step(0.0, 0.0, 0.30, dt=0.1)
+    servo.step(0.5, 0.0, 0.90, dt=0.1)            # satu frame meleset jauh
+    assert servo.step(0.0, 0.0, 0.30, dt=0.1).aligned, "streak tak boleh reset ke 0"
+
+
 def test_pose_servo_not_aligned_when_far():
     servo = PoseServo(target_dist=0.30, aligned_frames=3)
     out = servo.step(0.20, 0.15, 0.90, 0.0, dt=0.1)

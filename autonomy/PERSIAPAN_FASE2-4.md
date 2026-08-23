@@ -85,7 +85,7 @@ Isi kolom "nilai tuned" hasil uji, lalu tulis ke `config/mission5.local.yaml`:
 | `m5_mechanics.unhook_lift_t/pull_t` | 3.0 / 2.0 s | | **M5** — durasi cukup utk lepas |
 | `m5_mechanics.engage_surge` | 15 | | **M6** — payload masuk gripper mulus |
 | `wall_heading.A/B/C/D` | 270/90/0/180 | | orientasi kompas vs tata letak kolam venue |
-| `docking.servo_kp_yaw` | 0.0 | | **M7** — biarkan 0 kecuali squaring terbukti stabil |
+| `docking.servo_kp_yaw` | 0.0 | | **M7** — biarkan 0 kecuali squaring terbukti stabil; validasi pasif pakai `python -m autonomy.tests.pool_yaw_validation --calib kalib.npz --qr-size 0.04 --device 0 --duration 30` |
 
 ### 3.4 Uji rantai misi 5 & handoff (M8)
 - [ ] `python fsm/mission5.py --vision usb --device 0 --calib calib_air.npz --qr-size 0.04 \

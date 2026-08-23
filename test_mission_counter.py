@@ -67,6 +67,10 @@ class TestMissionCounterHandler(unittest.TestCase):
     def test_hasil_ditulis_ke_state_untuk_telemetri(self):
         self.assertIn("state['mission_counter']", self.src)
 
+    def test_set_mengisi_trial_langsung(self):
+        self.assertIn("event == 'set'", self.src)
+        self.assertIn("mission_counter_fails[mission] = trial - 1", self.src)
+
 
 if __name__ == "__main__":
     unittest.main()

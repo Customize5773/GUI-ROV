@@ -104,6 +104,17 @@ CALIB_FILE_WALL    = "vision/calibration/wall.npz"    # kalibrasi kamera hook/WA
 IBVS_KP_SWAY, IBVS_KP_SURGE, IBVS_KP_VERT = 45.0, 40.0, 35.0    # mode IBVS (piksel)
 PBVS_KP_SWAY, PBVS_KP_SURGE, PBVS_KP_VERT = 140.0, 140.0, 110.0  # mode PBVS (meter)
 
+# Peredam approach docking — agar mendekat MULUS, bukan mematuk-matuk lalu meleset.
+# Semua TUNE di kolam (tersedia di --config, lihat config/loader.py). Ki sengaja
+# dibiarkan 0: integral baru berguna setelah trim buoyancy terukur di air, dan
+# windup saat approach panjang lebih berbahaya drpd sisa error tetap kecil.
+SERVO_KD_IBVS      = 6.0     # derivative IBVS (error ternormalisasi) — redam overshoot
+SERVO_KD_PBVS      = 25.0    # derivative PBVS (error meter)
+SERVO_SLEW         = 120.0   # %/detik batas laju command — anti-sentak (sentak → ROV miring)
+SERVO_DEADBAND_NORM = 0.02   # IBVS: |error| ternormalisasi di bawah ini dianggap 0
+SERVO_DEADBAND_M   = 0.01    # PBVS: |error| (m) di bawah ini dianggap 0
+SERVO_APPROACH_FLOOR = 0.15  # fraksi surge minimum selagi masih melenceng lateral
+
 # Validasi payload QR JSON terstruktur ({"mission":5,"type":"payload","id":"A"}) agar
 # FSM tak salah pungut objek lain. QR JSON dicek mission & type; QR string biasa (legacy)
 # tanpa JSON tetap diterima apa adanya.
@@ -304,13 +315,19 @@ class Mission5FSM:
         self.vision = vision
         self.runlog = runlog        # tools.run_log.RunLogger | None (None = tak merekam)
         self._sample_t = 0.0        # timestamp sample JSONL terakhir (throttle ~2 Hz)
+        # Peredam approach — dipakai SEMUA instans servo di bawah agar satu tuning
+        # berlaku seragam (IBVS & PBVS beda satuan error, jadi deadband-nya beda).
+        _ibvs_smooth = dict(kd=SERVO_KD_IBVS, slew=SERVO_SLEW,
+                            deadband=SERVO_DEADBAND_NORM, approach_floor=SERVO_APPROACH_FLOOR)
+        _pbvs_smooth = dict(kd=SERVO_KD_PBVS, slew=SERVO_SLEW,
+                            deadband=SERVO_DEADBAND_M, approach_floor=SERVO_APPROACH_FLOOR)
         # Servo docking ke QR payload (IBVS piksel / PBVS meter). Arah sumbu = SERVO_INVERT.
         self.servo      = VisualServo(target_area=SERVO_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
                                       kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
-                                      kp_vert=IBVS_KP_VERT, **SERVO_INVERT)      # IBVS (piksel)
+                                      kp_vert=IBVS_KP_VERT, **_ibvs_smooth, **SERVO_INVERT)
         self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
                                     kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
-                                    kp_vert=PBVS_KP_VERT, **SERVO_INVERT)        # PBVS (meter)
+                                    kp_vert=PBVS_KP_VERT, **_pbvs_smooth, **SERVO_INVERT)
         # Servo "creep" SCAN_QR — mendekat ke tebakan CNN wall-hint (BELUM tervalidasi
         # decode) sebelum decode penuh berhasil, gantikan yaw-di-tempat murni saat air
         # keruh butuh jarak baca lebih dekat. Target sama dgn SERVO_TARGET_AREA (satu
@@ -318,15 +335,16 @@ class Mission5FSM:
         self.scan_creep_servo = VisualServo(target_area=SERVO_TARGET_AREA, kp_yaw=0.0,
                                             kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
                                             kp_vert=IBVS_KP_VERT, max_speed=SCAN_CREEP_MAX_SPEED,
-                                            **SERVO_INVERT)
+                                            **_ibvs_smooth, **SERVO_INVERT)
         # Servo docking ke HOOK (misi 3b HANG + misi 4 DOCK). Gain sama spt docking QR
         # (reuse kelas yang sama), hanya target area/jarak khusus hook.
         self.hook_servo      = VisualServo(target_area=HOOK_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
                                            kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
-                                           kp_vert=IBVS_KP_VERT, **SERVO_INVERT)   # IBVS (piksel)
+                                           kp_vert=IBVS_KP_VERT, **_ibvs_smooth, **SERVO_INVERT)
         self.hook_pose_servo = PoseServo(target_dist=HOOK_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
                                          kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
-                                         kp_vert=PBVS_KP_VERT, **SERVO_INVERT)     # PBVS (meter)
+                                         kp_vert=PBVS_KP_VERT, **_pbvs_smooth, **SERVO_INVERT)
+        self._servo_t = None        # timestamp langkah servo terakhir (utk dt nyata)
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
@@ -562,7 +580,7 @@ class Mission5FSM:
         if hint and hint.get('center') is not None and hint.get('area') is not None:
             out = self.scan_creep_servo.step(hint['center'][0], hint['center'][1],
                                               hint['area'], hint['frame_w'], hint['frame_h'],
-                                              dt=0.1)
+                                              dt=self._servo_dt())
             if out.aligned:
                 # Sudah sedekat target engage tapi decode masih gagal — jangan terus
                 # maju berbekal tebakan tak tervalidasi (risiko tabrak dinding). Diam,
@@ -821,21 +839,36 @@ class Mission5FSM:
             self.pose_servo.reset()
             self._transition(State.M5_REDIVE)
 
+    def _servo_dt(self):
+        """dt NYATA antar langkah servo (detik).
+
+        Loop tidur 0.1 s DITAMBAH waktu kerja (decode QR, I/O), jadi `dt=0.1`
+        hardcoded selalu meleset dan bikin suku D/I salah skala. Di-clamp: dt
+        raksasa sehabis dropout panjang atau ganti state tak boleh berubah jadi
+        lonjakan derivative yang menyentak thruster.
+        """
+        now = time.time()
+        prev, self._servo_t = self._servo_t, now
+        if prev is None:
+            return 0.1
+        return max(0.02, min(0.5, now - prev))
+
     def _servo_step(self, det):
         """Satu langkah visual servo dari deteksi QR. PBVS (pose 3D) bila ada, IBVS bila tidak.
         Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Dipakai M5_DOCK & M5_ENGAGE (hold x/y)."""
+        dt = self._servo_dt()
         pose = det.get('pose')
         self.telemetry_out['active_cam'] = 'BOTTOM'
         self.telemetry_out.update(bbox=None, confidence=None)  # bbox hook cuma dari cam WALL
         if pose is not None:                       # PBVS — pose 3D (m) bila terkalibrasi
             out = self.pose_servo.step(pose['x'], pose['y'], pose['z'],
-                                       pose.get('yaw_deg', 0.0), dt=0.1)
+                                       pose.get('yaw_deg', 0.0), dt=dt)
             log.debug("[FSM] servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
                       pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
             self.telemetry_out.update(distance_z=out.z, offset_x=out.x, offset_y=out.y)
             return out, 'PBVS'
         cx, cy = det['center']                     # IBVS — fallback error piksel
-        out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+        out = self.servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=dt)
         log.debug("[FSM] servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
                   out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
         self.telemetry_out.update(distance_z=None, offset_x=out.ex, offset_y=out.ey)
@@ -845,18 +878,19 @@ class Mission5FSM:
         """Satu langkah visual servo dari deteksi HOOK. PBVS (pose 3D) bila ada, IBVS bila tidak.
         Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Reuse VisualServo/PoseServo — hanya instans &
         target khusus hook (lihat _servo_step untuk versi QR)."""
+        dt = self._servo_dt()
         pose = det.get('pose')
         self.telemetry_out['active_cam'] = 'WALL'
         self.telemetry_out.update(bbox=det.get('bbox'), confidence=det.get('confidence'))
         if pose is not None:                       # PBVS — pose 3D (m) bila kamera terkalibrasi
             out = self.hook_pose_servo.step(pose['x'], pose['y'], pose['z'],
-                                            pose.get('yaw_deg', 0.0), dt=0.1)
+                                            pose.get('yaw_deg', 0.0), dt=dt)
             log.debug("[FSM] hook_servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
                       pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
             self.telemetry_out.update(distance_z=out.z, offset_x=out.x, offset_y=out.y)
             return out, 'PBVS'
         cx, cy = det['center']                     # IBVS — fallback error piksel
-        out = self.hook_servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=0.1)
+        out = self.hook_servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'], dt=dt)
         log.debug("[FSM] hook_servo(IBVS) ex=%.2f ey=%.2f ea=%.2f → su=%.0f sw=%.0f vt=%.0f",
                   out.ex, out.ey, out.ea, out.surge, out.sway, out.vert)
         self.telemetry_out.update(distance_z=None, offset_x=out.ex, offset_y=out.ey)

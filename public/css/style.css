@@ -899,6 +899,7 @@ body[data-theme="light"] .theme__icon::after {
   text-shadow: 0 0 8px rgba(43,224,214,.4);
 }
 .hud__rp { display: flex; gap: 14px; color: var(--ink); }
+.hud__row { display: flex; gap: 8px; align-items: center; }
 .hud__gain { color: var(--ink); letter-spacing: 1px; }
 .hud__drift { color: var(--ink); letter-spacing: 1px; }
 .hud__drift[data-stale="1"] { color: var(--ink-dim); }
@@ -1137,8 +1138,6 @@ body[data-theme="light"] .theme__icon::after {
 }
 .btn-wide:hover { background: rgba(20,216,255,.12); border-color: rgba(20,216,255,.45); box-shadow: 0 0 16px rgba(20,216,255,.15); }
 .btn-wide:active { transform: scale(.99); }
-
-.depthset { margin-top: 6px; }
 
 /* fullscreen pilot viewport */
 .panel--attitude:fullscreen { border-radius: 0; background: var(--abyss); }

@@ -885,6 +885,11 @@ function applySimCommand(name, value, msg) {
         simMissionCounterFails.m3 = 0;
       } else if (event === "fail" && mission in simMissionCounterFails) {
         simMissionCounterFails[mission] += 1;
+      } else if (event === "set" && mission in simMissionCounterFails) {
+        const trial = Number(value.trial);
+        if (Number.isFinite(trial) && trial >= 1) {
+          simMissionCounterFails[mission] = Math.floor(trial) - 1;
+        }
       }
       console.log(`[SIM] Counter ${mission || "ALL"}: ${event} ->`, simMissionCounterFails);
       break;
