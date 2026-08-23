@@ -1735,6 +1735,12 @@ function pollGamepad() {
     return;
   }
 
+  /* Tombol non-gripper (mode_manual, emergency_stop, dll) HARUS tetap bisa
+     ditekan walau mode = Autonomous / E-Stop aktif — itu justru satu-satunya
+     cara pilot membatalkan autonomous dari joystick. Yang digerbangi cuma
+     axis thruster di bawah. */
+  processMappedGamepadButtons((a) => !isGripAction(a));
+
   /* Otoritas GUI vs FSM (mirip prinsip gripper): joystick HANYA boleh
      menggerakkan ROV saat mode kontrol = Manual dan E-Stop tidak aktif.
      Saat autonomous / E-Stop, pastikan axis dinetralkan sekali lalu diam. */
@@ -1773,10 +1779,6 @@ function pollGamepad() {
     }
   }
 
-  /* ================= BUTTON MAPPING =================
-     Aksi gripper sudah diproses di jalur AUX di atas, jadi di sini hanya
-     sisanya — supaya satu rising edge tidak dieksekusi dua kali. */
-  processMappedGamepadButtons((a) => !isGripAction(a));
   commitButtonCache();
 }
 
