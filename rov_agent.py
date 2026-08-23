@@ -44,6 +44,10 @@ from rov_pid import (
     BRAKE_PULSE_MAGNITUDE,
     SWAY_BRAKE_PULSE_DURATION_S,
     SWAY_BRAKE_PULSE_MAGNITUDE,
+    HEAVE_FULL_DEFLECTION_THRESHOLD,
+    HEAVE_FULL_HOLD_MIN_S,
+    HEAVE_BRAKE_PULSE_DURATION_S,
+    HEAVE_BRAKE_PULSE_MAGNITUDE,
     clamp_depth_target,
     depth_bias_active,
     depth_hold_bias,
@@ -397,6 +401,17 @@ _surge_pulse_until = 0.0
 _surge_pulse_dir = 0
 _sway_pulse_until = 0.0
 _sway_pulse_dir = 0
+
+# State rem heave (lihat apply_heave_brake) — beda dari surge/sway: butuh
+# pelacakan LAMA stik ditahan di full-deflection, bukan cuma edge tick
+# sebelumnya. _heave_full_since = None berarti stik sedang tidak di
+# full-deflection; _heave_sustained menyala begitu tertahan cukup lama, dan
+# tetap menyala sampai stik benar-benar dilepas (arm rem saat itu terjadi).
+_prev_heave = 0
+_heave_full_since = None
+_heave_sustained = False
+_heave_pulse_until = 0.0
+_heave_pulse_dir = 0
 
 # Kill-switch autonomy: axis operator di atas ambang ini saat mode autonomous
 # membatalkan FSM dan mengembalikan kendali manual. Skalanya SAMA dengan axis
@@ -784,6 +799,62 @@ def apply_translation_brake(mc, axes):
         out["y"] = max(-1000, min(1000, out["y"] + _sway_pulse_dir * SWAY_BRAKE_PULSE_MAGNITUDE))
 
     _prev_surge, _prev_sway = surge, sway
+    return out
+
+
+# Rem heave, versi KEDUA (lihat catatan HEAVE_* di rov_pid.py untuk kenapa
+# versi pertama dicabut). HANYA aktif di ALT_HOLD: di sana stik z diteruskan
+# mentah ke Pixhawk sebagai perintah RATE (lihat apply_depth_hold_bias),
+# jadi menahannya lama-lama menghasilkan turun/naik jauh melebihi perkiraan
+# defleksi stik — beda dari STABILIZE yang sudah punya auto-follow
+# depth_target sendiri.
+def apply_heave_brake(mc, axes):
+    """Dorong pulsa balik singkat di z HANYA setelah stik heave ditahan
+    dekat full-deflection >= HEAVE_FULL_HOLD_MIN_S lalu dilepas.
+
+    Tap-tap kecil untuk menyetel kedalaman manual tidak pernah menyentuh
+    HEAVE_FULL_DEFLECTION_THRESHOLD, jadi tidak pernah arm — beda dari versi
+    pertama yang edge-detect di HEAVE_MANUAL_EPSILON polos dan melawan
+    cascade depth-hold ArduSub di tiap tap.
+    """
+    global _prev_heave, _heave_full_since, _heave_sustained
+    global _heave_pulse_until, _heave_pulse_dir
+
+    heave = axes.get("heave", 0)
+
+    _mode_now = _effective_requested_mode() or state["mode"]
+    if (current_control_mode != "manual"
+            or not depth_hold_allowed(_mode_now)
+            or depth_bias_is_continuous(_mode_now)):
+        _prev_heave = heave
+        _heave_full_since = None
+        _heave_sustained = False
+        _heave_pulse_until = 0.0
+        return mc
+
+    now = time.time()
+    out = dict(mc)
+
+    if abs(heave) >= HEAVE_FULL_DEFLECTION_THRESHOLD:
+        if _heave_full_since is None:
+            _heave_full_since = now
+        elif now - _heave_full_since >= HEAVE_FULL_HOLD_MIN_S:
+            _heave_sustained = True
+    else:
+        _heave_full_since = None
+
+    if axis_released(_prev_heave, heave, HEAVE_MANUAL_EPSILON):
+        if _heave_sustained:
+            _heave_pulse_until = now + HEAVE_BRAKE_PULSE_DURATION_S
+            _heave_pulse_dir = -1 if _prev_heave > 0 else 1
+        _heave_sustained = False
+
+    if abs(heave) > HEAVE_MANUAL_EPSILON:
+        _heave_pulse_until = 0.0
+    elif now < _heave_pulse_until:
+        out["z"] = max(0, min(1000, out["z"] + _heave_pulse_dir * HEAVE_BRAKE_PULSE_MAGNITUDE))
+
+    _prev_heave = heave
     return out
 
 
@@ -2088,6 +2159,11 @@ def joystick_sender():
         # dikalikan gain — pas di ambang epsilon atau di bawahnya — dan
         # gerbang bisa gagal mendeteksi stik yang sebenarnya sedang dipegang.
         mc = apply_depth_hold_bias(mc, eff_axes)
+
+        # Rem heave, hanya ALT_HOLD & hanya setelah full-deflection tertahan
+        # lama — lihat apply_heave_brake untuk kenapa beda dari versi pertama
+        # yang dicabut.
+        mc = apply_heave_brake(mc, eff_axes)
 
         # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
         # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya

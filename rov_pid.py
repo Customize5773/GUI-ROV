@@ -305,10 +305,26 @@ BRAKE_PULSE_DURATION_S = 0.45
 SWAY_BRAKE_PULSE_MAGNITUDE = 220   # unit y (sway) terhadap netral (0)
 SWAY_BRAKE_PULSE_DURATION_S = 0.3
 
-# Rem heave dicoba & DICABUT 23 Agu 2026: edge-detect polos pada tap-tap
-# kecil yang lazim dipakai pilot untuk menyetel kedalaman manual ternyata
-# melawan cascade depth-hold ArduSub berkali-kali (depth mengembara
+# Rem heave PERTAMA dicoba & DICABUT 23 Agu 2026: edge-detect polos pada
+# tap-tap kecil yang lazim dipakai pilot untuk menyetel kedalaman manual
+# ternyata melawan cascade depth-hold ArduSub berkali-kali (depth mengembara
 # 0,20-0,54 m). Lihat catatan di apply_translation_brake, rov_agent.py.
+#
+# Rem heave versi KEDUA (23 Agu 2026, sesi berbeda): expo joystick per-axis
+# sudah dinaikkan ke maksimum (4) untuk heave dan ROV masih turun jauh dari
+# perkiraan defleksi stik di ALT_HOLD — root cause-nya bukan sensitivitas
+# input, tapi stik z di ALT_HOLD adalah perintah RATE turun/naik (bukan
+# posisi), jadi makin lama ditahan makin jauh turunnya, terlepas dari expo.
+# Beda dari versi pertama: HANYA arm kalau stik ditahan dekat full-deflection
+# (>= HEAVE_FULL_DEFLECTION_THRESHOLD) selama >= HEAVE_FULL_HOLD_MIN_S —
+# tap-tap kecil untuk menyetel kedalaman tidak pernah menyentuh threshold ini
+# sehingga tidak pernah arm, jadi tidak melawan cascade depth-hold seperti
+# versi pertama. Hanya berlaku di ALT_HOLD (lihat apply_heave_brake di
+# rov_agent.py) — STABILIZE sudah punya auto-follow depth_target sendiri.
+HEAVE_FULL_DEFLECTION_THRESHOLD = 800   # |z| di atas ini dianggap "full deflection"
+HEAVE_FULL_HOLD_MIN_S = 0.6             # lama minimum tertahan di atas threshold sebelum arm
+HEAVE_BRAKE_PULSE_MAGNITUDE = 350       # unit z (heave) terhadap netral (0)
+HEAVE_BRAKE_PULSE_DURATION_S = 0.35
 
 
 def depth_bias_active(error, was_active):
