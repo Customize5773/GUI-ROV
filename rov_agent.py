@@ -42,8 +42,8 @@ from rov_pid import (
     DEPTH_PULSE_MAGNITUDE,
     BRAKE_PULSE_DURATION_S,
     BRAKE_PULSE_MAGNITUDE,
-    HEAVE_BRAKE_PULSE_DURATION_S,
-    HEAVE_BRAKE_PULSE_MAGNITUDE,
+    SWAY_BRAKE_PULSE_DURATION_S,
+    SWAY_BRAKE_PULSE_MAGNITUDE,
     clamp_depth_target,
     depth_bias_active,
     depth_hold_bias,
@@ -56,6 +56,7 @@ from rov_pid import (
 from attitude_filter import AttitudeFilter
 from gripper_controller import GripperController
 from rov_drift import flow_to_velocity, integrate_accel, IMU_GAP_FILL_MAX_S
+from rov_position import position_correction, operator_holding_translation
 
 # =========================
 # Konfigurasi jaringan
@@ -397,13 +398,6 @@ _surge_pulse_dir = 0
 _sway_pulse_until = 0.0
 _sway_pulse_dir = 0
 
-# Sama seperti di atas tapi untuk heave — lihat HEAVE_BRAKE_PULSE_* di
-# rov_pid.py untuk kenapa axis ini punya konstanta magnitude/durasi sendiri
-# (encoding z beda dari x/y, 0..1000 netral 500).
-_prev_heave = 0
-_heave_pulse_until = 0.0
-_heave_pulse_dir = 0
-
 # Kill-switch autonomy: axis operator di atas ambang ini saat mode autonomous
 # membatalkan FSM dan mengembalikan kendali manual. Skalanya SAMA dengan axis
 # GUI, -1000..1000 (clampAxis di server.js, AXIS_RANGE di rov_axes.py) — jadi
@@ -653,6 +647,84 @@ def apply_heading_hold(mc, axes):
 
 
 # =========================
+# POSITION HOLD x/y (dari optical flow — lihat rov_position.py)
+# =========================
+# Default OFF (POSITION_HOLD_TO_THRUSTER, env M5_POSITION_HOLD) — sama
+# alasan dengan OPTFLOW_TO_EKF: arah dx/dy kamera-vs-body BELUM divalidasi
+# (rov_drift.py). Kalau tandanya terbalik, fitur ini AKTIF MENDORONG wahana
+# ke arah salah, bukan cuma "kurang membantu". Nyalakan hanya setelah HUD
+# drift_vx/vy dikonfirmasi arahnya benar di kolam.
+POSITION_HOLD_TO_THRUSTER = os.environ.get("M5_POSITION_HOLD", "0") == "1"
+
+# Akumulasi pergeseran (meter) sejak stick surge/sway terakhir dilepas —
+# BUKAN posisi absolut (tidak ada GPS/DVL). Lihat docstring rov_position.py.
+position_error_x = 0.0
+position_error_y = 0.0
+position_lock = threading.Lock()
+
+# Timestamp tick terakhir position hold benar-benar mengakumulasi error.
+# None berarti belum ada dt yang valid untuk tick berikutnya — dipakai
+# supaya integrasi tidak melompat besar begitu stick baru saja dilepas
+# setelah lama dipegang (lihat apply_position_hold).
+_position_last_ts = None
+
+
+def apply_position_hold(mc, axes):
+    """Tambahkan koreksi x/y untuk menahan pergeseran RELATIF sejak stick
+    surge/sway dilepas, pakai drift_vx/vy (optical flow) sebagai umpan balik.
+
+    Aturan sama seperti apply_heading_hold(): operator menang mutlak, dan
+    akumulasi error DIBUANG begitu stick disentuh (bukan cuma diabaikan)
+    supaya wahana menahan posisi BARU tempat operator meninggalkannya.
+
+    Cuma percaya bacaan visual asli (drift_source == "flow") — TIDAK pernah
+    mendorong thruster berdasar tambalan IMU (integrate_accel), yang
+    akurasinya jauh di bawah standar untuk loop tertutup yang benar-benar
+    menggerakkan wahana (beda dari sekadar tampilan HUD).
+    """
+    global position_error_x, position_error_y, _position_last_ts
+
+    if not POSITION_HOLD_TO_THRUSTER or not poshold_engaged():
+        with position_lock:
+            position_error_x = 0.0
+            position_error_y = 0.0
+        _position_last_ts = None
+        return mc
+
+    if operator_holding_translation(axes):
+        with position_lock:
+            position_error_x = 0.0
+            position_error_y = 0.0
+        _position_last_ts = None
+        return mc
+
+    if state.get("drift_source") != "flow":
+        # Data tak segar/tak dipercaya: BEKUKAN akumulasi (jangan integrasi
+        # dengan dt besar begitu flow segar lagi), tapi jangan buang — flow
+        # bisa saja cuma kedip sesaat, bukan operator menyentuh stik.
+        _position_last_ts = None
+        return mc
+
+    now = time.time()
+    dt = (now - _position_last_ts) if _position_last_ts is not None else 0.0
+    _position_last_ts = now
+
+    with position_lock:
+        position_error_x += state.get("drift_vx", 0.0) * dt
+        position_error_y += state.get("drift_vy", 0.0) * dt
+        ex, ey = position_error_x, position_error_y
+
+    cx, cy = position_correction(ex, ey)
+    if cx == 0 and cy == 0:
+        return mc
+
+    out = dict(mc)
+    out["x"] = max(-1000, min(1000, int(mc["x"]) + cx))
+    out["y"] = max(-1000, min(1000, int(mc["y"]) + cy))
+    return out
+
+
+# =========================
 # BRAKE (rem surge/sway ala DJI)
 # =========================
 # TIDAK ADA DVL/GPS di bawah air, jadi ini BUKAN position hold: hanya
@@ -661,34 +733,35 @@ def apply_heading_hold(mc, axes):
 # (lihat rov_modes.py baris 34-48). Pola pulsa sama persis dengan
 # depth_up/down (_depth_pulse_until/_depth_pulse_dir di apply_depth_hold_bias).
 def apply_translation_brake(mc, axes):
-    """Dorong pulsa balik singkat di x/y/z begitu stick surge/sway/heave
-    dilepas.
+    """Dorong pulsa balik singkat di x/y begitu stick surge/sway dilepas.
 
     Operator selalu menang mutlak: menyentuh stick axis itu lagi — searah
     ataupun berlawanan — langsung membatalkan pulsa yang sedang jalan.
     Hanya aktif saat kendali manual; axis FSM (autonomous) tidak diberi rem
     yang tak diminta.
 
-    Heave BEROPERASI DI LUAR cascade depth-hold ArduSub/bias STABILIZE
-    (apply_depth_hold_bias, sudah jalan lebih dulu di mc sebelum fungsi ini
-    dipanggil — lihat joystick_sender) — pulsa ini murni menghentikan
-    momentum vertikal SESAAT sebelum cascade/bias sempat bereaksi, bukan
-    pengganti keduanya.
+    SENGAJA TIDAK ADA rem heave (dicoba 23 Agu 2026, dicabut hari yang
+    sama). Beda dari surge/sway — di mana "lepas stick" nyaris selalu
+    berarti "selesai bergerak" — pilot lazim melakukan tap-tap KECIL di
+    heave untuk menyetel kedalaman manual sambil ALT_HOLD/cascade berusaha
+    menahan. Tiap tap kecil itu tetap melewati BRAKE_MANUAL_EPSILON, jadi
+    rem 45% otoritas selama 0,45 detik menyala berkali-kali dan JUSTRU
+    melawan cascade depth-hold ArduSub — trial menunjukkan depth mengembara
+    0,20-0,54 m alih-alih menetap. Kalau heave butuh rasa "brake" suatu
+    hari nanti, itu harus lewat jalur berbeda (mis. HANYA setelah heave
+    ditahan lama di luar deadzone, bukan edge-detect polos seperti ini).
     """
-    global _prev_surge, _prev_sway, _prev_heave
+    global _prev_surge, _prev_sway
     global _surge_pulse_until, _surge_pulse_dir
     global _sway_pulse_until, _sway_pulse_dir
-    global _heave_pulse_until, _heave_pulse_dir
 
     surge = axes.get("surge", 0)
     sway = axes.get("sway", 0)
-    heave = axes.get("heave", 0)
 
     if current_control_mode != "manual":
-        _prev_surge, _prev_sway, _prev_heave = surge, sway, heave
+        _prev_surge, _prev_sway = surge, sway
         _surge_pulse_until = 0.0
         _sway_pulse_until = 0.0
-        _heave_pulse_until = 0.0
         return mc
 
     now = time.time()
@@ -703,23 +776,14 @@ def apply_translation_brake(mc, axes):
         out["x"] = max(-1000, min(1000, out["x"] + _surge_pulse_dir * BRAKE_PULSE_MAGNITUDE))
 
     if axis_released(_prev_sway, sway, BRAKE_MANUAL_EPSILON):
-        _sway_pulse_until = now + BRAKE_PULSE_DURATION_S
+        _sway_pulse_until = now + SWAY_BRAKE_PULSE_DURATION_S
         _sway_pulse_dir = -1 if _prev_sway > 0 else 1
     if abs(sway) > BRAKE_MANUAL_EPSILON:
         _sway_pulse_until = 0.0
     elif now < _sway_pulse_until:
-        out["y"] = max(-1000, min(1000, out["y"] + _sway_pulse_dir * BRAKE_PULSE_MAGNITUDE))
+        out["y"] = max(-1000, min(1000, out["y"] + _sway_pulse_dir * SWAY_BRAKE_PULSE_MAGNITUDE))
 
-    if axis_released(_prev_heave, heave, BRAKE_MANUAL_EPSILON):
-        _heave_pulse_until = now + HEAVE_BRAKE_PULSE_DURATION_S
-        _heave_pulse_dir = -1 if _prev_heave > 0 else 1
-    if abs(heave) > BRAKE_MANUAL_EPSILON:
-        _heave_pulse_until = 0.0
-    elif now < _heave_pulse_until:
-        # z: 0..1000, netral 500 (BUKAN -1000..1000 seperti x/y) — clamp beda.
-        out["z"] = max(0, min(1000, out["z"] + _heave_pulse_dir * HEAVE_BRAKE_PULSE_MAGNITUDE))
-
-    _prev_surge, _prev_sway, _prev_heave = surge, sway, heave
+    _prev_surge, _prev_sway = surge, sway
     return out
 
 
@@ -2020,6 +2084,10 @@ def joystick_sender():
         # Rem surge/sway ala DJI — lihat apply_translation_brake untuk batas
         # fisiknya (bukan position hold, cuma menghentikan momentum sendiri).
         mc = apply_translation_brake(mc, eff_axes)
+
+        # Position hold x/y dari optical flow — default OFF, lihat
+        # POSITION_HOLD_TO_THRUSTER & docstring apply_position_hold.
+        mc = apply_position_hold(mc, eff_axes)
 
         try:
             with master_lock:

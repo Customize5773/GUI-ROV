@@ -281,9 +281,9 @@ DEPTH_BIAS_MAX_CORRECTION = 0.35  # meter
 DEPTH_PULSE_MAGNITUDE = 150   # unit z terhadap Z_NEUTRAL (500), searah DEPTH_BIAS_LIMIT
 DEPTH_PULSE_DURATION_S = 0.35
 
-# Pulsa rem sekali-tembak untuk surge/sway saat stick dilepas (rasa "brake"
-# ala DJI): begitu |axis| turun dari atas epsilon ke bawahnya, dorong sesaat
-# ke ARAH BERLAWANAN dari axis terakhir, lalu netral. Ini HANYA menghentikan
+# Pulsa rem sekali-tembak untuk surge saat stick dilepas (rasa "brake" ala
+# DJI): begitu |axis| turun dari atas epsilon ke bawahnya, dorong sesaat ke
+# ARAH BERLAWANAN dari axis terakhir, lalu netral. Ini HANYA menghentikan
 # momentum ROV sendiri lebih cepat — tidak ada DVL/GPS di bawah air, jadi
 # TIDAK menahan posisi x/y melawan arus (lihat rov_modes.py baris 34-48).
 # ponytail: magnitude & durasi tebakan awal, sama alasannya dengan
@@ -292,21 +292,23 @@ DEPTH_PULSE_DURATION_S = 0.35
 # (AXIS_SLEW_PER_SEC di joystick-state.js) sudah meluncurkan perintah ke 0
 # dalam ~0,25s SEBELUM rilis terdeteksi, jadi momentum sudah banyak meluruh
 # duluan, dan (b) 150 unit (~15% otoritas) kalah lawan drag air + lag ESC.
-BRAKE_PULSE_MAGNITUDE = 450   # unit x/y terhadap netral (0)
+BRAKE_PULSE_MAGNITUDE = 450   # unit x (surge) terhadap netral (0)
 BRAKE_PULSE_DURATION_S = 0.45
 
-# Pulsa rem heave — pola sama persis dengan BRAKE_PULSE_* di atas, TAPI axis
-# terpisah karena encoding z beda (0..1000, netral 500 — lihat to_mavlink_z
-# di rov_axes.py) dan jumlah thruster vertikal beda (3 vs 2 horizontal),
-# jadi kebutuhan magnitude/durasinya kemungkinan tidak sama. Beroperasi DI
-# LUAR cascade depth-hold ArduSub (apply_depth_hold_bias) — pulsa ini murni
-# menghentikan momentum vertikal sesaat sebelum cascade/bias sempat bereaksi,
-# bukan pengganti keduanya.
-# ponytail: mulai dari nilai yang sama dengan BRAKE_PULSE_* (sudah terbukti
-# perlu dinaikkan dari tebakan pertama) — tala ulang di kolam kalau heave
-# ternyata butuh besaran berbeda dari surge/sway.
-HEAVE_BRAKE_PULSE_MAGNITUDE = 450   # unit z terhadap netral (500)
-HEAVE_BRAKE_PULSE_DURATION_S = 0.45
+# Rem sway TERPISAH dari surge (23 Agu 2026): frame BlueROV1 ROV ini pakai
+# SATU thruster (T6) untuk sway vs DUA untuk surge (lihat CONTROL-MAPPING.md
+# / memori "Frame ROV 3-2-1") — otoritas & respons per-unit stick beda,
+# jadi magnitude yang pas untuk surge terbukti overshoot di sway (trial
+# 23 Agu: dorongan balik terlalu kuat, ROV melewati titik henti alih-alih
+# cuma berhenti). Diturunkan ~separuh sebagai titik awal, bukan hasil ukur —
+# tala lagi di kolam.
+SWAY_BRAKE_PULSE_MAGNITUDE = 220   # unit y (sway) terhadap netral (0)
+SWAY_BRAKE_PULSE_DURATION_S = 0.3
+
+# Rem heave dicoba & DICABUT 23 Agu 2026: edge-detect polos pada tap-tap
+# kecil yang lazim dipakai pilot untuk menyetel kedalaman manual ternyata
+# melawan cascade depth-hold ArduSub berkali-kali (depth mengembara
+# 0,20-0,54 m). Lihat catatan di apply_translation_brake, rov_agent.py.
 
 
 def depth_bias_active(error, was_active):
