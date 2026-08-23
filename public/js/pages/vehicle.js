@@ -17,7 +17,7 @@
 // tombol ARM dan tab mode di app.js — jangan pernah percaya klik operator
 // sebagai bukti wahana sudah berubah.
 
-import { log, sendCmd, wsSend } from "../core.js";
+import { log, sendCmd, wsSend, makeFullscreen } from "../core.js";
 
 /* Tipe param (padanan rov_params.PARAM_TYPES di Python & sim-params.js di server). */
 const PARAM_TYPE_NAMES = {
@@ -78,6 +78,25 @@ export const vehiclePage = {
   init(root) {
     root.innerHTML = `
       <div class="veh">
+        <div class="veh__design">
+          <div class="veh__eyebrow-row">
+            <span class="panel__eyebrow">SPESIFIKASI TEKNIS</span>
+            <h2 class="veh__title veh__title--design">Desain ROV</h2>
+          </div>
+          <div class="veh__plates">
+            <figure class="veh__plate">
+              <img src="models/rov2d_1.jpeg" alt="Desain ROV — tampak 1" />
+              <span class="veh__plate__label">PLAT 01 &middot; TAMPAK 1</span>
+              <button class="chip chip--ghost veh__plate__zoom" data-plate-fs="0" title="Perbesar">⛶</button>
+            </figure>
+            <figure class="veh__plate">
+              <img src="models/rov2d_2.jpeg" alt="Desain ROV — tampak 2" />
+              <span class="veh__plate__label">PLAT 02 &middot; TAMPAK 2</span>
+              <button class="chip chip--ghost veh__plate__zoom" data-plate-fs="1" title="Perbesar">⛶</button>
+            </figure>
+          </div>
+        </div>
+
         <div class="veh__head">
           <div>
             <span class="panel__eyebrow">VEHICLE CONFIGURATION</span>
@@ -144,6 +163,12 @@ export const vehiclePage = {
     root.querySelector("#vehRefresh").onclick = () => this.requestAll();
     root.querySelector("#vehGoSetup").onclick = () => this._goto("setup");
     root.querySelector("#vehGoJoy").onclick = () => this._goto("joystick");
+
+    for (const btn of root.querySelectorAll("[data-plate-fs]")) {
+      const plate = btn.closest(".veh__plate");
+      const fs = makeFullscreen(plate);
+      btn.onclick = () => fs.toggle();
+    }
 
     this._render();
   },

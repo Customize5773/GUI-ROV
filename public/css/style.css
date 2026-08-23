@@ -1535,6 +1535,33 @@ body.pseudo-fs-lock { overflow: hidden; }
 .veh__title { margin: 2px 0 0; font-family: "Chakra Petch", sans-serif; font-size: 20px; font-weight: 700; letter-spacing: .5px; color: var(--ink); }
 .veh__note { max-width: 74ch; }
 
+/* Panel "Desain ROV": 2 plat bergaya blueprint di atas tabel parameter. */
+.veh__eyebrow-row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 10px; }
+.veh__title--design { margin-top: 2px; }
+
+.veh__plates { display: grid; grid-template-columns: 1fr 1fr; gap: var(--gap); }
+@media (max-width: 720px) { .veh__plates { grid-template-columns: 1fr; } }
+
+.veh__plate {
+  position: relative; margin: 0; padding: 10px;
+  background:
+    repeating-linear-gradient(0deg, var(--line) 0, var(--line) 1px, transparent 1px, transparent 24px),
+    repeating-linear-gradient(90deg, var(--line) 0, var(--line) 1px, transparent 1px, transparent 24px),
+    var(--surface);
+  border: 1px solid var(--line); border-radius: var(--r);
+}
+.veh__plate img { display: block; width: 100%; height: 260px; object-fit: contain; background: var(--abyss); border-radius: 4px; }
+.veh__plate__label {
+  position: absolute; top: 18px; left: 18px; padding: 2px 8px;
+  font-family: "JetBrains Mono", monospace; font-size: 10px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--sonar-dim); background: rgba(8,20,35,.72); border: 1px solid var(--line); border-radius: 4px;
+}
+.veh__plate__zoom { position: absolute; top: 16px; right: 16px; }
+.veh__plate:fullscreen, .veh__plate.pseudo-fs {
+  display: flex; align-items: center; justify-content: center; background: var(--abyss);
+}
+.veh__plate:fullscreen img, .veh__plate.pseudo-fs img { height: 100%; }
+
 .veh__controls {
   display: flex; flex-wrap: wrap; gap: 10px; align-items: flex-end;
   padding: 12px; background: var(--surface); border: 1px solid rgba(255,255,255,.06); border-radius: var(--r);
