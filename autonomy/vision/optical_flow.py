@@ -37,7 +37,19 @@ except ImportError:
 
 # Parameter goodFeaturesToTrack / calcOpticalFlowPyrLK — nilai umum OpenCV
 # untuk sparse LK, belum ditala khusus untuk tekstur dasar kolam ini.
-_FEATURE_PARAMS = dict(maxCorners=200, qualityLevel=0.3, minDistance=7, blockSize=7)
+# maxCorners diturunkan dari 200 (23 Agu 2026): thread ini sendirian memakai
+# ~85% CPU di Pi 4 dan mengganggu loop kontrol utama (ALT_HOLD naik-turun
+# sendiri saat trial) — lihat juga DOWNSCALE di bawah & DRIFT_FPS di
+# rov_agent.py, dua-duanya diturunkan bersamaan untuk alasan yang sama.
+_FEATURE_PARAMS = dict(maxCorners=100, qualityLevel=0.3, minDistance=7, blockSize=7)
+
+# Skala downsize sebelum goodFeaturesToTrack/calcOpticalFlowPyrLK — biaya
+# sparse LK naik kira-kira sebanding luas piksel, jadi 0.5 (setengah
+# panjang/lebar) ~4x lebih murah dari resolusi asli. dx/dy hasil DIBAGI
+# balik dengan skala ini sebelum dikembalikan supaya tetap dalam satuan
+# piksel FRAME ASLI (flow_to_velocity di rov_drift.py pakai focal_px dari
+# kalibrasi resolusi asli).
+DOWNSCALE = 0.5
 _LK_PARAMS = dict(
     winSize=(15, 15), maxLevel=2,
     criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03),
@@ -132,6 +144,9 @@ class FlowTracker:
                 continue
 
             gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            if DOWNSCALE != 1.0:
+                gray = cv2.resize(gray, None, fx=DOWNSCALE, fy=DOWNSCALE,
+                                   interpolation=cv2.INTER_AREA)
             self._process(gray, t_start)
 
             elapsed = time.time() - t_start
@@ -158,7 +173,12 @@ class FlowTracker:
             quality = len(good_new)
             if quality > 0 and dt > 0:
                 disp = (good_new - good_old).reshape(-1, 2)
-                dx, dy = float(np.median(disp[:, 0])), float(np.median(disp[:, 1]))
+                # Balik ke satuan piksel FRAME ASLI (lihat DOWNSCALE) — kalau
+                # tidak, flow_to_velocity di rov_drift.py memakai focal_px
+                # kalibrasi resolusi asli terhadap dx/dy yang sudah diperkecil,
+                # dan kecepatan yang dihitung jadi terlalu kecil.
+                dx = float(np.median(disp[:, 0])) / DOWNSCALE
+                dy = float(np.median(disp[:, 1])) / DOWNSCALE
                 with self._lock:
                     self._last_flow = {
                         "dx": dx, "dy": dy, "dt": dt,

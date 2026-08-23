@@ -1095,7 +1095,17 @@ def setup_mission5_runner():
 # cuma saat misi otonom jalan. Gagal-lunak di setiap langkah (import
 # opencv/numpy, muat kalibrasi, buka kamera): kontrol manual tidak pernah
 # ikut terganggu, lihat pola yang sama di setup_mission5_runner().
-DRIFT_FPS = 10
+#
+# Saklar total (23 Agu 2026): thread ini sendirian memakai ~85% CPU di Pi 4
+# dan mengganggu loop kontrol utama — ALT_HOLD naik-turun sendiri saat
+# trial, kemungkinan besar jitter MANUAL_CONTROL akibat GIL/CPU direbut
+# terus-menerus oleh OpenCV. M5_DRIFT_ENABLED=0 mematikan drift sensing
+# SELURUHNYA (thread tidak pernah start) untuk penyelaman yang tak boleh
+# terganggu sama sekali, tanpa perlu ubah kode. Default tetap ON tapi
+# DRIFT_FPS diturunkan + frame di-downscale (lihat optical_flow.py
+# DOWNSCALE) supaya beban CPU jauh lebih kecil dari sebelumnya.
+DRIFT_ENABLED = os.environ.get("M5_DRIFT_ENABLED", "1") == "1"
+DRIFT_FPS = 5
 DRIFT_LOOP_INTERVAL = 1.0 / DRIFT_FPS
 
 # Tahap 2 (kirim OPTICAL_FLOW_RAD ke EKF ArduSub, EK3_SRC1_VELXY=5): default
@@ -1120,6 +1130,10 @@ def drift_estimator_thread():
     — lihat rov_drift.py untuk kenapa ini TIDAK dimaksudkan sebagai dead-
     reckoning berkepanjangan.
     """
+    if not DRIFT_ENABLED:
+        print("[DRIFT] nonaktif (M5_DRIFT_ENABLED=0) — drift sensing tidak start")
+        return
+
     try:
         import numpy as np
         from vision.optical_flow import FlowTracker
