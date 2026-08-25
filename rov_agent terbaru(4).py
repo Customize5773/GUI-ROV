@@ -10,10 +10,15 @@ from rov_axes import (
     AXIS_NEUTRAL,
     AXIS_RANGE,
     axes_to_manual_control,
+    axis_released,
     clamp_axis,
     resolve_manual_packet,
 )
+
 from rov_modes import (
+    depth_bias_engaged,
+    depth_bias_is_continuous,
+    depth_hold_allowed,
     is_poshold_request,
     poshold_mode_ok,
     resolve_pilot_mode,
@@ -28,14 +33,34 @@ from rov_params import (
     param_type_name,
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
-
 from rov_pid import (
+    DEPTH_BIAS_ENGAGE,
+    DEPTH_BIAS_LIMIT,
+    DEPTH_BIAS_MAX_CORRECTION,
+    DEPTH_BIAS_RELEASE,
+    DEPTH_PULSE_DURATION_S,
+    DEPTH_PULSE_MAGNITUDE,
+    BRAKE_PULSE_DURATION_S,
+    BRAKE_PULSE_MAGNITUDE,
+    SWAY_BRAKE_PULSE_DURATION_S,
+    SWAY_BRAKE_PULSE_MAGNITUDE,
+    HEAVE_FULL_DEFLECTION_THRESHOLD,
+    HEAVE_FULL_HOLD_MIN_S,
+    HEAVE_BRAKE_PULSE_DURATION_S,
+    HEAVE_BRAKE_PULSE_MAGNITUDE,
+    clamp_depth_target,
+    depth_bias_active,
+    depth_hold_bias,
     resolve_pid_writes,
+    smooth_depth,
     valid_pool_depth,
+
 )
 
 from attitude_filter import AttitudeFilter
 from gripper_controller import GripperController
+from rov_drift import flow_to_velocity, integrate_accel, IMU_GAP_FILL_MAX_S
+from rov_position import position_correction, operator_holding_translation
 
 # =========================
 # Konfigurasi jaringan
@@ -148,6 +173,9 @@ state = {
     # sudah punya penanda sendiri untuk arah sebaliknya (telemetry tidak sampai
     # ke GUI); yang ini menandai perintah tidak sampai ke Pi.
     "cmd_link": "ok",
+    # Counter trial Misi 2/3 (command `mission_counter`) — default trial 1/skor 15
+    # sebelum pilot menekan "Gagal, Ulangi" atau "Reset" pertama kali.
+    "mission_counter": {"m2_fails": 0, "m2_score": 15, "m3_fails": 0, "m3_score": 15},
     # Untuk tuning PID depth-hold (halaman Telemetry, ekspor CSV): rata-rata
     # PWM T3/T4/T5 dari SERVO_OUTPUT_RAW, dan P/I/D dari PID_TUNING (axis
     # ACCZ). Tetap 0 kalau FC tidak mengirim pesan itu (mis. PID_TUNING_MASK
@@ -178,6 +206,24 @@ state = {
     # membedakan "belum ada data" dari "posisi 0,0" dan jatuh ke fallback.
     "pos_n": None,
     "pos_e": None,
+    # Tanda gantungan dari tombol MARK (command `mark_hook`). None = belum
+    # ditandai — lihat marked_heading/marked_depth untuk kenapa ini heading+depth
+    # dan bukan koordinat x/y.
+    "marked_heading": None,
+    "marked_depth": None,
+    # Flag mentah toggle poshold operator — lihat send_telemetry() untuk
+    # kenapa GUI butuh ini terpisah dari "mode"/"depth_hold".
+    "poshold": False,
+    # Kecepatan drift dari kamera BOTTOM (optical flow, lihat rov_drift.py).
+    # quality 0 berarti tak ada bacaan segar (cv2/kamera tak ada, atau
+    # pool_depth belum di-set) — vx/vy TETAP 0.0, bukan angka basi yang bisa
+    # disalahartikan operator sebagai "sedang diam".
+    "drift_vx": 0.0,
+    "drift_vy": 0.0,
+    "drift_quality": 0,
+    # "flow" = bacaan optical flow segar, "imu" = tambalan celah singkat
+    # (integrate_accel, lihat rov_drift.py), "none" = tak ada keduanya.
+    "drift_source": "none",
 }
 
 master = None
@@ -194,10 +240,33 @@ master_lock = threading.Lock()
 # bukan hukum kendali apa yang dipakai wahana.
 current_control_mode = "manual"
 
+# Mission5 FSM (misi 5 autonomous). Dibuat saat pertama kali dibutuhkan di
+# main(), dinyalakan/dimatikan oleh toggle control_mode di command_listener.
+# None berarti belum di-setup (mis. import autonomy gagal) — kontrol manual
+# tetap jalan penuh, lihat rov_mission5_bridge.Mission5Runner.
+mission5_runner = None
+
+# Axis yang sedang diperintahkan FSM (skala GUI -1000..1000). Terpisah dari
+# `joystick` (axis operator) supaya keduanya tidak pernah saling menimpa: yang
+# menentukan mana yang dipakai adalah current_control_mode di joystick_sender.
+fsm_axes = {"surge": 0, "sway": 0, "heave": 0, "yaw": 0}
+fsm_axes_lock = threading.Lock()
+
 # Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
 attitude_filter = AttitudeFilter()
 prev_attitude_ts = None
+
+# Body rate (roll/pitch/yaw, rad/s) mentah dari ATTITUDE terakhir — dipakai
+# suku gyro OPTICAL_FLOW_RAD di drift_estimator_thread() (Tahap 2). Sengaja
+# TIDAK dari attitude_filter (itu sudah di-EMA untuk tampilan, bukan untuk
+# kompensasi rotasi per-frame flow).
+_last_body_rates = (0.0, 0.0, 0.0)
+
+# Akselerasi body-frame (m/s^2, x=depan/surge, y=kanan/sway) dari SCALED_IMU2
+# terakhir — dipakai integrate_accel() di drift_estimator_thread() untuk
+# menambal celah SINGKAT saat optical flow kosong (lihat rov_drift.py).
+_last_body_accel = (0.0, 0.0)
 
 joystick = {
     "surge": 0,
@@ -206,22 +275,57 @@ joystick = {
     "yaw": 0,
 }
 
-# =========================
-# Depth Hold
-# =========================
-depth_hold_enabled = False
+# Setpoint kedalaman, meter, positif ke bawah. None = BELUM PERNAH DI-SET.
+#
+# None sengaja dibedakan dari 0.0: 0.0 adalah setpoint yang sah ("tahan di
+# permukaan"), jadi memakai 0.0 sebagai "belum ada" membuat depth-set tidak
+# bisa membedakan operator yang menekan SET tepat di permukaan dari operator
+# yang belum menekan SET sama sekali — yang pertama harus menahan, yang kedua
+# tidak boleh mengirim bias apa pun.
+depth_target = None
 
-depth_offset = 0.0
-_raw_depth = 0.0
+# Pulsa sekali-tembak depth_up/down di ALT_HOLD (lihat DEPTH_PULSE_* di
+# rov_pid.py) — beda dari depth_target/bias berkelanjutan yang dipakai
+# STABILIZE. _depth_pulse_until = 0.0 berarti tidak ada pulsa aktif.
+_depth_pulse_until = 0.0
+_depth_pulse_dir = 0
 
-depth_lock = threading.Lock()
+# Tanda gantungan (command `mark_hook`): heading & depth SAAT operator menekan
+# MARK, yaitu tepat ketika payload tergantung di hook pada misi 3. Dipakai
+# Mission5FSM.M5_REDIVE untuk kembali ke sana saat misi 5 autonomous.
+#
+# Kenapa heading+depth dan BUKAN koordinat x/y: wahana ini tidak punya estimasi
+# posisi horizontal sama sekali (tidak ada GPS/DVL/optical flow — lihat bagian
+# POSHOLD di bawah). state["pos_n"]/["pos_e"] tetap None karena
+# LOCAL_POSITION_NED tak pernah dikirim FC. Jadi tak ada koordinat untuk direkam.
+#
+# None = belum pernah di-MARK. Dibedakan tegas dari 0.0 yang merupakan nilai sah
+# (heading 0° = utara), pola sama dengan depth_target di atas.
+#
+# Sengaja HANYA di memori: hilang saat rov-agent.service restart. Satu run lomba
+# 10 menit, dan status mark dipantulkan ke telemetri supaya operator melihat
+# kalau ia terhapus, bukan menemukannya saat wahana sudah menyelam.
+marked_heading = None
+marked_depth = None
 
-_DEPTH_CMD_RATE_HZ = 2.0
-_depth_cmd_rate = RateLimiter(_DEPTH_CMD_RATE_HZ)
+# Hitungan trial gagal Misi 2 (grab) & Misi 3 (hang), command `mission_counter`.
+# Skor 15/10/5 per Guidebook KKI 2026 §4.7.4 ditentukan dari jumlah trial —
+# ROV tak punya sensor grip-force, jadi gagal/sukses dilihat & ditandai pilot
+# dari kamera secara langsung. Sengaja HANYA di memori sama seperti marked_*
+# di atas: hilang saat restart, satu run lomba 10 menit.
+mission_counter_fails = {"m2": 0, "m3": 0}
+
+
+def _tier_score(fails: int) -> int:
+    """Skor trial per Guidebook §4.7.4: trial 1=15, trial 2=10, trial >2=5."""
+    trial = fails + 1
+    return 15 if trial == 1 else 10 if trial == 2 else 5
+
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
 # depth 0 operator = permukaan sungguhan, bukan origin baro/EKF mentah yang
+# bisa drift atau tidak pas 0 saat ROV di-arm. TANPA ini, apply_depth_hold_bias()
 # menghitung error dari depth mentah sementara GUI menampilkan angka yang sudah
 # ditare secara kosmetik — bias yang dikirim ke thruster bisa jauh dari nol
 # padahal GUI terlihat "Depth = 0.00 m, aman".
@@ -240,24 +344,36 @@ depth_lock = threading.Lock()
 # Ringkas: sampel di sini hanya 10 poin terakhir (0.1 s @ 10 Hz), cukup untuk
 # smoothing. Buffer penuh 1 detik tidak perlu — depth hold bisa mulai bekerja
 # segera sesudah SET.
-# _DEPTH_SAMPLE_BUFFER_SIZE = 10  # 0.1 s @ 10 Hz
+_depth_samples = []
+_DEPTH_SAMPLE_BUFFER_SIZE = 10  # 0.1 s @ 10 Hz
 
 # State histeresis untuk depth_hold_bias(). Diperbarui tiap kali bias dihitung.
 # Perlu memisahkan "bias sedang mengalir?" dari "bias boleh mengalir untuk error
 # ini?" supaya histeresis bekerja.
+_bias_active = False
 
 # EMA depth untuk estimasi laju (rate) — dipakai meredam bias saat vehicle
+# sudah bergerak cepat menuju target, lihat DEPTH_BIAS_DAMPING di rov_pid.py.
 # Alpha lebih rendah dari smooth_depth() (0,5-0,7): turunan memperkuat noise
 # baro lebih dari posisi mentah, meniru pola AttitudeFilter (attitude_filter.py).
-# _DEPTH_RATE_ALPHA = 0.3
+_DEPTH_RATE_ALPHA = 0.3
+_depth_ema = None
+_depth_ema_ts = None
 
 # Throttle log diagnostik depth-hold ke 1 Hz — sama seperti _last_telem_log.
 # Ditambahkan setelah trial 15 Agu 2026 menunjukkan bias TERHITUNG besar
 # (z~660) tapi PWM thruster vertikal nyaris tidak bergerak saat surge/yaw
 # aktif bersamaan. Log ini menjawab langsung: apakah z yang dihitung memang
+# yang dikirim, dan apakah sempat mentok DEPTH_BIAS_LIMIT — tanpa itu,
 # "depth-hold tidak respons" cuma bisa direkonstruksi manual dari state SEND.
-# _last_depth_diag = 0.0
+_last_depth_diag = 0.0
 
+# Tombol SET (dan toggle ON/OFF) sifatnya sekali-pencet, tapi backend tidak
+# boleh percaya penuh pada klien: gamepad yang ter-bounce atau klien nakal bisa
+# mengirim puluhan `depth_set` per detik dan membanjiri log + event GUI. 2 Hz
+# jauh di atas kecepatan jempol manusia, jadi tidak pernah terasa oleh operator.
+_DEPTH_CMD_RATE_HZ = 2.0
+_depth_cmd_rate = RateLimiter(_DEPTH_CMD_RATE_HZ)
 
 # manual_control_send() gagal di 20 Hz -> tanpa throttle satu link serial
 # yang goyah bisa membanjiri GUI dengan event beruntun. 1 Hz cukup untuk
@@ -265,16 +381,21 @@ depth_lock = threading.Lock()
 _joy_send_err_rate = RateLimiter(1.0)
 
 # Kedalaman kolam uji (meter), dikirim GUI lewat command `pool_depth`.
+# None = belum diberi tahu -> depth_target hanya dibatasi di permukaan, persis
+# perilaku sebelumnya. Begitu diisi, jadi batas bawah depth_target (lihat
+# rov_pid.clamp_depth_target): menekan SET di dekat dasar kolam yang keruh bisa
 # merekam pembacaan baro yang meleset dan menekan ROV ke dasar tanpa henti.
 pool_depth = None
 
 # Mode yang TERAKHIR DIMINTA lewat set_mode. state["mode"] hanya ter-update saat
+# HEARTBEAT datang, jadi tanpa ini depth-set yang di-ON-kan tepat setelah ganti
 # mode akan diam saja selama satu-dua tick pertama.
 requested_mode = None
 
 # Kapan requested_mode di-set (time.time()). Kalau FC MENOLAK perpindahan mode
 # (pre-arm check gagal, EKF belum siap, dsb.) HEARTBEAT tidak pernah membawa
 # state["mode"] == requested_mode, jadi tanpa batas waktu requested_mode akan
+# dipercaya SELAMANYA dan depth-set terus mengirim bias walau wahana
 # sebenarnya masih di mode lama. REQUESTED_MODE_TIMEOUT membatasi jendela
 # percaya-optimistis ini; sesudahnya depth_hold_mode_ok() jatuh balik ke
 # state["mode"] yang benar-benar terkonfirmasi.
@@ -282,6 +403,48 @@ requested_mode_ts = 0.0
 REQUESTED_MODE_TIMEOUT = 3.0
 
 HEAVE_MANUAL_EPSILON = 20 # |heave| di atas ini dianggap operator sedang memegang stik
+
+_auto_depth_hold_armed = False
+_heave_was_active = False
+
+# |surge|/|sway| di atas ini dianggap operator sedang memegang stik — dipakai
+# apply_translation_brake untuk deteksi edge-release. Filosofi sama dengan
+# HEAVE_MANUAL_EPSILON.
+BRAKE_MANUAL_EPSILON = 20
+
+# State pulsa rem surge/sway (rasa "brake" ala DJI, lihat apply_translation_brake).
+# _prev_surge/_prev_sway menyimpan axis tick sebelumnya untuk deteksi edge;
+# _*_pulse_until = 0.0 berarti tidak ada pulsa aktif untuk axis itu.
+_prev_surge = 0
+_prev_sway = 0
+_surge_pulse_until = 0.0
+_surge_pulse_dir = 0
+_sway_pulse_until = 0.0
+_sway_pulse_dir = 0
+
+# State rem heave (lihat apply_heave_brake) — beda dari surge/sway: butuh
+# pelacakan LAMA stik ditahan di full-deflection, bukan cuma edge tick
+# sebelumnya. _heave_full_since = None berarti stik sedang tidak di
+# full-deflection; _heave_sustained menyala begitu tertahan cukup lama, dan
+# tetap menyala sampai stik benar-benar dilepas (arm rem saat itu terjadi).
+_prev_heave = 0
+_heave_full_since = None
+_heave_sustained = False
+_heave_pulse_until = 0.0
+_heave_pulse_dir = 0
+
+# Kill-switch autonomy: axis operator di atas ambang ini saat mode autonomous
+# membatalkan FSM dan mengembalikan kendali manual. Skalanya SAMA dengan axis
+# GUI, -1000..1000 (clampAxis di server.js, AXIS_RANGE di rov_axes.py) — jadi
+# 15 ≈ 1,5% skala penuh, BUKAN 15%.
+#
+# Yang menyaring drift stik bukan angka ini, melainkan deadzone sisi-GUI
+# (DEFAULT_DEADZONE=0.12 + expo 1.6 di shared/joystick-profile.js). Efek
+# gabungannya: kill-switch menyala di ~20% defleksi stik fisik — peka untuk
+# merebut kendali, tuli terhadap noise. Nilainya sengaja sama persis dengan
+# KILL_SWITCH_DEADZONE di autonomy/rov_link.py (jalur autonomous yang lain);
+# JANGAN naikkan ke 150 dengan anggapan skalanya -100..100.
+KILL_SWITCH_DEADZONE = 15
 
 def _effective_requested_mode():
     """requested_mode kalau masih dalam jendela REQUESTED_MODE_TIMEOUT, else None.
@@ -304,6 +467,184 @@ def _current_pixhawk_mode():
     di-ON-kan tepat setelah ganti mode akan diam selama satu-dua tick pertama.
     """
     return _effective_requested_mode() or state["mode"]
+
+
+def depth_hold_mode_ok():
+    """True hanya di mode yang memang menahan kedalaman (lihat rov_modes.py).
+
+    HANYA soal mode, dipakai badge GUI sebagai indikator "mode ini menahan
+    kedalaman" — bukan "bias sedang benar-benar mendorong" (lihat
+    depth_bias_engaged untuk syarat lengkapnya).
+
+    MANUAL/ALT_HOLD/POSHOLD sengaja TIDAK termasuk — lihat DEPTH_HOLD_MODES
+    di rov_modes.py untuk mode mana yang jadi syaratnya sekarang.
+    """
+    return depth_hold_allowed(_current_pixhawk_mode())
+
+
+def apply_depth_hold_bias(mc, axes, allow_auto_capture=True):
+    """Geser MANUAL_CONTROL.z ke arah depth_target saat depth-set aktif.
+
+    Tiga gerbang, semuanya harus terbuka (lihat depth_bias_engaged di
+    rov_modes.py untuk aturannya dalam bentuk yang bisa diuji). Tak ada saklar
+    ON/OFF operator terpisah — target sendiri yang jadi penanda "aktif":
+      1. depth_target sudah terisi   -> None sampai heave pernah disentuh
+                                        (di bawah) atau depth_up/depth_down ditekan
+      2. mode ArduSub ada di DEPTH_HOLD_MODES (rov_modes.py)
+      3. stik heave netral           -> begitu operator menyentuh stik, input
+                                        manual menang mutlak, dan target
+                                        mengikuti kedalaman sampai stik dilepas
+    """
+    global depth_target
+    global depth_hold_enabled
+    global _bias_active, _depth_ema, _depth_ema_ts, _last_depth_diag
+    global _auto_depth_hold_armed, _heave_was_active
+    global _depth_pulse_until, _depth_pulse_dir
+    
+    heave = axes.get("heave", 0)
+    heave_active = abs(heave) > HEAVE_MANUAL_EPSILON
+    
+    if heave_active:
+        _heave_was_active = True
+        _auto_depth_hold_armed = True
+
+        return mc
+
+    if (
+        not heave_active
+        and _heave_was_active
+        and _auto_depth_hold_armed
+        and allow_auto_capture
+    ):
+        depth_now = state["depth"]
+
+        with depth_lock:
+            depth_target = clamp_depth_target(
+                depth_now,
+                pool_depth
+           )
+
+        _heave_was_active = False
+        _auto_depth_hold_armed = False
+
+        _bias_active = False
+        _depth_ema = None
+        _depth_ema_ts = None
+
+        print(
+            f"[DEPTH] AUTO HOLD -> "
+            f"target = {depth_now:.2f} m"
+       )
+    
+
+    # Pulsa sekali-tembak (ALT_HOLD) diperiksa SEBELUM gerbang bias
+    # berkelanjutan (STABILIZE) — keduanya tidak pernah aktif bersamaan,
+    # lihat DEPTH_PULSE_* di rov_pid.py untuk alasannya.
+    if time.time() < _depth_pulse_until:
+        _mode_now = _effective_requested_mode() or state["mode"]
+        if (abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON
+                or not depth_hold_allowed(_mode_now)):
+            # Operator menyentuh stik heave menang mutlak, atau mode berubah
+            # (mis. ke MANUAL) sebelum pulsa selesai — batalkan pulsa.
+            _depth_pulse_until = 0.0
+        else:
+            out = dict(mc)
+            out["z"] = max(0, min(1000, int(round(mc["z"] + _depth_pulse_dir * DEPTH_PULSE_MAGNITUDE))))
+            return out
+
+    with depth_lock:
+        target = depth_target
+
+    _mode_now = _effective_requested_mode() or state["mode"]
+    if not (depth_bias_is_continuous(_mode_now) and depth_bias_engaged(
+        target,
+        _mode_now,
+        axes.get("heave", 0),
+        HEAVE_MANUAL_EPSILON,
+    )):
+        # Auto-follow depth_target ke stik heave HANYA di mode kontinu
+        # (STABILIZE): di sana depth_target satu-satunya yang menahan
+        # kedalaman, jadi harus ikut supaya tak "menyelam balik" ke target
+        # lama begitu stik dilepas tanpa sempat depth_up/down. Di ALT_HOLD
+        # cascade ArduSub sendiri yang menahan -- depth_target di sana cuma
+        # dipakai sebagai arah pulsa depth_up/down (rov_pid.py DEPTH_PULSE_*),
+        # jadi HARUS diam kecuali operator menekan depth_up/down. Riwayat:
+        # auto-follow ini sempat dihapus (13c1d4a, 10 Agu) dengan alasan
+        # yang sama, lalu tertulis ulang tanpa sengaja di redesign 21 Agu
+        # (8a23060) -- sekarang dipersempit lagi ke STABILIZE saja.
+        if (depth_bias_is_continuous(_mode_now)
+                and abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON):
+            with depth_lock:
+                depth_target = clamp_depth_target(
+                    state["depth"],
+                    pool_depth
+                )
+
+        _bias_active = False
+        _depth_ema = None
+        _depth_ema_ts = None
+        return mc
+        
+    now = time.time()
+    depth_now = state["depth"]
+
+    # EMA + turunan waktu untuk closing_rate (lihat DEPTH_BIAS_DAMPING di
+    # rov_pid.py). Sampel pertama sejak gerbang terbuka: seed EMA, rate=0 —
+    # tidak ada dt yang valid untuk diturunkan.
+    closing_rate = 0.0
+    if _depth_ema is None:
+        _depth_ema = depth_now
+        _depth_ema_ts = now
+    else:
+        dt = now - _depth_ema_ts
+        ema_lama = _depth_ema
+        _depth_ema += _DEPTH_RATE_ALPHA * (depth_now - _depth_ema)
+        _depth_ema_ts = now
+        if dt > 0:
+            rate = (_depth_ema - ema_lama) / dt
+            err_lama = target - ema_lama
+            # Mendekat = |error| mengecil = closing_rate POSITIF, terlepas
+            # dari arah target ada di atas atau di bawah depth sekarang.
+            if err_lama > 0:
+                closing_rate = rate
+            elif err_lama < 0:
+                closing_rate = -rate
+
+    # depth & target dalam meter, positif ke bawah. Error positif = perlu turun.
+    # HISTERESIS untuk menghindari limit cycle (naik-turun terus di sekitar
+    # setpoint). depth_bias_active() memakai _bias_active yang diperbarui di
+    # sini: begitu error kecil (< RELEASE) bias berhenti, dan bias-nya hanya
+    # menyala kembali saat error membesar (>= ENGAGE). Selisih antara keduanya
+    # adalah zona tenang tempat noise baro tidak lagi bisa trigger osilasi.
+    _bias_active = depth_bias_active(
+        target - state["depth"],
+        _bias_active
+    )
+    error = target - state["depth"]
+    bias = depth_hold_bias(error, _bias_active, closing_rate)
+    if bias == 0.0:
+        # Beda dari "sudah dekat target, tidak perlu koreksi" (senyap, itu
+        # normal): ini KHUSUS kasus _bias_active True (histeresis bilang mau
+        # mengoreksi) tapi errornya melebihi DEPTH_BIAS_MAX_CORRECTION —
+        # operator perlu tahu kenapa depth-hold terlihat diam, bukan menebak
+        # tombolnya rusak. Lihat catatan DEPTH_BIAS_MAX_CORRECTION di rov_pid.py.
+        if _bias_active and abs(error) > DEPTH_BIAS_MAX_CORRECTION and now - _last_depth_diag >= 1.0:
+            _last_depth_diag = now
+            print(f"[DEPTH] target {target:.2f} m terlalu jauh (error {error:+.2f} m) — "
+                  f"dekati dulu pakai stik, depth-hold cuma menahan trim dekat")
+        return mc
+
+    out = dict(mc)
+    out["z"] = max(0, min(1000, int(round(mc["z"] - bias))))
+
+    if now - _last_depth_diag >= 1.0:
+        _last_depth_diag = now
+        mentok = " MENTOK LIMIT" if abs(bias) >= DEPTH_BIAS_LIMIT - 0.5 else ""
+        print(f"[DEPTH] diag target={target:.2f} depth={state['depth']:.2f} "
+              f"err={target - state['depth']:+.3f} rate={closing_rate:+.3f} "
+              f"bias={bias:+.1f} z={out['z']}{mentok}")
+
+    return out
 
 
 # =========================
@@ -376,6 +717,204 @@ def apply_heading_hold(mc, axes):
     out = dict(mc)
     out["r"] = max(-1000, min(1000, int(mc["r"]) + bias))
     return out
+
+
+# =========================
+# POSITION HOLD x/y (dari optical flow — lihat rov_position.py)
+# =========================
+# Default OFF (POSITION_HOLD_TO_THRUSTER, env M5_POSITION_HOLD) — sama
+# alasan dengan OPTFLOW_TO_EKF: arah dx/dy kamera-vs-body BELUM divalidasi
+# (rov_drift.py). Kalau tandanya terbalik, fitur ini AKTIF MENDORONG wahana
+# ke arah salah, bukan cuma "kurang membantu". Nyalakan hanya setelah HUD
+# drift_vx/vy dikonfirmasi arahnya benar di kolam.
+POSITION_HOLD_TO_THRUSTER = os.environ.get("M5_POSITION_HOLD", "0") == "1"
+
+# Akumulasi pergeseran (meter) sejak stick surge/sway terakhir dilepas —
+# BUKAN posisi absolut (tidak ada GPS/DVL). Lihat docstring rov_position.py.
+position_error_x = 0.0
+position_error_y = 0.0
+position_lock = threading.Lock()
+
+# Timestamp tick terakhir position hold benar-benar mengakumulasi error.
+# None berarti belum ada dt yang valid untuk tick berikutnya — dipakai
+# supaya integrasi tidak melompat besar begitu stick baru saja dilepas
+# setelah lama dipegang (lihat apply_position_hold).
+_position_last_ts = None
+
+
+def apply_position_hold(mc, axes):
+    """Tambahkan koreksi x/y untuk menahan pergeseran RELATIF sejak stick
+    surge/sway dilepas, pakai drift_vx/vy (optical flow) sebagai umpan balik.
+
+    Aturan sama seperti apply_heading_hold(): operator menang mutlak, dan
+    akumulasi error DIBUANG begitu stick disentuh (bukan cuma diabaikan)
+    supaya wahana menahan posisi BARU tempat operator meninggalkannya.
+
+    Cuma percaya bacaan visual asli (drift_source == "flow") — TIDAK pernah
+    mendorong thruster berdasar tambalan IMU (integrate_accel), yang
+    akurasinya jauh di bawah standar untuk loop tertutup yang benar-benar
+    menggerakkan wahana (beda dari sekadar tampilan HUD).
+    """
+    global position_error_x, position_error_y, _position_last_ts
+
+    if not POSITION_HOLD_TO_THRUSTER or not poshold_engaged():
+        with position_lock:
+            position_error_x = 0.0
+            position_error_y = 0.0
+        _position_last_ts = None
+        return mc
+
+    if operator_holding_translation(axes):
+        with position_lock:
+            position_error_x = 0.0
+            position_error_y = 0.0
+        _position_last_ts = None
+        return mc
+
+    if state.get("drift_source") != "flow":
+        # Data tak segar/tak dipercaya: BEKUKAN akumulasi (jangan integrasi
+        # dengan dt besar begitu flow segar lagi), tapi jangan buang — flow
+        # bisa saja cuma kedip sesaat, bukan operator menyentuh stik.
+        _position_last_ts = None
+        return mc
+
+    now = time.time()
+    dt = (now - _position_last_ts) if _position_last_ts is not None else 0.0
+    _position_last_ts = now
+
+    with position_lock:
+        position_error_x += state.get("drift_vx", 0.0) * dt
+        position_error_y += state.get("drift_vy", 0.0) * dt
+        ex, ey = position_error_x, position_error_y
+
+    cx, cy = position_correction(ex, ey)
+    if cx == 0 and cy == 0:
+        return mc
+
+    out = dict(mc)
+    out["x"] = max(-1000, min(1000, int(mc["x"]) + cx))
+    out["y"] = max(-1000, min(1000, int(mc["y"]) + cy))
+    return out
+
+
+# =========================
+# BRAKE (rem surge/sway ala DJI)
+# =========================
+# TIDAK ADA DVL/GPS di bawah air, jadi ini BUKAN position hold: hanya
+# menghentikan momentum ROV sendiri lebih cepat lewat pulsa dorongan balik
+# singkat begitu stick dilepas. Arus lateral tetap menggeser wahana sesudahnya
+# (lihat rov_modes.py baris 34-48). Pola pulsa sama persis dengan
+# depth_up/down (_depth_pulse_until/_depth_pulse_dir di apply_depth_hold_bias).
+def apply_translation_brake(mc, axes):
+    """Dorong pulsa balik singkat di x/y begitu stick surge/sway dilepas.
+
+    Operator selalu menang mutlak: menyentuh stick axis itu lagi — searah
+    ataupun berlawanan — langsung membatalkan pulsa yang sedang jalan.
+    Hanya aktif saat kendali manual; axis FSM (autonomous) tidak diberi rem
+    yang tak diminta.
+
+    SENGAJA TIDAK ADA rem heave (dicoba 23 Agu 2026, dicabut hari yang
+    sama). Beda dari surge/sway — di mana "lepas stick" nyaris selalu
+    berarti "selesai bergerak" — pilot lazim melakukan tap-tap KECIL di
+    heave untuk menyetel kedalaman manual sambil ALT_HOLD/cascade berusaha
+    menahan. Tiap tap kecil itu tetap melewati BRAKE_MANUAL_EPSILON, jadi
+    rem 45% otoritas selama 0,45 detik menyala berkali-kali dan JUSTRU
+    melawan cascade depth-hold ArduSub — trial menunjukkan depth mengembara
+    0,20-0,54 m alih-alih menetap. Kalau heave butuh rasa "brake" suatu
+    hari nanti, itu harus lewat jalur berbeda (mis. HANYA setelah heave
+    ditahan lama di luar deadzone, bukan edge-detect polos seperti ini).
+    """
+    global _prev_surge, _prev_sway
+    global _surge_pulse_until, _surge_pulse_dir
+    global _sway_pulse_until, _sway_pulse_dir
+
+    surge = axes.get("surge", 0)
+    sway = axes.get("sway", 0)
+
+    if current_control_mode != "manual":
+        _prev_surge, _prev_sway = surge, sway
+        _surge_pulse_until = 0.0
+        _sway_pulse_until = 0.0
+        return mc
+
+    now = time.time()
+    out = dict(mc)
+
+    if axis_released(_prev_surge, surge, BRAKE_MANUAL_EPSILON):
+        _surge_pulse_until = now + BRAKE_PULSE_DURATION_S
+        _surge_pulse_dir = -1 if _prev_surge > 0 else 1
+    if abs(surge) > BRAKE_MANUAL_EPSILON:
+        _surge_pulse_until = 0.0
+    elif now < _surge_pulse_until:
+        out["x"] = max(-1000, min(1000, out["x"] + _surge_pulse_dir * BRAKE_PULSE_MAGNITUDE))
+
+    if axis_released(_prev_sway, sway, BRAKE_MANUAL_EPSILON):
+        _sway_pulse_until = now + SWAY_BRAKE_PULSE_DURATION_S
+        _sway_pulse_dir = -1 if _prev_sway > 0 else 1
+    if abs(sway) > BRAKE_MANUAL_EPSILON:
+        _sway_pulse_until = 0.0
+    elif now < _sway_pulse_until:
+        out["y"] = max(-1000, min(1000, out["y"] + _sway_pulse_dir * SWAY_BRAKE_PULSE_MAGNITUDE))
+
+    _prev_surge, _prev_sway = surge, sway
+    return out
+
+
+# Rem heave, versi KEDUA (lihat catatan HEAVE_* di rov_pid.py untuk kenapa
+# versi pertama dicabut). HANYA aktif di ALT_HOLD: di sana stik z diteruskan
+# mentah ke Pixhawk sebagai perintah RATE (lihat apply_depth_hold_bias),
+# jadi menahannya lama-lama menghasilkan turun/naik jauh melebihi perkiraan
+# defleksi stik — beda dari STABILIZE yang sudah punya auto-follow
+# depth_target sendiri.
+def apply_heave_brake(mc, axes):
+    """Dorong pulsa balik singkat di z HANYA setelah stik heave ditahan
+    dekat full-deflection >= HEAVE_FULL_HOLD_MIN_S lalu dilepas.
+
+    Tap-tap kecil untuk menyetel kedalaman manual tidak pernah menyentuh
+    HEAVE_FULL_DEFLECTION_THRESHOLD, jadi tidak pernah arm — beda dari versi
+    pertama yang edge-detect di HEAVE_MANUAL_EPSILON polos dan melawan
+    cascade depth-hold ArduSub di tiap tap.
+    """
+    global _prev_heave, _heave_full_since, _heave_sustained
+    global _heave_pulse_until, _heave_pulse_dir
+
+    heave = axes.get("heave", 0)
+
+    _mode_now = _effective_requested_mode() or state["mode"]
+    if (current_control_mode != "manual"
+            or not depth_hold_allowed(_mode_now)
+            or depth_bias_is_continuous(_mode_now)):
+        _prev_heave = heave
+        _heave_full_since = None
+        _heave_sustained = False
+        _heave_pulse_until = 0.0
+        return mc
+
+    now = time.time()
+    out = dict(mc)
+
+    if abs(heave) >= HEAVE_FULL_DEFLECTION_THRESHOLD:
+        if _heave_full_since is None:
+            _heave_full_since = now
+        elif now - _heave_full_since >= HEAVE_FULL_HOLD_MIN_S:
+            _heave_sustained = True
+    else:
+        _heave_full_since = None
+
+    if axis_released(_prev_heave, heave, HEAVE_MANUAL_EPSILON):
+        if _heave_sustained:
+            _heave_pulse_until = now + HEAVE_BRAKE_PULSE_DURATION_S
+            _heave_pulse_dir = -1 if _prev_heave > 0 else 1
+        _heave_sustained = False
+
+    if abs(heave) > HEAVE_MANUAL_EPSILON:
+        _heave_pulse_until = 0.0
+    elif now < _heave_pulse_until:
+        out["z"] = max(0, min(1000, out["z"] + _heave_pulse_dir * HEAVE_BRAKE_PULSE_MAGNITUDE))
+
+    _prev_heave = heave
+    return out
+
 
 # Fail-safe: kalau tidak ada perintah axis baru dari GUI selama
 # IDLE_TIMEOUT detik (GUI crash / joystick dicabut / link putus), berhenti
@@ -480,26 +1019,49 @@ def send_telemetry():
     global _last_telem_log
 
     with depth_lock:
-        state["depth_hold"] = depth_hold_enabled
+        state["depth_target"] = depth_target
 
-    # POSHOLD tidak terlihat di HEARTBEAT (ia berjalan di ALT_HOLD), jadi
-    # INILAH satu-satunya cara GUI tahu overlay sedang hidup dan tab mana yang
-    # harus menyala. heading_target None = belum di-seed (stik yaw masih
-    # dipegang, atau baru saja masuk mode).
-    state["poshold"] = poshold_engaged()
+    state["depth_hold"] = depth_hold_mode_ok()
+
+    # Flag mentah dari toggle operator (bukan poshold_engaged()): GUI
+    # membutuhkan ini APA ADANYA untuk membedakan tab "poshold" dari
+    # "depth_hold" — keduanya sama-sama ArduSub ALT_HOLD, HEARTBEAT tidak
+    # bisa membedakan (lihat docstring rov_modes.py). BUG lama: field ini tak
+    # pernah dikirim sama sekali, jadi tab Pos Hold di GUI tak pernah
+    # terkonfirmasi walau overlay heading-hold-nya sudah benar-benar aktif.
+    state["poshold"] = poshold_active
+
     with heading_lock:
         state["heading_target"] = heading_target
 
+    # Dipantulkan supaya operator bisa memastikan wahana benar-benar TAHU
+    # kedalaman kolamnya — null berarti jepitan depth_target belum aktif.
     state["pool_depth"] = pool_depth
+
+    # Tanda gantungan (tombol MARK). null = belum di-MARK, dan GUI WAJIB
+    # menampilkannya begitu: tanpa mark, M5_REDIVE tak punya arah dan hanya
+    # menyapu pelan sampai timeout. Operator harus tahu itu SEBELUM menekan
+    # AUTONOMOUS, bukan setelah wahana menyelam dan gagal.
+    state["marked_heading"] = marked_heading
+    state["marked_depth"] = marked_depth
 
     # Gate otoritas untuk mission5 FSM (toggle autonomous/manual di GUI).
     # HARUS kunci sendiri: dulu ini menulis ke state["mode"] dan menimpa pilot
     # mode ArduSub dari HEARTBEAT 10x/detik. Akibatnya requested_mode tak pernah
     # terkonfirmasi, dan sesudah REQUESTED_MODE_TIMEOUT semua gerbang
+    # depth_hold_allowed() jatuh ke "manual" — depth-set dan overlay POSHOLD
     # berhenti diam-diam persis 3 detik setelah masuk ALT_HOLD.
     # Pola yang sama dipakai autonomy/rov_link.py dan server/server.js.
     state["control_mode"] = current_control_mode
     state["thruster_gain"] = thruster_gain * 100.0
+
+    # State FSM misi 5 (mis. "M5_DOCK") + hasil vision (qr_data/qr_wall) supaya
+    # operator melihat progres misi dan readout QR di Control pakai deteksi
+    # pipeline Python (robust), bukan fallback jsQR sisi klien. None = FSM
+    # tidak sedang jalan.
+    m5_telem = mission5_runner.telemetry() if mission5_runner is not None else None
+    state["mission5_state"] = m5_telem.get("state") if m5_telem else None
+    state["mission5"] = m5_telem
     send_to_gui(state)
 
     now = time.time()
@@ -542,21 +1104,276 @@ def send_gcs_heartbeat():
             0, 0, 0,
         )
 
+
+# =========================
+# Mission5 FSM (misi 5 autonomous)
+# =========================
+def _fsm_set_axis(surge=0, sway=0, yaw=0, heave=0):
+    """Dipanggil Mission5FSM lewat adapter. Menulis ke fsm_axes, BUKAN joystick.
+
+    Nilai sudah dalam skala GUI -1000..1000 (adapter yang mengalikan ×10 dari
+    persen milik FSM). Di-clamp lewat jalur yang sama dengan axis operator
+    supaya tidak ada cara FSM mengirim nilai di luar rentang yang sah.
+    """
+    with fsm_axes_lock:
+        fsm_axes["surge"] = clamp_axis("surge", surge)
+        fsm_axes["sway"] = clamp_axis("sway", sway)
+        fsm_axes["yaw"] = clamp_axis("yaw", yaw)
+        fsm_axes["heave"] = clamp_axis("heave", heave)
+
+
+def _fsm_set_gripper(close):
+    if gripper is None:
+        return
+    if close:
+        gripper.close()
+    else:
+        gripper.open()
+
+
+def _fsm_emergency_stop():
+    """Failsafe FSM: netralkan axis FSM + disarm.
+
+    Sengaja TIDAK menyentuh gripper — melepas payload saat abort justru
+    menjatuhkannya di tempat yang salah.
+    """
+    with fsm_axes_lock:
+        fsm_axes.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+    send_arm_disarm(False)
+
+
+def _fsm_read_state():
+    """Telemetri untuk FSM: dict `state` apa adanya.
+
+    FSM membaca 'depth', 'heading', 'roll', 'pitch', dan 'control_mode' —
+    semuanya sudah diisi loop utama & send_telemetry.
+    """
+    return dict(state)
+
+
+# Kalibrasi default misi 5. HARUS cocok resolusi stream kamera (1280x720).
+# Override per-kamera lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke string
+# kosong untuk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
+M5_CALIB_DEFAULT = "vision/calibration/dwe_trial2.npz"
+
+# Config geometri arena, dipisah koma. Default menunjuk config lomba, BUKAN
+# kosong: default kosong berarti konstanta modul fsm/mission5.py, yang HANYA
+# benar bila kolam persis 0,9 m (Guidebook mengukur hook 0,45 m dari DASAR,
+# sedangkan HOOK_DEPTH default 0,45 m dari PERMUKAAN).
+#
+# Sengaja di sini, bukan Environment= di unit systemd: unit hanya ada di Pi dan
+# tidak ikut ter-deploy, jadi env yang lupa dipasang = diam-diam pakai default
+# modul. Path relatif thd WorkingDirectory service (=~/rov-agent). Gagal-lunak
+# bila file tak ada (lihat Mission5Runner._apply_configs).
+M5_CONFIG_DEFAULT = "config/rov_tuned.yaml,config/pool_kki_running.yaml"
+
+
+def setup_mission5_runner():
+    """Siapkan runner FSM. Gagal-lunak: None berarti misi 5 tak tersedia."""
+    global mission5_runner
+    try:
+        from rov_mission5_bridge import (Mission5CommandAdapter,
+                                         Mission5TelemetryAdapter,
+                                         Mission5Runner)
+    except Exception as e:
+        print(f"[M5] bridge tidak tersedia: {e}")
+        return None
+
+    cmd = Mission5CommandAdapter(
+        set_axis=_fsm_set_axis,
+        set_gripper=_fsm_set_gripper,
+        arm=send_arm_disarm,
+        emergency_stop=_fsm_emergency_stop,
+    )
+    telem = Mission5TelemetryAdapter(read_state=_fsm_read_state)
+    cfg = {
+        "vision_source": os.environ.get("M5_VISION_SOURCE", "usb"),
+        # PERBAIKAN 23 Agu 2026: default lama (bottom=8080, wall=8081) TERBALIK
+        # dari pemasangan fisik — dikonfirmasi operator: 8080 menghadap DEPAN
+        # (gripper), 8081 menghadap BAWAH (dasar kolam). QR docking (butuh
+        # kamera BAWAH) & drift sensing (rov_drift.py) sama-sama memakai
+        # bottom_url ini, jadi keduanya ikut salah kamera sebelum baris ini
+        # diperbaiki. public/js/config.js CONFIG.CAMERAS punya label
+        # BOTTOM/WALL yang SAMA salahnya — belum ikut dibetulkan di sini,
+        # lihat percakapan sesi ini sebelum menyalin asumsi role dari sana.
+        "bottom_url": os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8081/stream"),
+        "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8080/stream"),
+        # Path relatif thd WorkingDirectory service (=~/rov-agent). Kalibrasi
+        # HARUS sepadan resolusi stream (1280x720). Lihat alasan pemilihan
+        # dwe_trial2.npz (dan kenapa BUKAN rms terendah) di autonomy/rov_link.py.
+        # Salah resolusi tidak lagi lolos diam-diam: _verify_calib_size() di
+        # vision/qr_detect.py mematikan PBVS + menulis ERROR bila tak cocok.
+        "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_DEFAULT),
+        "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_DEFAULT),
+        "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
+        # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
+        # (lihat Mission5Runner._apply_configs). Arena lomba:
+        #   M5_CONFIG="config/rov_tuned.yaml,config/pool_kki_running.yaml"
+        "config_files": os.environ.get("M5_CONFIG", M5_CONFIG_DEFAULT),
+        # Dibaca SAAT toggle autonomous, bukan sekarang: operator menekan MARK
+        # di tengah misi 3, jauh sesudah runner ini dibuat.
+        "read_mark": lambda: (marked_heading, marked_depth),
+    }
+    mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
+    return mission5_runner
+
+
+# =========================
+# Drift sensing — kamera BOTTOM, optical flow (lihat rov_drift.py)
+# =========================
+# Beda dari Mission5Runner: HIDUP TERUS sejak boot, tidak menunggu toggle
+# Autonomous — pilot butuh tahu dirinya hanyut saat terbang MANUAL, bukan
+# cuma saat misi otonom jalan. Gagal-lunak di setiap langkah (import
+# opencv/numpy, muat kalibrasi, buka kamera): kontrol manual tidak pernah
+# ikut terganggu, lihat pola yang sama di setup_mission5_runner().
+#
+# Saklar total (23 Agu 2026): thread ini sendirian memakai ~85% CPU di Pi 4
+# dan mengganggu loop kontrol utama — ALT_HOLD naik-turun sendiri saat
+# trial, kemungkinan besar jitter MANUAL_CONTROL akibat GIL/CPU direbut
+# terus-menerus oleh OpenCV. M5_DRIFT_ENABLED=0 mematikan drift sensing
+# SELURUHNYA (thread tidak pernah start) untuk penyelaman yang tak boleh
+# terganggu sama sekali, tanpa perlu ubah kode. Default tetap ON tapi
+# DRIFT_FPS diturunkan + frame di-downscale (lihat optical_flow.py
+# DOWNSCALE) supaya beban CPU jauh lebih kecil dari sebelumnya.
+DRIFT_ENABLED = os.environ.get("M5_DRIFT_ENABLED", "1") == "1"
+DRIFT_FPS = 5
+DRIFT_LOOP_INTERVAL = 1.0 / DRIFT_FPS
+
+# Tahap 2 (kirim OPTICAL_FLOW_RAD ke EKF ArduSub, EK3_SRC1_VELXY=5): default
+# OFF. Nyalakan lewat M5_OPTFLOW_TO_EKF=1 HANYA setelah drift_vx/vy di HUD
+# sudah divalidasi di kolam beberapa sesi — data flow yang salah tanda/
+# berisik di jalur ini akan membuat thruster auto-koreksi ke arah salah,
+# beda dari sekadar "kurang berasa" seperti BRAKE_PULSE_*.
+OPTFLOW_TO_EKF = os.environ.get("M5_OPTFLOW_TO_EKF", "0") == "1"
+
+
+def drift_estimator_thread():
+    """Baca flow kamera BOTTOM, ubah ke m/s, tulis ke state['drift_vx'/'vy'
+    /'quality'/'source']. Kalau OPTFLOW_TO_EKF aktif, relai juga ke EKF
+    ArduSub lewat OPTICAL_FLOW_RAD di loop yang sama (satu polling
+    latest_flow(), bukan dua thread terpisah yang berebut data).
+
+    Penambal celah IMU: begitu flow kosong (air keruh, fitur hilang, kamera
+    freeze), integrate_accel() menambal drift_vx/vy dari SCALED_IMU2 selama
+    maksimal IMU_GAP_FILL_MAX_S detik supaya HUD tidak langsung jatuh ke
+    "tidak ada data" untuk gangguan sesaat. Begitu flow segar muncul lagi,
+    integrator IMU di-snap ke nilai flow itu (bukan menumpuk dari nilai lama)
+    — lihat rov_drift.py untuk kenapa ini TIDAK dimaksudkan sebagai dead-
+    reckoning berkepanjangan.
+    """
+    if not DRIFT_ENABLED:
+        print("[DRIFT] nonaktif (M5_DRIFT_ENABLED=0) — drift sensing tidak start")
+        return
+
+    try:
+        import numpy as np
+        from vision.optical_flow import FlowTracker
+    except Exception as e:
+        print(f"[DRIFT] TIDAK BISA START — opencv/numpy gagal diimpor: {e}")
+        return
+
+    calib_path = os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_DEFAULT)
+    try:
+        data = np.load(calib_path)
+        focal_px = float(data["K"][0, 0])
+    except Exception as e:
+        print(f"[DRIFT] gagal muat kalibrasi {calib_path}: {e} — drift sensing nonaktif")
+        return
+
+    # Default 8081 (bukan 8080) — lihat catatan perbaikan port kamera BOTTOM
+    # di setup_mission5_runner(), M5_BOTTOM_URL dipakai bersama.
+    url = os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8081/stream")
+    tracker = FlowTracker(url=url, fps=DRIFT_FPS)
+    tracker.start()
+    print(f"[DRIFT] FlowTracker aktif di {url} (focal={focal_px:.1f}px, "
+          f"ke-EKF={OPTFLOW_TO_EKF})")
+
+    # Kecepatan yang sedang ditambal integrate_accel() selama celah flow, dan
+    # sejak kapan celah itu mulai (None = tidak sedang dalam celah).
+    imu_vx, imu_vy = 0.0, 0.0
+    gap_started_at = None
+
+    while True:
+        flow = tracker.latest_flow(max_age=0.5)
+        altitude = (pool_depth - state["depth"]) if pool_depth is not None else None
+        have_flow = flow is not None and altitude is not None and altitude > 0
+
+        if have_flow:
+            vx, vy = flow_to_velocity(flow["dx"], flow["dy"], flow["dt"], altitude, focal_px)
+            state["drift_vx"] = vx
+            state["drift_vy"] = vy
+            state["drift_quality"] = flow["quality"]
+            state["drift_source"] = "flow"
+            # Snap-back: begitu flow segar lagi, integrator IMU mulai lagi
+            # dari SINI (bukan menumpuk dari tambalan celah sebelumnya).
+            imu_vx, imu_vy = vx, vy
+            gap_started_at = None
+
+            if OPTFLOW_TO_EKF and master is not None:
+                # ponytail: integrated_xgyro/ygyro/zgyro pakai rate SESAAT * dt
+                # (bukan integral sungguhan sepanjang window), dan
+                # time_delta_distance_us=0 (anggap altitude sinkron dgn flow).
+                # Penyederhanaan yang perlu divalidasi di kolam — lihat Tahap 2
+                # di plan drift sensing sebelum dipercaya penuh.
+                rr, pr, yr = _last_body_rates
+                dt = flow["dt"]
+                quality = max(0, min(255, flow["quality"]))
+                try:
+                    with master_lock:
+                        master.mav.optical_flow_rad_send(
+                            int(time.time() * 1e6),   # time_usec
+                            0,                          # sensor_id
+                            int(dt * 1e6),              # integration_time_us
+                            flow["dx"] / focal_px,      # integrated_x (rad)
+                            flow["dy"] / focal_px,       # integrated_y (rad)
+                            rr * dt, pr * dt, yr * dt,   # integrated_x/y/zgyro (rad)
+                            0.0,                        # temperature
+                            quality,                    # quality 0-255
+                            0,                           # time_delta_distance_us
+                            altitude,                    # distance (m)
+                        )
+                except Exception as e:
+                    print(f"[DRIFT] gagal kirim optical_flow_rad: {e}")
+        else:
+            now = time.time()
+            if gap_started_at is None:
+                gap_started_at = now
+            if (now - gap_started_at) <= IMU_GAP_FILL_MAX_S:
+                ax, ay = _last_body_accel
+                imu_vx, imu_vy = integrate_accel(ax, ay, DRIFT_LOOP_INTERVAL, imu_vx, imu_vy)
+                state["drift_vx"] = imu_vx
+                state["drift_vy"] = imu_vy
+                state["drift_quality"] = 0   # flow feature count sungguhan, bukan tambalan
+                state["drift_source"] = "imu"
+            else:
+                # Celah kelewat lama — jangan terus berkembang tanpa batas.
+                imu_vx, imu_vy = 0.0, 0.0
+                state["drift_vx"] = 0.0
+                state["drift_vy"] = 0.0
+                state["drift_quality"] = 0
+                state["drift_source"] = "none"
+
+        time.sleep(DRIFT_LOOP_INTERVAL)
+
+
 # =========================
 # Command handler dari laptop
 # =========================
 def command_listener():
     global last_joystick_update
+    global depth_target
     global requested_mode
     global requested_mode_ts
     global current_control_mode
     global mavlink_stream_requested_at
     global pool_depth
     global depth_offset
-    global depth_hold_enabled
+    global marked_heading
+    global marked_depth
     global poshold_active
     global heading_target
     global thruster_gain
+    global _depth_pulse_until, _depth_pulse_dir
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -614,8 +1431,47 @@ def command_listener():
                     print(f"[CONTROL] Unknown mode: {requested}")
                     continue
 
-                current_control_mode = requested
-                print(f"[CONTROL] {current_control_mode}")
+                print(f"[CONTROL] {requested}")
+
+                # Sampai 22 Agu 2026 satu-satunya efek toggle ini adalah baris
+                # cetak di atas: string diubah, selesai. FSM-nya ada, tapi di
+                # autonomy/rov_link.py — program terpisah yang tak pernah jalan
+                # di Pi. Sekarang toggle benar-benar menyalakan/mematikannya.
+                if requested == "autonomous":
+                    # Axis FSM dinolkan DULU: sisa setpoint dari sesi
+                    # sebelumnya tidak boleh ikut terbawa saat FSM baru mulai.
+                    with fsm_axes_lock:
+                        fsm_axes.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+
+                    # Axis OPERATOR juga dinolkan — ini yang menjatuhkan run 3 & 4
+                    # trial 22 Agu. `joystick` menyimpan nilai TERAKHIR yang
+                    # dikirim GUI dan tak pernah kembali ke nol sendiri, jadi sisa
+                    # >1,5% dari sesi manual sebelumnya langsung dibaca gerbang
+                    # kill-switch di joystick_sender sebagai "operator nyetir" —
+                    # abort pada detik yang sama dengan toggle, sebelum FSM
+                    # sempat menggerakkan apa pun (journal 11:48:05, 11:50:35).
+                    # Kill-switch memang harus memicu pada gerakan BARU; nilai
+                    # basi bukan gerakan.
+                    with joystick_lock:
+                        joystick.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+
+                    # Mode dipindah SESUDAH start() berhasil. Kalau lebih dulu,
+                    # joystick_sender melihat "autonomous" selama ~1 detik yang
+                    # dihabiskan VisionPipeline.start() membuka kamera — dan
+                    # stop() dari kill-switch di jendela itu menemukan _fsm masih
+                    # None, lalu diam, meninggalkan thread FSM yatim yang jalan
+                    # sampai timeout tanpa satu pun perintahnya dipakai.
+                    if mission5_runner is None:
+                        print("[M5] runner tidak tersedia — toggle autonomous "
+                              "tidak menjalankan FSM (kontrol manual tetap normal)")
+                    elif not mission5_runner.start():
+                        print("[M5] start GAGAL — tetap di mode manual")
+                        continue
+                    current_control_mode = "autonomous"
+                else:
+                    current_control_mode = "manual"
+                    if mission5_runner is not None:
+                        mission5_runner.stop()
 
             elif name == "pilot_mode":
 
@@ -637,6 +1493,7 @@ def command_listener():
                     print(f"[PILOT] {pixhawk_mode} not supported oleh firmware ini")
                     continue
 
+                previous_requested_mode = requested_mode
                 master.set_mode(mode_mapping[pixhawk_mode])
                 requested_mode = pixhawk_mode
                 requested_mode_ts = time.time()
@@ -654,6 +1511,40 @@ def command_listener():
                 with heading_lock:
                     heading_target = None
 
+                # Masuk mode depth-hold (lihat DEPTH_HOLD_MODES di rov_modes.py)
+                # dari mode LAIN mengisi depth_target dari kedalaman saat ini —
+                # operator tidak perlu memegang-lalu-lepas heave dulu hanya
+                # untuk membuat target awal. Tetap di dalam depth-hold (ganti
+                # mode depth-hold ke depth-hold lain) mempertahankan target lama.
+                if depth_hold_allowed(pixhawk_mode):
+                    was_depth_hold = (
+                        previous_requested_mode is not None
+                        and depth_hold_allowed(previous_requested_mode)
+                    )
+
+                    if not was_depth_hold:
+                        with depth_lock:
+                            depth_target = clamp_depth_target(
+                                state["depth"],
+                                pool_depth
+                            )
+
+                        print(
+                            f"[DEPTH] Hold target mengikuti depth saat ini = "
+                            f"{depth_target:.2f} m"
+                        )
+                    else:
+                        with depth_lock:
+                            depth_target = clamp_depth_target(
+                                depth_target,
+                                pool_depth
+                            )
+
+                        print(
+                            f"[DEPTH] Hold target dipertahankan = "
+                            f"{depth_target:.2f} m"
+                        )
+                
                 print("====================================")
                 print(f" PILOT MODE : {pixhawk_mode}")
                 if poshold_active:
@@ -672,11 +1563,15 @@ def command_listener():
                 poshold_active = False
                 with heading_lock:
                     heading_target = None
+                # Depth-set juga dimatikan: E-Stop berarti operator ingin semua
                 # yang menulis ke thruster berhenti, dan setelah re-arm wahana
-                # tidak boleh langsung berenang sendiri ke setpoint lama.
-                # sudah direkam masih berguna, operator tinggal menekan ON lagi.
+                # tidak boleh langsung berenang sendiri ke setpoint lama tanpa
+                # operator menekan apa pun. Tak ada saklar enabled terpisah lagi
+                # (lihat apply_depth_hold_bias) — depth_target SENDIRI dibuang,
+                # supaya operator harus memegang-lalu-lepas heave dulu untuk
+                # membentuk target baru sebelum bias aktif lagi.
                 with depth_lock:
-                    depth_hold_enabled = False
+                    depth_target = None
                 send_arm_disarm(False)
 
             elif name == "light":
@@ -686,6 +1581,11 @@ def command_listener():
 
             elif name == "set_surface":
 
+                # Tare permukaan HARUS di backend, bukan cuma tampilan GUI:
+                # apply_depth_hold_bias() menghitung error dari state["depth"],
+                # jadi kalau tare hanya kosmetik di browser, bias yang benar-
+                # benar dikirim ke thruster dihitung dari depth mentah yang
+                # bisa jauh dari nol walau GUI menampilkan "Depth = 0.00 m".
                 depth_offset = _raw_depth
                 print(f"[DEPTH] Surface di-set — offset = {depth_offset:.2f} m")
                 send_to_gui({
@@ -694,77 +1594,123 @@ def command_listener():
                     "level": "ok",
                 })
 
-            elif name == "depth_hold":
+            elif name == "mark_hook":
 
-                # Depth Hold murni menggunakan controller ArduSub.
+                # Rekam DI MANA payload digantung, untuk dipakai M5_REDIVE saat
+                # misi 5 autonomous. Ditekan operator pada misi 3, tepat setelah
+                # payload tersangkut di gantungan dinding.
                 #
-                # ON  -> ArduSub ALT_HOLD
-                # OFF -> kembali ke MANUAL
-
-                with depth_lock:
-                    want = (not depth_hold_enabled) if value is None else bool(value)
-
-                if not state.get("armed"):
-                    print("[DEPTH] Depth Hold diabaikan — vehicle belum armed")
-                    send_to_gui({
-                        "type": "event",
-                        "text": "Depth Hold diabaikan — vehicle belum armed",
-                        "level": "warn",
-                    })
-                    continue
-
-                if not _depth_cmd_rate.allow("depth_hold", time.time()):
-                    continue
-
-                mode_mapping = master.mode_mapping() or {}
-
-                if want:
-                    target_mode = "ALT_HOLD"
-                    event_text = "Depth Hold ON — ALT_HOLD ArduSub"
-                else:
-                    target_mode = "MANUAL"
-                    event_text = "Depth Hold OFF — MANUAL"
-
-                if target_mode not in mode_mapping:
-                    print(f"[DEPTH] Mode {target_mode} tidak tersedia")
-                    send_to_gui({
-                        "type": "event",
-                        "text": f"Mode {target_mode} tidak tersedia di ArduSub",
-                        "level": "warn",
-                    })
-                    continue
-
-                with master_lock:
-                    master.set_mode(mode_mapping[target_mode])
-
-                with depth_lock:
-                    depth_hold_enabled = want
-
-                print(f"[DEPTH] {event_text}")
-
+                # Sengaja tanpa syarat armed/mode: merekam dua angka tidak
+                # menggerakkan apa pun, dan memaksa syarat justru membuat
+                # operator kehilangan momen yang benar (payload sudah tergantung,
+                # ROV mungkin sudah dinetralkan).
+                marked_heading = state["heading"]
+                marked_depth = state["depth"]
+                print(f"[MARK] gantungan ditandai — heading={marked_heading:.0f}° "
+                      f"depth={marked_depth:.2f} m")
                 send_to_gui({
                     "type": "event",
-                    "text": event_text,
+                    "text": (f"Gantungan ditandai — heading {marked_heading:.0f}° "
+                             f"depth {marked_depth:.2f} m"),
                     "level": "ok",
                 })
 
+            elif name == "mission_counter":
+
+                # Counter trial Misi 2/3 (Guidebook §4.7.4) — pilot menekan
+                # "Gagal, Ulangi" saat melihat sendiri dari kamera bahwa
+                # grab/hang gagal (tak ada sensor grip-force di ROV ini).
+                # Event "set" mengisi trial ke-N langsung (input angka manual
+                # di Setup) — dipakai untuk koreksi salah klik atau eksperimen
+                # nilai saat uji coba di kolam sebelum ukuran lomba sebenarnya.
+                mission = (value or {}).get("mission")
+                event = (value or {}).get("event")
+                if event == "reset":
+                    mission_counter_fails["m2"] = 0
+                    mission_counter_fails["m3"] = 0
+                elif event == "fail" and mission in mission_counter_fails:
+                    mission_counter_fails[mission] += 1
+                elif event == "set" and mission in mission_counter_fails:
+                    try:
+                        trial = int((value or {}).get("trial"))
+                    except (TypeError, ValueError):
+                        trial = None
+                    if trial is not None and trial >= 1:
+                        mission_counter_fails[mission] = trial - 1
+                state["mission_counter"] = {
+                    "m2_fails": mission_counter_fails["m2"],
+                    "m2_score": _tier_score(mission_counter_fails["m2"]),
+                    "m3_fails": mission_counter_fails["m3"],
+                    "m3_score": _tier_score(mission_counter_fails["m3"]),
+                }
+                print(f"[COUNTER] {mission or 'ALL'}: {event} → {state['mission_counter']}")
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Counter {mission or 'semua misi'}: {event}",
+                    "level": "warn" if event == "fail" else "ok",
+                })
+
+            elif name in ("depth_up", "depth_down"):
+
+                if not state["armed"]:
+                    continue
+
+                step = -0.05 if name == "depth_up" else 0.05
+
+                with depth_lock:
+                    if depth_target is None:
+                        depth_target = state["depth"]
+
+                    depth_target = clamp_depth_target(
+                        depth_target + step,
+                        pool_depth
+                    )
+
+                    shown = depth_target
+
+                # STABILIZE: depth_target di atas SUDAH cukup, apply_depth_hold_bias()
+                # per-tick yang mendorong terus-menerus (tak ada cascade PID ArduSub
+                # di mode ini). ALT_HOLD (depth_hold/poshold): cascade ArduSub
+                # sendiri yang menahan, jadi kita cuma memicu pulsa sekali-tembak
+                # yang meniru operator menyentuh-lalu-lepas stik heave — lihat
+                # DEPTH_PULSE_* di rov_pid.py.
+                _mode_now = _current_pixhawk_mode()
+                if depth_hold_allowed(_mode_now) and not depth_bias_is_continuous(_mode_now):
+                    _depth_pulse_until = time.time() + DEPTH_PULSE_DURATION_S
+                    _depth_pulse_dir = -1 if name == "depth_up" else 1
+
+                arah = "NAIK 5 cm" if step < 0 else "TURUN 5 cm"
+
+                print(f"[DEPTH] {arah} -> target {shown:.2f} m")
+
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Depth target {arah} -> {shown:.2f} m",
+                    "level": "ok",
+                })
             elif name == "pool_depth":
 
+                # Kedalaman kolam uji. Bukan cuma catatan: jadi batas bawah
+                # depth_target (lihat rov_pid.clamp_depth_target).
                 depth_m = valid_pool_depth(value)
-
                 if depth_m is None:
                     print(f"[POOL] nilai pool_depth tidak valid: {value!r}")
                     continue
 
                 pool_depth = depth_m
 
-                print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m")
-
-                send_to_gui({
-                    "type": "event",
-                    "text": f"Kedalaman kolam = {pool_depth:.2f} m",
-                    "level": "ok",
-                })    
+                # Jepit ULANG target yang sedang berjalan. Kalau operator
+                # memperkecil pool depth saat target sudah lebih dalam, target
+                # harus ikut turun sekarang — bukan menunggu penekanan SET
+                # berikutnya. None dibiarkan None: "belum di-set" tidak boleh
+                # berubah jadi setpoint 0 m gara-gara halaman Setup disimpan.
+                with depth_lock:
+                    if depth_target is not None:
+                        depth_target = clamp_depth_target(depth_target, pool_depth)
+                    shown = depth_target
+                shown_txt = "belum di-set" if shown is None else f"{shown:.2f} m"
+                print(f"[POOL] Kedalaman kolam = {pool_depth:.2f} m "
+                      f"(target: {shown_txt})")
 
             elif name == "thruster_gain_inc":
 
@@ -1225,6 +2171,7 @@ def joystick_sender():
     Mengirim heave mentah sebagai z membuat "diam" berarti MENYELAM PENUH —
     termasuk saat E-Stop dan saat link GUI putus.
     """
+    global current_control_mode
 
     while True:
         # Link Pixhawk sedang putus/menyambung ulang — tidak ada tujuan kirim.
@@ -1235,6 +2182,33 @@ def joystick_sender():
         with joystick_lock:
             axes = dict(joystick)
             last_update = last_joystick_update
+
+        # ── Otoritas: FSM vs operator ──────────────────────────────────────
+        # Saat autonomous, axis datang dari FSM. TAPI stik operator selalu
+        # menang: dorongan nyata di atas deadzone langsung membatalkan
+        # autonomy dan mengembalikan kendali. Ambang KILL_SWITCH_DEADZONE
+        # hidup di skala yang sama dgn axis GUI (-1000..1000) — lihat
+        # autonomy/rov_link.py utk analisis lengkapnya; yang menyaring drift
+        # stik adalah deadzone sisi-GUI (0.12), bukan angka ini.
+        if current_control_mode == "autonomous":
+            operator_nyetir = any(
+                abs(axes.get(k, 0)) > KILL_SWITCH_DEADZONE
+                for k in ("surge", "sway", "yaw", "heave")
+            )
+            if operator_nyetir:
+                print("[KILL-SWITCH] stik operator digerakkan saat autonomous "
+                      "— abort FSM, kembali ke manual")
+                current_control_mode = "manual"
+                if mission5_runner is not None:
+                    mission5_runner.stop()
+            else:
+                with fsm_axes_lock:
+                    axes = dict(fsm_axes)
+                # Axis FSM tidak lewat command_listener, jadi fail-safe idle
+                # (yang mengukur last_joystick_update) tak berlaku untuknya —
+                # kalau tidak di-refresh, FSM selalu dianggap "stale" dan
+                # setiap perintahnya diganti netral.
+                last_update = time.time()
 
         # Ramp TIDAK BOLEH menunda perintah berhenti. E-Stop menetralkan axis
         # lalu disarm; tanpa reset di sini, nilai ter-shape masih meluncur
@@ -1271,19 +2245,40 @@ def joystick_sender():
             heave=scaled_axes["heave"],
         )
 
+        # Depth hold dan heading hold bekerja SETELAH gain untuk `mc` (dorongan
+        # nyata ke thruster) — TAPI gerbang "operator sedang memegang stik" di
+        # kedua fungsi itu (HEAVE_MANUAL_EPSILON/YAW_MANUAL_EPSILON) sengaja
+        # diberi `eff_axes`, BUKAN `scaled_axes`. Itu niat pilot, bukan
+        # kekuatan aktual ke thruster: kalau thruster_gain diturunkan jauh
+        # (mis. 20%), stik yang didorong penuh (100) jadi cuma 20 setelah
+        # dikalikan gain — pas di ambang epsilon atau di bawahnya — dan
+        # gerbang bisa gagal mendeteksi stik yang sebenarnya sedang dipegang.
+        mc = apply_depth_hold_bias(
+            mc,
+            eff_axes,
+            allow_auto_capture=not stale
+        )
+        # Rem heave, hanya ALT_HOLD & hanya setelah full-deflection tertahan
+        # lama — lihat apply_heave_brake untuk kenapa beda dari versi pertama
+        # yang dicabut.
+        mc = apply_heave_brake(mc, eff_axes)
+
         # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
         # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
         # mudah dibaca. Saat stale, axes netral yang dipakai sehingga overlay
         # tidak menyimpulkan "operator sedang memegang stik" dari input basi.
         mc = apply_heading_hold(mc, eff_axes)
 
+        # Rem surge/sway ala DJI — lihat apply_translation_brake untuk batas
+        # fisiknya (bukan position hold, cuma menghentikan momentum sendiri).
+        mc = apply_translation_brake(mc, eff_axes)
+
+        # Position hold x/y dari optical flow — default OFF, lihat
+        # POSITION_HOLD_TO_THRUSTER & docstring apply_position_hold.
+        mc = apply_position_hold(mc, eff_axes)
+
         try:
             with master_lock:
-                print(
-                    f"[JOY] x={mc['x']} y={mc['y']} z={mc['z']} "
-                    f"r={mc['r']} buttons={mc['buttons']}"
-                )
-
                 master.mav.manual_control_send(
                     master.target_system,
                     mc["x"], mc["y"], mc["z"], mc["r"], mc["buttons"],
@@ -1314,6 +2309,18 @@ def connect_pixhawk():
     gripper = GripperController(master)
     print("[GRIPPER] Controller initialized")
 
+    # Runner FSM misi 5. Gagal-lunak: kalau paket autonomy/opencv belum ada di
+    # Pi, ini mencetak alasannya dan mengembalikan None — agent tetap jalan
+    # penuh untuk kontrol manual, cuma toggle Autonomous yang tidak berefek.
+    if setup_mission5_runner() is not None:
+        print("[M5] runner siap — toggle Autonomous di GUI akan menjalankan FSM")
+
+    # Tahap 2 drift sensing (default OFF, lihat OPTFLOW_TO_EKF di atas): arahkan
+    # EKF ArduSub memakai optical flow sebagai sumber kecepatan horizontal.
+    # Kalau OFF, param FC ini tidak disentuh sama sekali.
+    if OPTFLOW_TO_EKF:
+        set_param("EK3_SRC1_VELXY", 5, mavutil.mavlink.MAV_PARAM_TYPE_INT8)
+
     # Minta stream data secara periodik
     try:
         link.mav.request_data_stream_send(
@@ -1339,6 +2346,21 @@ def connect_pixhawk():
         )
     except Exception as e:
         print("[MAV] AHRS2 request warning:", e)
+
+    # Request SCALED_IMU2 (akselerasi body-frame, penambal celah drift IMU —
+    # lihat _last_body_accel & drift_estimator_thread)
+    try:
+        link.mav.command_long_send(
+            link.target_system,
+            link.target_component,
+            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+            0,
+            mavutil.mavlink.MAVLINK_MSG_ID_SCALED_IMU2,
+            100000,      # 10 Hz (100000 µs)
+            0, 0, 0, 0, 0
+        )
+    except Exception as e:
+        print("[MAV] SCALED_IMU2 request warning:", e)
 
     # Request SERVO_OUTPUT_RAW (PWM thruster, untuk CSV tuning depth-hold)
     try:
@@ -1416,6 +2438,9 @@ def drop_link(reason):
 def main():
     global prev_attitude_ts
     global _raw_depth
+    global depth_target
+    global _last_body_rates
+    global _last_body_accel
 
     connect_pixhawk()
 
@@ -1423,6 +2448,7 @@ def main():
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=qgc_command_receiver, daemon=True).start()
+    threading.Thread(target=drift_estimator_thread, daemon=True).start()
 
     last_send = 0
     last_hb = 0
@@ -1495,6 +2521,7 @@ def main():
         # ATTITUDE: roll, pitch, yaw
         # --------------------------------
         if mtype == "ATTITUDE":
+            _last_body_rates = (msg.rollspeed, msg.pitchspeed, msg.yawspeed)
             now_ts = msg._timestamp
             dt = (now_ts - prev_attitude_ts) if prev_attitude_ts is not None else 0.1
             roll_f, pitch_f, yaw_f = attitude_filter.update(
@@ -1510,6 +2537,16 @@ def main():
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
             prev_attitude_ts = now_ts
+
+        # --------------------------------
+        # SCALED_IMU2: akselerasi body-frame mentah, penambal celah drift IMU
+        # (lihat _last_body_accel & drift_estimator_thread). mg -> m/s^2.
+        # --------------------------------
+        if mtype == "SCALED_IMU2":
+            _last_body_accel = (
+                msg.xacc * 9.80665 / 1000.0,
+                msg.yacc * 9.80665 / 1000.0,
+            )
 
         # --------------------------------
         # LOCAL_POSITION_NED: estimasi posisi EKF (utara/timur, meter).
@@ -1570,26 +2607,34 @@ def main():
                 # 0 saat ROV di-arm.
                 state["depth"] = max(0.0, _raw_depth - depth_offset)
 
+                # Isi buffer sampel untuk SET smoothing (lihat depth_set handler).
+                global _depth_samples
+                _depth_samples.append(state["depth"])
+                if len(_depth_samples) > _DEPTH_SAMPLE_BUFFER_SIZE:
+                    _depth_samples.pop(0)
+
         # --------------------------------
         # SERVO_OUTPUT_RAW: PWM thruster vertikal (T3/T4/T5 = heave)
         # untuk CSV tuning depth-hold di halaman Telemetry.
         # --------------------------------
         elif mtype == "SERVO_OUTPUT_RAW":
-            t3 = int(msg.servo3_raw or 0)
-            t4 = int(msg.servo4_raw or 0)
-            t5 = int(msg.servo5_raw or 0)
+            vals = [v for v in (msg.servo3_raw, msg.servo4_raw, msg.servo5_raw) if v]
+            if vals:
+                state["thruster_vertical_pwm"] = int(sum(vals) / len(vals))
 
-            state["thruster_vertical_pwm"] = int(
-                (t3 + t4 + t5) / 3
-            )
-
-            print(f"[PWM VERTICAL] T3={t3} T4={t4} T5={t5}")
-
+            # T6 = lateral/sway, T1/T2 = surge+yaw. Dulu dibuang di sini padahal
+            # SERVO_OUTPUT_RAW sudah diminta 10 Hz (lihat connect_pixhawk) —
+            # akibatnya tidak ada satu pun catatan PWM thruster horizontal di
+            # disk, dan drift menyamping saat stik netral jadi tidak bisa
+            # didiagnosis sama sekali. Ikut mengalir ke baris [SEND] 1 Hz.
+            #
+            # 0 berarti "FC tidak mengirim channel itu", bukan "thruster diam":
+            # thruster yang diam ada di sekitar SERVOn_TRIM (1500), bukan 0.
             state["thruster_lateral_pwm"] = int(msg.servo6_raw or 0)
             state["thruster_surge_pwm"] = [
-                int(msg.servo1_raw or 0),
-                int(msg.servo2_raw or 0),
+                int(msg.servo1_raw or 0), int(msg.servo2_raw or 0),
             ]
+
         # --------------------------------
         # PID_TUNING: P/I/D per axis untuk CSV tuning + diagnosa offline.
         # Diam per axis kalau bit-nya di GCS_PID_MASK belum menyala di FC —
@@ -1630,11 +2675,20 @@ def main():
             base_mode = msg.base_mode
             was_armed = state["armed"]
             state["armed"] = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+
+            # Disarm dari JALUR MANA PUN membuang depth_target: tombol DISARM,
+            # failsafe FC, saklar RC, atau GCS lain. Handler `stop` sudah
+            # menanganinya untuk E-Stop, tapi tanpa cek transisi di sini
+            # target lama tetap tersimpan selama wahana disarm — dan begitu
+            # di-arm ulang (tanpa mode berubah) bias langsung mendorong ke
+            # setpoint lama tanpa operator menyentuh apa pun. Sama seperti
+            # blok E-Stop: operator harus memegang-lalu-lepas heave dulu untuk
+            # membentuk target baru.
             if was_armed and not state["armed"]:
                 with depth_lock:
-                    if depth_hold_enabled:
-                        globals()["depth_hold_enabled"] = False
-                        print("[DEPTH] Depth-set OFF — vehicle disarm")
+                    if depth_target is not None:
+                        depth_target = None
+                        print("[DEPTH] target dibuang — vehicle disarm")
 
             # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
             if requested_mode is not None and state["mode"] == requested_mode:
