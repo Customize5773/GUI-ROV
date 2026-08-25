@@ -15,6 +15,14 @@ GUI_ROV="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 START_STATE="${1:-DIVE}"
 shift || true
 
+# WORLD: nama file .sdf di hydroships_gazebo/worlds/ (mis. pool_practice_arena.sdf
+# utk kolam latihan 2,2x4,4x0,8 m). POOL_CONFIG: layer YAML pool tambahan
+# (mis. config/pool_trial.yaml) ditumpuk di atas rov_tuned.yaml. Contoh:
+#   WORLD=pool_practice_arena.sdf POOL_CONFIG=config/pool_trial.yaml \
+#       autonomy/tools/run_gazebo_backend.sh DIVE
+WORLD="${WORLD:-kki_arena.sdf}"
+POOL_CONFIG="${POOL_CONFIG:-}"
+
 echo "[1/4] Membersihkan sisa proses sim lama (kalau ada)..."
 # ros_gz_bridge/parameter_bridge TIDAK match pola "hydroships|ign gazebo" --
 # process name-nya beda -- kalau kelewatan, orphan-nya numpuk tiap launch
@@ -36,7 +44,7 @@ CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "GUI-ROV/.venv" | paste -sd:)
   set -u
   exec ros2 launch hydroships_bringup hydroships_gui.launch.py headless:=true \
       gui_host:=127.0.0.1 cmd_port:=14550 telem_port:=14552 \
-      rov_random_spawn:=false rov_x:=0.0 rov_y:=0.0
+      rov_random_spawn:=false rov_x:=0.0 rov_y:=0.0 world:="$WORLD"
 ) > /tmp/gazebo_backend_sim.log 2>&1 < /dev/null &
 SIM_PID=$!
 disown
@@ -61,6 +69,7 @@ PYEOF
 echo "[4/4] Menjalankan mission5.py (start-state=$START_STATE)..."
 cd "$GUI_ROV/autonomy"
 python3 fsm/mission5.py --vision mock --config config/rov_tuned.yaml \
+    ${POOL_CONFIG:+--config "$POOL_CONFIG"} \
     --start-state "$START_STATE" --no-wait-autonomous "$@"
 
 echo "Selesai. Sim (PID $SIM_PID) masih jalan di background -- 'kill $SIM_PID' atau" \
