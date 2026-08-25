@@ -15,20 +15,24 @@ GUI_ROV="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 START_STATE="${1:-DIVE}"
 shift || true
 
-# WORLD: nama file .sdf di hydroships_gazebo/worlds/ (mis. pool_practice_arena.sdf
-# utk kolam latihan 2,2x4,4x0,8 m). POOL_CONFIG: layer YAML pool tambahan
-# (mis. config/pool_trial.yaml) ditumpuk di atas rov_tuned.yaml. Contoh:
-#   WORLD=pool_practice_arena.sdf POOL_CONFIG=config/pool_trial.yaml \
+# WORLD: nama file .sdf di hydroships_gazebo/worlds/. Default = kolam latihan
+# 2,2x4,4x0,8 m (pool_practice_arena.sdf), sama seperti default project-wide
+# ros2_ws (lihat hydroships_gazebo/launch/sim.launch.py). POOL_CONFIG: layer
+# YAML pool tambahan ditumpuk di atas rov_tuned.yaml, defaultnya dipasangkan
+# dgn world di atas. Utk uji arena lomba, override keduanya:
+#   WORLD=kki_arena.sdf POOL_CONFIG=config/pool_kki_trial.yaml \
 #       autonomy/tools/run_gazebo_backend.sh DIVE
-WORLD="${WORLD:-kki_arena.sdf}"
-POOL_CONFIG="${POOL_CONFIG:-}"
+WORLD="${WORLD:-pool_practice_arena.sdf}"
+POOL_CONFIG="${POOL_CONFIG:-config/pool_trial.yaml}"
 
 echo "[1/4] Membersihkan sisa proses sim lama (kalau ada)..."
-# ros_gz_bridge/parameter_bridge TIDAK match pola "hydroships|ign gazebo" --
-# process name-nya beda -- kalau kelewatan, orphan-nya numpuk tiap launch
-# dan lama-lama menghabiskan CPU host (ditemukan 25 Agu: load average naik
-# dari ~8 ke ~29 setelah belasan launch berturut dlm 1 sesi tanpa ini).
-(ps aux | grep -E "hydroships|ign gazebo|ros_gz_bridge|parameter_bridge" | grep -v grep | awk '{print $2}' | xargs -r kill -9) || true
+# ros_gz_bridge/parameter_bridge & robot_state_publisher TIDAK match pola
+# "hydroships|ign gazebo" -- nama proses beda -- kalau kelewatan, orphan-nya
+# numpuk tiap launch dan lama-lama menghabiskan CPU host (ditemukan 25 Agu:
+# load average naik ke ~29 dari parameter_bridge; 26 Agu: 28 proses
+# robot_state_publisher orphan numpuk sejak sesi H-1, masing2 cuma 2-5% CPU
+# tapi jumlahnya bikin host tersendat terus-menerus tanpa disadari).
+(ps aux | grep -E "hydroships|ign gazebo|ros_gz_bridge|parameter_bridge|robot_state_publisher" | grep -v grep | awk '{print $2}' | xargs -r kill -9) || true
 sleep 2
 
 echo "[2/4] Meluncurkan sim headless (ros2_ws @ $ROS2_WS)..."

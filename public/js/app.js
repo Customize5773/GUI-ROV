@@ -61,6 +61,7 @@ const els = {
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"),
   depthHoldBadge: $("depthHoldBadge"),
+  poolDepthBadge: $("poolDepthBadge"),
   cmdLinkBanner: $("cmdLinkBanner"),
   markBadge: $("markBadge"),
   modeActual: $("modeActual"),
@@ -398,6 +399,7 @@ function applyTelemetry(d) {
   els.depthTarget.textContent = num(d.depth_target, 2);
   applyDepthHold(d);
   applyMarkBadge(d);
+  applyPoolDepth(d);
   applyCmdLink(d);
 }
 
@@ -425,6 +427,17 @@ function applyDepthHold(d) {
 
   els.depthHoldBadge.textContent = holding ? "DEPTH-HOLD ON" : "DEPTH-HOLD OFF";
   els.depthHoldBadge.classList.toggle("badge--ok", holding);
+}
+
+/* Echo pool_depth dari wahana (rov_agent.py state["pool_depth"]) — GUI cuma
+   MENGIRIM nilai ini (lihat sendCmd("pool_depth", ...) di onopen & setup.js),
+   sebelumnya tak pernah dikonfirmasi kembali kalau wahana benar menerimanya. */
+function applyPoolDepth(d) {
+  if (!els.poolDepthBadge) return;
+  const dep = d.pool_depth;
+  const known = Number.isFinite(dep);
+  els.poolDepthBadge.textContent = known ? `KOLAM ${dep.toFixed(2)} m` : "KOLAM —";
+  els.poolDepthBadge.classList.toggle("badge--ok", known);
 }
 
 /* banner "LINK PERINTAH TERPUTUS" — nyala saat Pi substitusi axis netral

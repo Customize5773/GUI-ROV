@@ -94,11 +94,17 @@ python3 autonomy/fsm/mission5.py --vision mock --config autonomy/config/rov_tune
   beda). Cek `ps aux | grep -E "gui_bridge|ign gazebo"` sebelum debug lebih
   jauh kalau hasil tak konsisten antar percobaan.
 
-- Kalau kamu mau dashboard GUI-ROV (`server.js`) hidup BERSAMAAN dengan FSM
-  ini, itu belum didukung — `gui_bridge` hanya kirim telemetri ke SATU
-  `telem_port`. Butuh fanout kecil (pola `--telem-extra` di `rov_link.py`)
-  sebelum itu bisa jalan; belum dibangun, baru kerjakan kalau kebutuhannya
-  nyata.
+- **Dashboard GUI-ROV + FSM bersamaan: SUDAH didukung (26 Agu 2026)** —
+  `gui_bridge` sekarang punya `telem_extra` (pola sama dgn `--telem-extra`
+  di `rov_link.py`), csv `host:port` utk tujuan tambahan. Contoh: dashboard
+  di :14551 (default) + FSM di :14552 sekaligus:
+  ```bash
+  ros2 launch hydroships_bringup hydroships_gui.launch.py headless:=true \
+      gui_host:=127.0.0.1 cmd_port:=14550 telem_port:=14551 \
+      telem_extra:=127.0.0.1:14552 rov_random_spawn:=false rov_x:=0.0 rov_y:=0.0
+  ```
+  Jalankan `server.js` (`RPI_ADDR=127.0.0.1 UDP_OUT=14550 UDP_IN=14551`) di
+  terminal terpisah utk lihat dashboard hidup bersamaan dgn `mission5.py`.
 - `mission_fsm.py` (FSM bawaan ros2_ws) TIDAK dipakai jalur ini — yang jalan
   tetap `mission5.py` (GUI-ROV), Gazebo cuma jadi "vehicle". `gui_bridge`
   mem-bypass `mission_fsm.py`/`stabilizer`/`thruster_allocator` sepenuhnya
@@ -123,14 +129,18 @@ ros2 run hydroships_control http_camera_bridge
 python3 autonomy/fsm/mission5.py --vision rtsp \
     --bottom-url http://127.0.0.1:8090/cam_bottom \
     --wall-url   http://127.0.0.1:8090/cam_front \
-    --config autonomy/config/rov_tuned.yaml \
-    --config autonomy/config/gazebo_sim.yaml
+    --config autonomy/config/rov_tuned.yaml
 ```
 
-`config/gazebo_sim.yaml` menaikkan `depth.target_bottom` (kompensasi FOV
-kamera sim yg jauh lebih lebar drpd kamera DWE asli — lihat komentar di
-file itu) — TANPA ini, QR akan terlalu kecil utk pyzbar walau orientasi
-payload sudah benar.
+**Update 26 Agu 2026**: `config/gazebo_sim.yaml` (nudge `depth.target_bottom`
+lebih dekat) TIDAK PERLU LAGI — akar masalahnya (FOV kamera sim 80° generik,
+jauh lebih lebar drpd kamera DWE asli ~70°) sudah diperbaiki langsung di
+`hydroships_description/urdf/hydroships.urdf.xacro` (`horizontal_fov`
+disamakan dgn kalibrasi `dwe_trial2.npz`, fx sim jadi 457 @ 640px, cocok
+dgn fx=914 @ 1280px kamera asli). Closed-loop QR-decode kini berhasil di
+`DEPTH_TARGET_BOTTOM` DEFAULT (0.70m), tanpa config tambahan. File
+`config/gazebo_sim.yaml` dibiarkan ada (harmless, tak lagi diperlukan)
+kalau-kalau ada alasan lain nanti mau clearance lebih dekat.
 
 **Posisi spawn ROV vs payload (`rov_x/y` vs `payload_x/y`) penting**:
 - **JANGAN identik** (mis. `rov_x=0.4 rov_y=0.04` = persis `payload_x/y`)
