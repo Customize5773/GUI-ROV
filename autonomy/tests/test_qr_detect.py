@@ -72,9 +72,10 @@ def test_decode_qr_escalates_to_upscale_and_rescales_coords(monkeypatch):
 
     def fake_decode(img):
         calls['n'] += 1
-        # jenjang 1 (raw) & 2 (CLAHE) gagal; jenjang 3 (upscale UPSCALE×) berhasil,
-        # mengembalikan polygon di koordinat gambar yg SUDAH diperbesar (200 px).
-        if calls['n'] < 3:
+        # jenjang 1 (raw), 2 (CLAHE) & 3 (adaptive-threshold) gagal; jenjang 4
+        # (upscale UPSCALE×) berhasil, mengembalikan polygon di koordinat
+        # gambar yg SUDAH diperbesar (200 px).
+        if calls['n'] < 4:
             return []
         return [_FakeSym(b'{"id":"A"}',
                          [(200, 200), (240, 200), (240, 240), (200, 240)])]
@@ -83,11 +84,36 @@ def test_decode_qr_escalates_to_upscale_and_rescales_coords(monkeypatch):
     frame = np.full((480, 640, 3), 128, np.uint8)
     res = qd.decode_qr(frame, enhance=True)
 
-    assert calls['n'] == 3, "harus mengeskalasi raw -> CLAHE -> upscale"
+    assert calls['n'] == 4, "harus mengeskalasi raw -> CLAHE -> adaptive-threshold -> upscale"
     assert len(res) == 1 and res[0]['data'] == '{"id":"A"}'
     # koordinat harus dibagi UPSCALE agar kembali ke frame ASLI (200/2 = 100)
     pts = res[0]['pts']
     assert abs(pts[:, 0].min() - 100) < 1e-3 and abs(pts[:, 1].min() - 100) < 1e-3
+
+
+def test_decode_qr_escalates_to_adaptive_threshold(monkeypatch):
+    """jenjang 3 (adaptive-threshold) harus dicoba SEBELUM upscale, dan bisa
+    berhasil sendiri tanpa perlu naik ke upscale (target: latar berfaset/riak
+    yang lolos CLAHE tapi terpisah oleh threshold lokal)."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    calls = {'n': 0}
+
+    def fake_decode(img):
+        calls['n'] += 1
+        if calls['n'] < 3:
+            return []
+        return [_FakeSym(b'{"id":"B"}',
+                         [(10, 10), (50, 10), (50, 50), (10, 50)])]
+
+    monkeypatch.setattr(qd.pyzbar, 'decode', fake_decode)
+    frame = np.full((480, 640, 3), 128, np.uint8)
+    res = qd.decode_qr(frame, enhance=True)
+
+    assert calls['n'] == 3, "harus berhenti di adaptive-threshold, tak lanjut ke upscale"
+    assert len(res) == 1 and res[0]['data'] == '{"id":"B"}'
 
 
 def test_decode_qr_enhance_false_stops_at_raw(monkeypatch):
@@ -108,7 +134,7 @@ def test_decode_qr_enhance_false_stops_at_raw(monkeypatch):
 
     calls['n'] = 0
     assert qd.decode_qr(frame, enhance=True) == []
-    assert calls['n'] == 3                     # raw + CLAHE + upscale
+    assert calls['n'] == 4                     # raw + CLAHE + adaptive-threshold + upscale
 
 
 def test_decode_qr_pts_map_to_original_frame_coords():
