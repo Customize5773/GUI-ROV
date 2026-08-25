@@ -6,6 +6,16 @@ NAV_WALL→HANG→SURFACE→DOCK→M5_REDIVE→M5_DOCK→M5_ENGAGE→M5_UNHOOK�
 DONE), tanpa kode baru selain fix skala axis (lihat Prasyarat). Pakai
 `autonomy/tools/run_gazebo_backend.sh` untuk mengulang setup ini otomatis.
 
+**Diverifikasi 26 Agu 2026 — vision SUNGGUHAN (bukan mock) juga berhasil**:
+`mission5.py --vision rtsp` (kamera Gazebo asli via `http_camera_bridge`,
+lihat §"Vision sungguhan" di bawah) benar2 men-decode QR nyata di SCAN_QR
+(`qr_data='A'`), lanjut GRAB→NAV_WALL→HANG→SURFACE→DOCK dgn QR terus
+terbaca. Butuh 2 fix tambahan di ros2_ws yg sudah masuk: node
+`http_camera_bridge` (bridge kamera→HTTP MJPEG) dan anchor DetachableJoint
+di `payload_spawner.py` (payload dulu tak stabil di orientasi spawn, QR
+menghadap samping bukan atas — lihat memory `pbr-rendering-investigation-deferred`
+utk detail diagnosis).
+
 Selain `sitl_mock.py`/ArduSub SITL, `mission5.py` juga bisa dijalankan langsung
 di atas dunia Gazebo dari `~/ros2_ws` (`Customize5773/ros2_ws`, ROS2 Humble +
 Gazebo Fortress). Node `gui_bridge` di repo itu **sudah bicara protokol
@@ -96,6 +106,41 @@ python3 autonomy/fsm/mission5.py --vision mock --config autonomy/config/rov_tune
   yang mau diuji, bukan sim FSM).
 - Sebelum dipakai utk uji misi penuh: verifikasi command tidak saturasi
   (lihat smoke test di bawah).
+
+## Vision sungguhan (bukan mock)
+
+`--vision mock` di atas memalsukan hasil QR — tak pernah menyentuh gambar
+kamera Gazebo asli. Untuk uji closed-loop vision SUNGGUHAN:
+
+```bash
+# Terminal 1 (ros2_ws) — sim seperti biasa (lihat Setup manual di atas).
+
+# Terminal 1b (ros2_ws) — bridge kamera → HTTP MJPEG (cv2.VideoCapture GUI-ROV
+# menerima URL http:// sama seperti rtsp://, backend FFmpeg yg sama).
+ros2 run hydroships_control http_camera_bridge
+
+# Terminal 2 (GUI-ROV) — arm dulu (sama seperti biasa), lalu:
+python3 autonomy/fsm/mission5.py --vision rtsp \
+    --bottom-url http://127.0.0.1:8090/cam_bottom \
+    --wall-url   http://127.0.0.1:8090/cam_front \
+    --config autonomy/config/rov_tuned.yaml \
+    --config autonomy/config/gazebo_sim.yaml
+```
+
+`config/gazebo_sim.yaml` menaikkan `depth.target_bottom` (kompensasi FOV
+kamera sim yg jauh lebih lebar drpd kamera DWE asli — lihat komentar di
+file itu) — TANPA ini, QR akan terlalu kecil utk pyzbar walau orientasi
+payload sudah benar.
+
+**Posisi spawn ROV vs payload (`rov_x/y` vs `payload_x/y`) penting**:
+- **JANGAN identik** (mis. `rov_x=0.4 rov_y=0.04` = persis `payload_x/y`)
+  — collision lock, ROV macet total, ditemukan 26 Agu.
+- **Jangan terlalu dekat secara vertikal saat spawn** (mis. `rov_z=-0.5`
+  dgn offset horizontal kecil ~0.05m) — payload skrg terkunci KAKU di
+  orientasi rolled-nya (anchor fix), jadi punya profil collision lebih
+  besar drpd dulu (yg cepat rebah rata) — ROV bisa nyangkut kalau di-spawn
+  terlalu dekat. Beri jarak wajar (≥0.3m horizontal ATAU spawn ROV agak
+  jauh lalu DIVE turun, seperti contoh `rov_x:=0.35` di Setup manual).
 
 ## Smoke test verifikasi (jalankan sekali sebelum percaya hasil misi)
 
