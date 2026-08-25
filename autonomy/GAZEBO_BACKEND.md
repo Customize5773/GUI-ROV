@@ -1,5 +1,11 @@
 # Gazebo (ros2_ws) sebagai backend SITL untuk mission5.py
 
+**Diverifikasi 25 Agu 2026**: misi penuh `mission5.py --vision mock` lewat
+runbook di bawah → **100/100** (kelima sub-misi selesai, DIVE→SCAN_QR→GRAB→
+NAV_WALL→HANG→SURFACE→DOCK→M5_REDIVE→M5_DOCK→M5_ENGAGE→M5_UNHOOK→M5_ASCEND→
+DONE), tanpa kode baru selain fix skala axis (lihat Prasyarat). Pakai
+`autonomy/tools/run_gazebo_backend.sh` untuk mengulang setup ini otomatis.
+
 Selain `sitl_mock.py`/ArduSub SITL, `mission5.py` juga bisa dijalankan langsung
 di atas dunia Gazebo dari `~/ros2_ws` (`Customize5773/ros2_ws`, ROS2 Humble +
 Gazebo Fortress). Node `gui_bridge` di repo itu **sudah bicara protokol
@@ -18,25 +24,58 @@ Fix wajib sebelum dipakai untuk apa pun selain smoke test: `gui_bridge_logic.py`
 ros2_ws-mu belum punya fix ini, command apa pun >±10% akan tersaturasi ke
 gain 100% sebelum sempat proporsional.
 
-## Setup 2 terminal
+## Setup (otomatis)
+
+`autonomy/tools/run_gazebo_backend.sh` menjalankan seluruh urutan di bawah
+(bersihkan sisa proses lama → launch sim headless → arm gui_bridge → jalankan
+`mission5.py`). Lihat isi skrip utk parameter yang bisa diubah (start-state,
+config, qr_letter/payload posisi).
+
+## Setup manual (2 terminal)
 
 ```bash
 # Terminal 1 (ros2_ws) — sim + thruster_allocator + gui_bridge.
+# PENTING: PATH TIDAK BOLEH memuat GUI-ROV/.venv/bin di depan PATH sistem —
+# beberapa node ros2_ws (mis. payload_spawner) pakai shebang `#!/usr/bin/env
+# python3` yg resolve ke python3 manapun duluan di PATH; kalau itu python3.14
+# GUI-ROV, rclpy C-extension (dikompilasi utk python3.10 ROS) gagal load dan
+# node itu mati diam-diam (ditemukan 25 Agu saat percobaan pertama).
 # telem_port DIARAHKAN ke port yang didengar mission5.py (14552), BUKAN 14551
 # (14551 = punya server.js/dashboard — biar tidak rebutan port UDP kalau
 # dashboard tak ikut dijalankan bersamaan).
 cd ~/ros2_ws
-ros2 launch hydroships_bringup hydroships_gui.launch.py \
-    gui_host:=127.0.0.1 cmd_port:=14550 telem_port:=14552
+source /opt/ros/humble/setup.bash && source install/setup.bash
+ros2 launch hydroships_bringup hydroships_gui.launch.py headless:=true \
+    gui_host:=127.0.0.1 cmd_port:=14550 telem_port:=14552 \
+    rov_random_spawn:=false rov_x:=0.0 rov_y:=0.0
 
-# Terminal 2 (GUI-ROV) — jalankan FSM langsung, tanpa rov_link.py.
+# Terminal 2 (GUI-ROV) — ARM gui_bridge dulu. Di produksi operator dashboard
+# yang menekan tombol arm sebelum toggle autonomous; di sini tak ada dashboard,
+# jadi mission5.py TIDAK PERNAH mengirim {"name":"arm"} sendiri (memang bukan
+# tanggung jawabnya) — tanpa langkah ini gui_bridge.wrench() selalu nol dan
+# DIVE akan timeout diam-diam (ditemukan 25 Agu, awalnya disangka bug fisika).
+python3 -c "
+import socket, json
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.sendto(json.dumps({'name':'arm','value':True,'src':'fsm'}).encode(), ('127.0.0.1',14550))
+"
+
+# Terminal 2 lanjut — jalankan FSM langsung, tanpa rov_link.py.
 # Default --server 127.0.0.1 --cmd-port 14550 --telem-port 14552 SUDAH pas
 # dgn argumen launch di atas — nol flag tambahan diperlukan.
 cd ~/GUI-ROV
-python autonomy/fsm/mission5.py --vision mock --config autonomy/config/rov_tuned.yaml
+python3 autonomy/fsm/mission5.py --vision mock --config autonomy/config/rov_tuned.yaml
 ```
 
 ## Batasan yang perlu diketahui
+
+- **Cek proses ganda sebelum menyalahkan bug**: kalau `kill`/`Ctrl+C` pada
+  `ros2 launch` sebelumnya tidak bersih (mis. `pkill` yg pola-nya cuma cocok
+  parent process), child node (`gui_bridge` dkk) bisa jadi orphan dan TERUS
+  jalan, dobel dengan instance baru — keduanya rebutan UDP :14550/:14552 dan
+  hasilnya acak/flaky (field `armed` di telemetri "berkedip" antara run yg
+  beda). Cek `ps aux | grep -E "gui_bridge|ign gazebo"` sebelum debug lebih
+  jauh kalau hasil tak konsisten antar percobaan.
 
 - Kalau kamu mau dashboard GUI-ROV (`server.js`) hidup BERSAMAAN dengan FSM
   ini, itu belum didukung — `gui_bridge` hanya kirim telemetri ke SATU
