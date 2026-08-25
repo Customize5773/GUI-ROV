@@ -20,7 +20,7 @@ PEMAKAIAN
   cd ~/GUI-ROV/autonomy
   # 3) Tes deteksi QR + servo pakai QR payload kamu (dari PDF, atau tampilkan di HP)
 python tools/servo_webcam_test.py --device 0                      # IBVS (tanpa kalibrasi)
-python tools/servo_webcam_test.py --device 0 --calib vision/calibration/laptop.npz  # PBVS
+python tools/servo_webcam_test.py --device 0 --calib vision/calibration/dwe.npz  # PBVS
 python tools/pose_webcam_test.py  --device 0 --calib vision/calibration/laptop.npz  # x/y/z meter
 #    Filter QR tertentu: --data HYDROSHIP
   python tools/calibrate_camera.py --device 0 --cols 9 --rows 6 --square 25 \
