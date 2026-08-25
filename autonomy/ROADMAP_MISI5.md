@@ -121,6 +121,33 @@ Tujuan: pastikan tiap axis & aktuator fisik benar SEBELUM ROV masuk air.
 akurat, dual-cam tampil, tombol STOP menetralkan SEMUA aktuator instan.
 
 **Catatan:**
+- **2026-08-25 — SOFTWARE siap, FISIK belum mulai.** Kelima item di atas dicek
+  ulang terhadap kode yang BENAR-BENAR jalan di Pi (`rov_agent.py` via
+  `rov-agent.service`, bukan `autonomy/rov_link.py` yang dipakai jalur SITL
+  terpisah — dua program berbeda, lihat catatan Fase 1). Tak ada gap kode:
+  1. **Koneksi Pixhawk** — `connect_pixhawk()` di `rov_agent.py` sudah
+     menyambung ke `PIXHAWK_PORT`/`PIXHAWK_BAUD` (env, default
+     `/dev/ttyACM0`/115200) langsung ke serial nyata, bukan SITL. Dikonfirmasi
+     hidup di hardware: `[MAV] Heartbeat received!` di journal Pi (lihat
+     restart 2026-08-25 02:53).
+  2. **Arah tiap thruster** — panel "Motor Test" di halaman Setup GUI
+     (`public/js/pages/setup.js`, meniru Motor Test QGroundControl) sudah ada,
+     siap dipakai uji satu-satu.
+  3. **Gripper PWM** — `gripper_controller.py` (`GRIPPER_PWM_OPEN=1580`/
+     `CLOSE=1350`) dipakai langsung oleh `rov_agent.py` lewat `GripperController`,
+     satu sumber kebenaran, tak ada mismatch.
+  4. **Sensor depth** — `rov_agent.py` membaca `AHRS2.altitude` (bukan
+     `SCALED_PRESSURE2` seperti disebut `VERIFIKASI_ARDUSUB.md` item 6, yang
+     menggambarkan jalur `autonomy/rov_link.py`). Pendekatan berbeda,
+     sama-sama sudah lengkap & sedang berjalan di Pi — item 6 dokumen itu
+     perlu dibaca sebagai deskripsi jalur SITL, bukan Pi produksi.
+  5. **Dual-cam** — `public/js/pages/camera.js` sudah render CAM1=BOTTOM +
+     CAM2=WALL sekaligus dengan PiP.
+
+  Yang menahan Fase 2 murni fisik: Pixhawk & ROV harus di darat/ember untuk
+  menjalankan checklist `VERIFIKASI_ARDUSUB.md` #1-7 manual (arah axis, servo
+  gripper/lampu, mode ALT_HOLD, sumber depth, arming/failsafe). Tak ada yang
+  bisa diverifikasi lebih lanjut dari kode.
 
 ---
 
@@ -146,11 +173,36 @@ refraksi mengubah focal length efektif, jadi kalibrasi udara cuma pendekatan.
       pastikan dead-reckon hold + sapu terarah (lihat commit hardening
       `M5_DOCK`/`M5_ENGAGE`) benar-benar pulih di air, bukan cuma di sim.
 - [ ] Ulangi docking closed-loop berturut-turut ≥5× dari kondisi start berbeda.
+- [ ] Validasi **tanda & stabilitas yaw squaring** (`SERVO_KP_YAW`, default 0 —
+      NONAKTIF) — pakai `python -m autonomy.tests.pool_yaw_validation` (item
+      M7, `VERIFIKASI_ARDUSUB.md`). Skrip PASIF, tak kirim command; operator
+      putar ROV manual, script cuma log `yaw_deg`. JANGAN naikkan
+      `SERVO_KP_YAW` dari 0 sebelum ini lolos.
+- [ ] Kalibrasi **pencarian lateral M5_SEARCH** (`SEARCH_SPEED` → m/s, deviasi
+      kompas, lebar kolam vs jarak back-off) — item M9, `VERIFIKASI_ARDUSUB.md`.
+- [ ] Tune **peredam approach servo** (`servo_smooth`: deadband/slew/`kd`/
+      approach-floor di `control/visual_servo.py`) — nilai saat ini tebakan
+      awal, bukan hasil ukur di air.
 
 **DoD Fase 3:** docking QR closed-loop berhasil ambil & lepas payload dari hook
 berulang (≥5 dari percobaan), radius align konsisten kecil, tak ada tabrakan.
 
 **Catatan:**
+- **2026-08-25 — BELUM MULAI secara fisik, tooling sisi software sudah siap.**
+  Semua item Fase 3 butuh air sungguhan (refraksi mengubah focal length efektif
+  — kalibrasi udara Fase 0/2 cuma pendekatan) sehingga tak satu pun bisa
+  dicentang dari kode. Yang SUDAH disiapkan supaya uji kolam tinggal jalan,
+  tanpa menulis skrip baru di tempat:
+  - **Yaw squaring** — `tests/pool_yaw_validation.py` siap pakai (dibuat &
+    diuji-self-check sesi ini). Murni pasif: decode QR + log `yaw_deg` ke CSV,
+    tak pernah menyentuh thruster — aman dijalankan kapan pun kamera QR aktif.
+  - **M5_SEARCH & peredam servo** — semua konstanta tuning (M9, `servo_smooth`)
+    sudah dipetakan ke `config/loader.py`, jadi hasil ukur kolam tinggal ditulis
+    ke `config/*.yaml` tanpa edit Python.
+  - **Kalibrasi kamera dalam air** — `tools/calibrate_camera.py` sudah ada dari
+    sesi sebelumnya (dipakai bikin `dwe_v3.npz`, RMS 0.87px, 24 Agu).
+
+  Tak ada gap alat. Titik mulai Fase 3 murni menunggu akses kolam.
 
 ---
 
