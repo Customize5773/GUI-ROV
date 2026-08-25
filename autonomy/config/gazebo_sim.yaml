@@ -1,0 +1,21 @@
+# config/gazebo_sim.yaml — HANYA utk uji closed-loop lawan Gazebo (ros2_ws),
+# JANGAN dipakai di kolam/hardware asli.
+#
+# Kamera Gazebo (`camera_bottom_link`, fx=381.4 @ 640x480) punya
+# FOV jauh lebih lebar drpd kamera DWE ExploreHD asli (fx≈914-950 setelah
+# scaling ke 1280x720, lihat rov_mission5_bridge.py 22 Agu). `bottom_clearance
+# =0.25` di pool_trial.yaml dkk BENAR utk kamera asli (hasil trial kolam
+# nyata) tapi bikin QR terlalu kecil (~30x15px dari 640x480, terverifikasi
+# 26 Agu lewat cv2.imwrite frame langsung) di kamera sim yg FOV-nya lebih
+# lebar -- pyzbar tak bisa resolve modul QR sekecil itu.
+#
+# target_bottom di sini (0.78m, lantai kolam sim @ z=-0.90 -> clearance
+# ~0.12m) HANYA utk mengkompensasi FOV kamera sim, BUKAN nilai fisik ROV yg
+# berubah. Jangan salin nilai ini ke pool_trial.yaml/rov_tuned.yaml.
+#
+# Pakai (file belakangan menang, override rov_tuned.yaml):
+#   python fsm/mission5.py --config config/rov_tuned.yaml --config config/gazebo_sim.yaml \
+#       --vision rtsp --bottom-url http://127.0.0.1:8090/cam_bottom --wall-url http://127.0.0.1:8090/cam_front
+
+depth:
+  target_bottom: 0.78
