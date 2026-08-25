@@ -64,26 +64,39 @@ def print_hist(title, unit, counts, bin_size):
 
 total_frames = 0
 total_detected = 0
+total_hint = 0
 dist_counts = defaultdict(int)
 area_counts = defaultdict(int)
+hint_dist_counts = defaultdict(int)   # M9c: jarak quad TERLIHAT tapi decode GAGAL
+hint_area_counts = defaultdict(int)
 
 for path in args.csv_files:
     rows = load_rows(path)
     frames = len(rows)
     detected = sum(1 for r in rows if r.get("detected") in ("1", "True", "true"))
+    hint = sum(1 for r in rows if r.get("hint_detected") in ("1", "True", "true"))
     total_frames += frames
     total_detected += detected
+    total_hint += hint
     print(f"[{path}] {detected}/{frames} frame terdeteksi "
-          f"({100.0 * detected / frames if frames else 0:.1f}%)")
+          f"({100.0 * detected / frames if frames else 0:.1f}%), "
+          f"+{hint} frame hint-tanpa-decode ({100.0 * hint / frames if frames else 0:.1f}%)")
     for r in rows:
-        if r.get("detected") not in ("1", "True", "true"):
+        is_hint = r.get("hint_detected") in ("1", "True", "true")
+        if r.get("detected") not in ("1", "True", "true") and not is_hint:
             continue
         d = to_float(r.get("dist"))
         a = to_float(r.get("area"))
-        if d is not None:
-            dist_counts[bucket(d, args.bin_size)] += 1
-        elif a is not None:
-            area_counts[bucket(a, args.area_bin_size)] += 1
+        if is_hint:
+            if d is not None:
+                hint_dist_counts[bucket(d, args.bin_size)] += 1
+            elif a is not None:
+                hint_area_counts[bucket(a, args.area_bin_size)] += 1
+        else:
+            if d is not None:
+                dist_counts[bucket(d, args.bin_size)] += 1
+            elif a is not None:
+                area_counts[bucket(a, args.area_bin_size)] += 1
 
 if not args.csv_files:
     sys.exit("Tak ada file CSV diberikan")
@@ -97,6 +110,19 @@ if dist_counts:
 if area_counts:
     print_hist("Distribusi AREA (px^2) pada frame yang BERHASIL terdeteksi (IBVS, tanpa kalibrasi)",
                "px^2", area_counts, args.area_bin_size)
+if hint_dist_counts:
+    print_hist("M9c — Distribusi JARAK (m) pada frame HINT (quad terlihat, decode GAGAL)",
+               "m", hint_dist_counts, args.bin_size)
+if hint_area_counts:
+    print_hist("M9c — Distribusi AREA (px^2) pada frame HINT (quad terlihat, decode GAGAL)",
+               "px^2", hint_area_counts, args.area_bin_size)
+if dist_counts and hint_dist_counts:
+    decode_max = max(dist_counts)
+    hint_max = max(hint_dist_counts)
+    print(f"\nM9c ringkas: decode berhasil sampai ~{decode_max:.2f} m; quad masih "
+          f"terlihat (belum tentu decode) sampai ~{hint_max:.2f} m. Selisih "
+          f"~{hint_max - decode_max:.2f} m adalah jarak tambahan yang bisa dipakai "
+          f"SEARCH_BACKOFF_T untuk 'melihat lebih lebar sebelum mendekat merayap'.")
 if not dist_counts and not area_counts:
     print("\n(tak ada frame terdeteksi dgn dist/area di CSV manapun)")
 

@@ -106,16 +106,17 @@ GUI menampilkan gerak 3D sinkron, handoff manual/autonomous & STOP terverifikasi
 
 Tujuan: pastikan tiap axis & aktuator fisik benar SEBELUM ROV masuk air.
 
-- [ ] Pixhawk/ArduSub asli menyala, `rov_link.py` tersambung (ganti target
-      SITL → hardware nyata), heartbeat masuk di GUI.
-- [ ] Verifikasi arah **tiap dari 8 (atau sesuai desain) thruster** — surge/
-      sway/vert/yaw masing-masing gerak sesuai command, bukan terbalik.
-- [ ] Channel servo **gripper** — `gripper=1` (tutup) & `gripper=0` (buka)
-      terverifikasi fisik, tanpa macet/nyangkut.
-- [ ] Sensor depth (pressure) terbaca akurat vs referensi (mis. penggaris di
-      ember/kolam dangkal).
-- [ ] Feed kamera BOTTOM & WALL tampil bersamaan di GUI (`§4.7.3`).
-- [ ] Ulangi checklist `VERIFIKASI_ARDUSUB.md` poin per poin.
+- [x] Pixhawk/ArduSub asli menyala, `rov_agent.py` tersambung, heartbeat masuk
+      di GUI. **LULUS 2026-08-25** (di kolam, bukan darat/ember — lihat Catatan).
+- [x] Verifikasi arah surge/sway/vert/yaw — masing-masing gerak sesuai command,
+      bukan terbalik. **LULUS 2026-08-25.**
+- [x] Channel servo **gripper** — `gripper=1` (tutup) & `gripper=0` (buka)
+      terverifikasi fisik, tanpa macet/nyangkut. **LULUS 2026-08-25.**
+- [x] Sensor depth (pressure) terbaca akurat vs referensi. **LULUS 2026-08-25.**
+- [ ] Feed kamera BOTTOM & WALL tampil bersamaan di GUI (`§4.7.3`) — belum
+      dikonfirmasi sesi ini.
+- [x] Ulangi checklist `VERIFIKASI_ARDUSUB.md` poin per poin — **#1,2,3,5,6,7
+      LULUS; #4 (lampu) DILEWATI, belum diimplementasikan.**
 
 **DoD Fase 2:** semua thruster arah benar, gripper open/close andal, depth
 akurat, dual-cam tampil, tombol STOP menetralkan SEMUA aktuator instan.
@@ -148,6 +149,20 @@ akurat, dual-cam tampil, tombol STOP menetralkan SEMUA aktuator instan.
   menjalankan checklist `VERIFIKASI_ARDUSUB.md` #1-7 manual (arah axis, servo
   gripper/lampu, mode ALT_HOLD, sumber depth, arming/failsafe). Tak ada yang
   bisa diverifikasi lebih lanjut dari kode.
+
+- **2026-08-25 (lanjutan) — checklist fisik #1,2,3,5,6,7 LULUS, langsung di
+  kolam** (bukan darat/ember dulu seperti rencana semula — operator langsung
+  uji di venue sesungguhnya). Dipantau live lewat journal `rov-agent.service`
+  selama sesi: `[MAV] ARM`/`DISARM` berulang kali diterima Pixhawk dengan
+  `result=0` konsisten, tak ada crash/hang/drop_link. Arah surge/sway/yaw,
+  arah vertikal, gripper, mode ALT_HOLD, dan akurasi depth dikonfirmasi
+  operator langsung dari pengamatan fisik ROV. #4 (servo lampu) DILEWATI —
+  belum terhubung hardware, lihat `VERIFIKASI_ARDUSUB.md`. Item dual-cam
+  belum sempat dikonfirmasi eksplisit sesi ini.
+
+  **DoD Fase 2 hampir tercapai** — tinggal konfirmasi dual-cam tampil
+  bersamaan dan uji STOP menetralkan SEMUA aktuator (arm/disarm sudah
+  terverifikasi, tapi STOP spesifik saat thruster aktif belum eksplisit diuji).
 
 ---
 

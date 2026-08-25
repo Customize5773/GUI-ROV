@@ -48,3 +48,19 @@ speed:
 
 hook_docking:
   approach_speed: 14   # default 20
+
+# ── M5_SEARCH — pagar span DIPERKETAT, kolam sempit (2,2 m) ──────────────────
+# Kalibrasi nyata di kolam ini (2026-08-25): surge ~20% (rata² x=196/1000) selama
+# 19,86 dtk menempuh 4,4 m ujung-ke-ujung → v ≈ 0,222 m/s. Nyaris PERSIS asumsi
+# desain (0,2 m/s), jadi SEARCH_SPEED default TAK diubah — tapi lebar kolam 2,2 m
+# jauh lebih sempit dari asumsi "kolam kecil ~3 m" di komentar mission5.py.
+# Default SEARCH_SPAN_MAX_T=12s pada 0,222 m/s = ~2,66 m — MELEBIHI lebar kolam
+# ini, risiko menabrak dinding kalau ladder menyisir sisi 2,2 m. Diperketat
+# supaya ekskursi satu arah ≤ ~1 m (separuh lebar kolam, sisakan margin dari MARK
+# yang belum tentu persis di tengah dinding).
+search:
+  backoff_t: 3.0     # default 6.0 — mundur ~0.67 m, bukan 1.33 m
+  leg_t0: 2.0         # default 3.0
+  leg_t_max: 4.5      # default 10.0 — batasi 1 leg ≤ pagar span
+  span_max_t: 4.5      # default 12.0 — ekskursi 1 arah ≈ 1.0 m
+  creep_max_t: 6.0      # default 8.0 — sedikit diperketat, konsisten

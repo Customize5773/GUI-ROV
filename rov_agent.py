@@ -1855,9 +1855,12 @@ def main():
         # untuk CSV tuning depth-hold di halaman Telemetry.
         # --------------------------------
         elif mtype == "SERVO_OUTPUT_RAW":
+            t1 = int(msg.servo1_raw or 0)
+            t2 = int(msg.servo2_raw or 0)
             t3 = int(msg.servo3_raw or 0)
             t4 = int(msg.servo4_raw or 0)
             t5 = int(msg.servo5_raw or 0)
+            t6 = int(msg.servo6_raw or 0)
 
             state["thruster_vertical_pwm"] = int(
                 (t3 + t4 + t5) / 3
@@ -1865,11 +1868,12 @@ def main():
 
             print(f"[PWM VERTICAL] T3={t3} T4={t4} T5={t5}")
 
-            state["thruster_lateral_pwm"] = int(msg.servo6_raw or 0)
-            state["thruster_surge_pwm"] = [
-                int(msg.servo1_raw or 0),
-                int(msg.servo2_raw or 0),
-            ]
+            state["thruster_lateral_pwm"] = t6
+            state["thruster_surge_pwm"] = [t1, t2]
+            # PWM individual T1..T6 utk panel per-thruster di halaman
+            # Telemetry — ROV ini tak punya sensor arus, jadi ini pengganti
+            # jujur (bukan Ampere palsu). Urutan array HARUS T1,T2,T3,T4,T5,T6.
+            state["thrusters_pwm"] = [t1, t2, t3, t4, t5, t6]
         # --------------------------------
         # PID_TUNING: P/I/D per axis untuk CSV tuning + diagnosa offline.
         # Diam per axis kalau bit-nya di GCS_PID_MASK belum menyala di FC —
