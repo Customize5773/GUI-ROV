@@ -69,6 +69,13 @@ python3 autonomy/fsm/mission5.py --vision mock --config autonomy/config/rov_tune
 
 ## Batasan yang perlu diketahui
 
+- **Timeout FSM (`TIMEOUT_DIVE` dkk) berbasis wall-clock, sim tidak selalu
+  real-time**: di mesin yg lagi terbebani (banyak aplikasi lain jalan),
+  `ign gazebo` bisa butuh beberapa detik ekstra utk mencapai steady-state
+  fisika tepat setelah launch — DIVE bisa timeout palsu pada percobaan
+  pertama padahal berhasil mulus begitu diulang tanpa perubahan apa pun
+  (diamati 25 Agu: 1 dari 3 percobaan). Kalau timeout terjadi tepat di
+  percobaan PERTAMA setelah launch, coba ulang sebelum menyimpulkan ada bug.
 - **Cek proses ganda sebelum menyalahkan bug**: kalau `kill`/`Ctrl+C` pada
   `ros2 launch` sebelumnya tidak bersih (mis. `pkill` yg pola-nya cuma cocok
   parent process), child node (`gui_bridge` dkk) bisa jadi orphan dan TERUS

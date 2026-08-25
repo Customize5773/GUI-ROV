@@ -16,7 +16,7 @@ START_STATE="${1:-DIVE}"
 shift || true
 
 echo "[1/4] Membersihkan sisa proses sim lama (kalau ada)..."
-pkill -9 -f "hydroships|ign gazebo" 2>/dev/null || true
+(ps aux | grep -E "hydroships|ign gazebo" | grep -v grep | awk '{print $2}' | xargs -r kill -9) || true
 sleep 2
 
 echo "[2/4] Meluncurkan sim headless (ros2_ws @ $ROS2_WS)..."
