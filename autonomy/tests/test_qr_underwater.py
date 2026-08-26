@@ -335,6 +335,7 @@ def test_decode_with_stage_reports_winning_stage(monkeypatch):
             return []
         return [_Sym(PAYLOAD.encode(), [(200, 200), (240, 200), (240, 240), (200, 240)])]
 
+    monkeypatch.setattr(qd, '_quiet_zone_ok', lambda *a, **kw: True)
     monkeypatch.setattr(qd.pyzbar, 'decode', fake_decode)
     sentinel = qd.pyzbar.decode
     frame = np.full((480, 640, 3), 128, np.uint8)
@@ -364,6 +365,7 @@ def test_decode_with_stage_ok_false_on_payload_mismatch(monkeypatch):
             self.data = data
             self.polygon = [_Pt(x, y) for x, y in poly]
 
+    monkeypatch.setattr(qd, '_quiet_zone_ok', lambda *a, **kw: True)
     monkeypatch.setattr(qd.pyzbar, 'decode', lambda img, *a, **kw: [
         _Sym(b'{"mission":5,"team":"HYDROSHIP","type":"payload","id":"B"}',
              [(10, 10), (20, 10), (20, 20), (10, 20)])])
