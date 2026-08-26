@@ -171,6 +171,40 @@ def test_decode_qr_no_qr_returns_empty():
     assert decode_qr(blank) == []
 
 
+# ── Jenjang-6: zxing-cpp (toleransi tilt/perspective yg pyzbar+cv2 tak punya) ──
+# Divalidasi manual sebelum ditambahkan: pipeline pyzbar/CLAHE/upscale/cv2 (jenjang
+# 1-5) SUDAH gagal total pada tilt 20°, sedangkan zxing-cpp bertahan sampai ~45°.
+# ROV jarang persis tegak lurus ke payload sebelum visual servo align penuh, jadi
+# ini kelas kegagalan nyata, bukan kasus buatan.
+def _warp_tilt(cv2, np, img, angle_deg, cx, cy, w, h):
+    """Simulasikan lihat QR dari sudut (tilt sekitar sumbu vertikal) via homografi."""
+    ang = np.radians(angle_deg)
+    shrink = np.sin(ang) * w * 0.5
+    src = np.float32([[cx - w / 2, cy - h / 2], [cx + w / 2, cy - h / 2],
+                      [cx + w / 2, cy + h / 2], [cx - w / 2, cy + h / 2]])
+    dst = np.float32([[cx - w / 2 + shrink, cy - h / 2], [cx + w / 2 - shrink, cy - h / 2],
+                      [cx + w / 2, cy + h / 2], [cx - w / 2, cy + h / 2]])
+    M = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(img, M, (img.shape[1], img.shape[0]), borderValue=(128, 128, 128))
+
+
+def test_decode_qr_zxing_rescues_tilted_qr_pyzbar_cv2_miss():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    segno = pytest.importorskip("segno")
+    pytest.importorskip("zxingcpp")
+    import vision.qr_detect as qd
+    if not qd.ZXING_OK:
+        pytest.skip("zxingcpp terpasang tapi gagal diimpor di qr_detect (lihat log)")
+    text = '{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}'
+    qr = _render_qr_bgr(cv2, np, segno, text, module_px=6)
+    frame, (x0, y0, w, h) = _place_on_canvas(cv2, np, qr, canvas_wh=(640, 480))
+    tilted = _warp_tilt(cv2, np, frame, 30.0, x0 + w / 2, y0 + h / 2, w, h)
+
+    res = qd.decode_qr(tilted, enhance=True)
+    assert res and res[0]['data'] == text, "jenjang zxing seharusnya membaca QR tilt 30°"
+
+
 # ── Gate quiet-zone (port dari ros2_ws qr_logic.py) ────────────────────────────
 def test_quiet_zone_ok_accepts_real_qr_border():
     cv2 = pytest.importorskip("cv2")
@@ -215,7 +249,7 @@ def test_decode_qr_rejects_fake_corner_without_quiet_zone(monkeypatch):
     assert qd.decode_qr(frame, enhance=True) == []
 
 
-# ── Jenjang-5: median-stack antar-frame (lawan riak/kaustik transien) ──────────
+# ── Jenjang-7: median-stack antar-frame (lawan riak/kaustik transien) ──────────
 def test_decode_stacked_needs_full_buffer_then_decodes():
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
@@ -226,7 +260,7 @@ def test_decode_stacked_needs_full_buffer_then_decodes():
     frame, _ = _place_on_canvas(cv2, np, qr)
 
     vp = VisionPipeline()
-    # buffer belum penuh (STACK_N=3) -> jenjang-5 harus diam, bukan decode dini
+    # buffer belum penuh (STACK_N=3) -> jenjang-7 harus diam, bukan decode dini
     for _ in range(STACK_N - 1):
         assert vp._decode_stacked(frame) == []
     # frame ke-STACK_N melengkapi buffer -> median dari QR identik tetap terbaca
@@ -248,3 +282,78 @@ def test_decode_qr_enhance_false_is_raw_only():
     if decode_qr(frame, enhance=False):
         pytest.skip("pyzbar mentah kebetulan berhasil di env ini — A/B tak diskriminatif")
     assert decode_qr(frame, enhance=True), "preprocessing seharusnya memulihkan deteksi"
+
+
+# ── Undistort sebelum decode (27 Agu) ──────────────────────────────────────────
+# K/dist kalibrasi sebelumnya HANYA dipakai _estimate_pose_pts() SESUDAH decode
+# sukses -- tak pernah membenahi frame SEBELUM decode dicoba. Dua hal diuji: (1)
+# mekanisme _undistort() sendiri (no-op tanpa kalibrasi, cache per-resolusi,
+# benar2 mengubah piksel), (2) titik kritis dari perubahan ini -- setelah frame
+# di-undistort, _estimate_pose_pts() WAJIB dipanggil dgn dist=0 (bukan dist asli)
+# supaya distorsi tak dikoreksi dua kali (kelas bug sama dgn insiden kalibrasi
+# 22 Agu skala kalibrasi, lihat _verify_calib_size()).
+def test_undistort_is_noop_without_calibration():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import VisionPipeline
+    vp = VisionPipeline()
+    frame = np.random.default_rng(0).integers(0, 255, (480, 640, 3), dtype=np.uint8)
+    out = vp._undistort(frame, None, None, {})
+    assert out is frame, "tanpa K/dist, _undistort harus no-op (bukan copy/proses)"
+
+
+def test_undistort_changes_pixels_and_caches_map_per_resolution():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import VisionPipeline
+    vp = VisionPipeline()
+    K = np.array([[788.0, 0, 592.0], [0, 784.0, 218.0], [0, 0, 1]], dtype=np.float64)
+    dist = np.array([-0.365, 0.251, 0.004, -0.007, -0.104])
+    frame = np.random.default_rng(0).integers(0, 255, (720, 1280, 3), dtype=np.uint8)
+    cache = {}
+
+    out = vp._undistort(frame, K, dist, cache)
+    assert not np.array_equal(out, frame), "kalibrasi ada -> piksel harus benar2 berubah"
+    assert list(cache.keys()) == [(1280, 720)]
+
+    out2 = vp._undistort(frame, K, dist, cache)
+    assert np.array_equal(out, out2), "hasil harus deterministik/konsisten"
+    assert len(cache) == 1, "resolusi sama -> peta remap dipakai ulang, bukan dihitung lagi"
+
+
+def test_estimate_pose_after_undistort_requires_zero_dist():
+    """Properti paling kritis dari perubahan ini: undistort-frame + dist=0 di
+    _estimate_pose_pts() harus memulihkan pose SEBENARNYA, sedangkan memakai
+    dist ASLI lagi (bug double-correction) harus menyimpang jelas -- membuktikan
+    testnya memang menangkap kelas bug itu, bukan sekadar lolos kebetulan."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import VisionPipeline
+
+    K = np.array([[788.0, 0, 592.0], [0, 784.0, 218.0], [0, 0, 1]], dtype=np.float64)
+    dist = np.array([-0.365, 0.251, 0.004, -0.007, -0.104])   # k1 kuat, spt dwe_v3.npz nyata
+    L = 0.04   # sisi QR 4x4 cm (KKI 2026)
+    objp = np.array([[-L / 2, L / 2, 0], [L / 2, L / 2, 0],
+                     [L / 2, -L / 2, 0], [-L / 2, -L / 2, 0]], dtype=np.float32)
+    # Pose GT sengaja OFF-CENTER (distorsi paling kuat jauh dari pusat optik --
+    # persis skenario yg dimotivasi perubahan ini).
+    rvec_gt = np.array([0.05, -0.1, 0.02])
+    tvec_gt = np.array([0.18, 0.14, 0.30])
+
+    # Titik yg akan terlihat kamera NYATA (dgn distorsi lensa asli) di frame mentah.
+    distorted_pts, _ = cv2.projectPoints(objp, rvec_gt, tvec_gt, K, dist)
+    distorted_pts = distorted_pts.reshape(-1, 2).astype(np.float32)
+    # Simulasi apa yg decode_qr() temukan pada FRAME yg SUDAH di-undistort (setara
+    # cv2.remap+deteksi -- cv2.undistortPoints menghitung pemetaan yg sama di ruang titik).
+    corrected_pts = cv2.undistortPoints(
+        distorted_pts.reshape(-1, 1, 2), K, dist, P=K).reshape(-1, 2)
+
+    vp = VisionPipeline()
+    correct = vp._estimate_pose_pts(corrected_pts, L, K=K, dist=np.zeros_like(dist))
+    buggy = vp._estimate_pose_pts(corrected_pts, L, K=K, dist=dist)   # double-correction
+
+    assert correct is not None and buggy is not None
+    assert abs(correct['z'] - tvec_gt[2]) < 0.01, \
+        f"dist=0 pasca-undistort harus pulihkan z sebenarnya ({tvec_gt[2]}), dapat {correct['z']}"
+    assert abs(buggy['z'] - tvec_gt[2]) > 0.05, \
+        "dist asli dipakai lagi pasca-undistort (bug) seharusnya menyimpang jelas dari z sebenarnya"

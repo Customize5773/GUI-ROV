@@ -26,6 +26,8 @@ autonomy/Cleaned
 autonomy/calib_imgs_trial2
 autonomy/calib_imgs_trial2_dense
 autonomy/calib_imgs_v3
+autonomy/calib_imgs_bottom_v1
+autonomy/calib_imgs_wall_v1
 # ZIP dinamai dari --outdir (mis. dataset/ -> dataset.zip)
 autonomy/dataset.zip
 dataset.zip
@@ -125,3 +127,5 @@ log-ROV/ROV002.log
 autonomy/m9c_test.csv
 autonomy/m9c_test2.csv
 autonomy/m9c_test33.csv
+autonomy/vision/Calibrasibaru
+

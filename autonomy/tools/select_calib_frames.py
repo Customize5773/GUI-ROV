@@ -24,6 +24,12 @@ PEMAKAIAN
   # lanjut ke kalibrasi sungguhan (tool yang sudah ada, tak diubah):
   python tools/calibrate_camera.py --from-folder calib_imgs_v3 \
          --cols 10 --rows 7 --square 25 --out vision/calibration/dwe_v3.npz
+
+  # Sumber frame beda resolusi dari stream live (mis. hasil ekstraksi video
+  # 1280x736, stream live 1280x720) -- --target-height crop SEBELUM deteksi
+  # & simpan, supaya .npz keluaran cocok dgn qr_detect._verify_calib_size():
+  python tools/select_calib_frames.py --src "Calibrasibaru/Siang1 (bwh)" \
+         --out calib_imgs_bottom --cols 10 --rows 7 --n 160 --target-height 720
 """
 import argparse
 import glob
@@ -41,6 +47,11 @@ ap.add_argument("--rows", type=int, default=6, help="jumlah SUDUT-DALAM per kolo
 ap.add_argument("--n", type=int, default=60, help="target jumlah frame terpilih")
 ap.add_argument("--move", type=float, default=40.0,
                 help="jarak minimum (px) centroid papan dari semua frame terpilih sebelumnya")
+ap.add_argument("--target-height", type=int, default=None,
+                help="center-crop tinggi frame ke nilai ini SEBELUM deteksi papan & simpan "
+                     "(mis. 720) -- pakai kalau sumber frame beda resolusi dari stream live "
+                     "kamera (deteksi lensa/kalibrasi via qr_detect._verify_calib_size akan "
+                     "menolak kalibrasi yg resolusinya tak cocok). Frame yg sudah pas dilewati.")
 args = ap.parse_args()
 
 PAT = (args.cols, args.rows)
@@ -54,6 +65,15 @@ def find_board(gray):
     if not ok:
         return None
     return cv2.cornerSubPix(gray, corners, (11, 11), (-1, -1), CRIT)
+
+
+def crop_to_height(img, target_h):
+    """Center-crop tinggi frame ke target_h (no-op kalau sudah pas/lebih pendek)."""
+    h = img.shape[0]
+    if target_h is None or h <= target_h:
+        return img
+    top = (h - target_h) // 2
+    return img[top:top + target_h]
 
 
 def sharpness(gray, corners):
@@ -86,6 +106,7 @@ def main():
         img = cv2.imread(f)
         if img is None:
             continue
+        img = crop_to_height(img, args.target_height)
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
         corners = find_board(gray)
         if corners is None:
@@ -116,7 +137,10 @@ def main():
     for i, (f, _centroid, _score) in enumerate(selected):
         ext = os.path.splitext(f)[1]
         dst = os.path.join(args.out, f"sel_{i:03d}{ext}")
-        shutil.copy(f, dst)
+        if args.target_height is not None:
+            cv2.imwrite(dst, crop_to_height(cv2.imread(f), args.target_height))
+        else:
+            shutil.copy(f, dst)
     print(f"[OK] {len(selected)} frame disalin ke {args.out}/")
     print(f"  Lanjut: python tools/calibrate_camera.py --from-folder {args.out} "
           f"--cols {args.cols} --rows {args.rows} --square <mm> --out vision/calibration/<nama>.npz")

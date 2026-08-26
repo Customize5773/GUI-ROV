@@ -3,6 +3,8 @@ numpy>=1.24
 # Visi (closed-loop ArUco/QR):
 opencv-contrib-python>=4.8   # cv2.aruco ada di contrib
 pyzbar>=0.1.9                # QR — butuh libzbar0 di Linux
+zxingcpp>=3.0                # QR jenjang ke-6 (decode_qr) — jauh lebih toleran thd tilt/perspective
+                              # drpd pyzbar/cv2 (divalidasi: bertahan sampai ~45° tilt vs ~15-20°)
 segno>=1.5                   # render QR sintetis utk tes & generator dataset bawah air
 
 # Tes-nilai-evaluasi (autonomy/tests/) — cukup numpy di atas; cv2/pyzbar opsional:

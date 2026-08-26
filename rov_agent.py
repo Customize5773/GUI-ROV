@@ -1410,10 +1410,20 @@ def _fsm_read_state():
     return dict(state)
 
 
-# Kalibrasi default misi 5. HARUS cocok resolusi stream kamera (1280x720).
-# Override per-kamera lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke string
-# kosong untuk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
-M5_CALIB_DEFAULT = "vision/calibration/dwe_v3.npz"
+# Kalibrasi default misi 5, TERPISAH per kamera (bottom=QR, wall=hook) — dua
+# lensa fisik beda, satu kalibrasi bersama utk keduanya (dwe_v3, dipakai s.d.
+# 27 Agu) selalu sedikit salah utk kamera yang bukan sumbernya. Kedua file di
+# bawah dikalibrasi dari dataset "Calibrasibaru/" (27 Agu, 4 kondisi cahaya
+# Pagi/Siang/Sore/Malam, ~10.900 frame checkerboard 10x7 SUNGGUHAN DI DALAM
+# AIR, per-kamera): bottom.npz RMS 0.94px/52 pose, wall.npz RMS 0.97px/52 pose
+# (tools/calibrate_camera.py --trim-rounds 5), jauh lebih baik drpd dwe_v3
+# (RMS 0.87px tapi cuma dari kamera bottom, dipakai sbg fallback wall juga)
+# atau dwe_trial2 (RMS 2.36px) sebelumnya. HARUS cocok resolusi stream kamera
+# (1280x720). Override lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke
+# string kosong utk mematikan PBVS sama sekali (IBVS murni, tak butuh
+# kalibrasi).
+M5_CALIB_BOTTOM_DEFAULT = "vision/calibration/bottom.npz"
+M5_CALIB_WALL_DEFAULT = "vision/calibration/wall.npz"
 
 # Config geometri arena, dipisah koma. Default menunjuk config lomba, BUKAN
 # kosong: default kosong berarti konstanta modul fsm/mission5.py, yang HANYA
@@ -1444,8 +1454,8 @@ def setup_mission5_runner():
         "vision_source": os.environ.get("M5_VISION_SOURCE", "usb"),
         "bottom_url": os.environ.get("M5_BOTTOM_URL", "http://127.0.0.1:8081/stream"),
         "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8080/stream"),
-        "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_DEFAULT),
-        "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_DEFAULT),
+        "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_BOTTOM_DEFAULT),
+        "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_WALL_DEFAULT),
         "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
         # (lihat Mission5Runner._apply_configs). Arena lomba:

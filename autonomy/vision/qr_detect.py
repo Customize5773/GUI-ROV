@@ -94,6 +94,14 @@ except Exception as _e:
     PYZBAR_OK = False
     log.warning(f"[vision] pyzbar tidak tersedia ({_e}) — pakai fallback cv2.QRCodeDetector")
 
+try:
+    import zxingcpp
+    ZXING_OK = True
+except Exception as _e:
+    # Opsional (jenjang ke-6, lihat decode_qr()) — pyzbar/CLAHE/cv2 tetap jalan tanpanya.
+    ZXING_OK = False
+    log.warning(f"[vision] zxing-cpp tidak tersedia ({_e}) — jenjang skew-tolerant nonaktif")
+
 # Mapping QR → sisi kolam A/B/C/D dilakukan oleh wall_from_qr() di atas
 # (isi QR sesuai panduan KKI 2026 hal. 52; toleran terhadap prefiks/sufiks).
 
@@ -106,7 +114,7 @@ except Exception as _e:
 CLAHE_CLIP   = 2.0     # kekuatan penyetaraan kontras lokal (CLAHE) — lawan glare/cahaya tak rata
 CLAHE_TILE   = 8       # ukuran grid CLAHE (tile CLAHE_TILE×CLAHE_TILE)
 UPSCALE      = 2.0     # faktor perbesaran saat QR terlalu kecil utk pyzbar
-STACK_N      = 3       # jumlah frame utk median-stack jenjang-5 (lawan riak/kaustik transien)
+STACK_N      = 3       # jumlah frame utk median-stack jenjang-7 (lawan riak/kaustik transien)
 # Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
 # + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
 # global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
@@ -201,6 +209,8 @@ def decode_qr(frame, enhance=True):
          QR dari lantai berfaset/riak — beda mekanisme dari CLAHE saja).
       4. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
       5. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
+      6. zxing-cpp pada grayscale mentah (decoder terpisah, jauh lebih toleran thd
+         tilt/perspective — lihat komentar di titik pemanggilannya).
     enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B).
 
     Tiap jenjang di-gate `_quiet_zone_ok` — kandidat tanpa quiet zone putih (mis.
@@ -241,6 +251,30 @@ def decode_qr(frame, enhance=True):
                     return out
         except cv2.error:
             pass
+    # Jenjang 6: zxing-cpp — decoder terpisah (bukan pyzbar/zbar), jauh lebih toleran
+    # thd tilt/perspective. Divalidasi: pipeline di atas sudah gagal total pada QR
+    # sintetis yg di-tilt 20°, zxing-cpp masih berhasil sampai ~45°. ROV jarang persis
+    # tegak lurus ke payload sebelum visual servo align penuh — ini kelas kegagalan
+    # yg berbeda dari kontras/riak yg jenjang 1-5 targetkan. Lebih cepat dari jenjang
+    # lain juga (~7ms), jadi tak menambah beban berarti di jalur gagal.
+    if enhance and ZXING_OK:
+        try:
+            results = zxingcpp.read_barcodes(gray_raw)
+        except Exception:
+            results = []
+        out = []
+        for r in results:
+            if not r.text:
+                continue
+            pos = r.position
+            pts = np.array([[pos.top_left.x, pos.top_left.y],
+                            [pos.top_right.x, pos.top_right.y],
+                            [pos.bottom_right.x, pos.bottom_right.y],
+                            [pos.bottom_left.x, pos.bottom_left.y]], dtype=np.float32)
+            if _quiet_zone_ok(gray_raw, pts):
+                out.append({'data': r.text, 'pts': pts})
+        if out:
+            return out
     return []
 
 
@@ -335,7 +369,7 @@ class VisionPipeline:
         self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
         self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
         self._last_wall_hint: Optional[dict] = None   # tebakan CNN saat decode GAGAL (opt-in)
-        self._frame_buf = deque(maxlen=STACK_N)   # buffer utk jenjang-5 median-stack (lawan riak)
+        self._frame_buf = deque(maxlen=STACK_N)   # buffer utk jenjang-7 median-stack (lawan riak)
 
         # ── Dual-camera (BOTTOM utk QR, WALL utk hook) ─────────────────────────
         qr_src = qr_url if qr_url is not None else qr_device
@@ -412,6 +446,13 @@ class VisionPipeline:
                     log.info("[vision] Kalibrasi hook/WALL dimuat: %s", calib_file_hook)
                 except Exception as e:
                     log.warning("[vision] gagal muat kalibrasi hook %s: %s", calib_file_hook, e)
+
+        # Cache peta undistort per kamera, kunci (w,h) — dihitung sekali per resolusi
+        # yang benar2 muncul (lihat _undistort()), bukan di sini: pada saat ini
+        # resolusi frame LIVE belum pasti (RTSP/USB bisa beda dari cam_width/height).
+        self._undist_cache = {}
+        self._undist_cache_qr = {}
+        self._undist_cache_hook = {}
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -544,11 +585,12 @@ class VisionPipeline:
                 continue
 
             self._verify_calib_size(frame)
+            frame = self._undistort(frame, self._K, self._dist, self._undist_cache)
 
             # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
             dets = decode_qr(frame)
             if not dets:
-                dets = self._decode_stacked(frame)   # jenjang-5: median antar-frame
+                dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
             if not dets:
                 self._try_wall_fallback(frame)
             elif self._wall_voter is not None:
@@ -561,10 +603,13 @@ class VisionPipeline:
                 area = float(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32)))
                 frame = self._annotate(frame, data, center, pts.astype(int))
                 result = self._build_result(data, center, area, frame)
-                # PBVS: pose 3D QR via solvePnP (butuh kalibrasi + 4 sudut terurut)
+                # PBVS: pose 3D QR via solvePnP (butuh kalibrasi + 4 sudut terurut).
+                # dist=0 KARENA frame sudah di-undistort di atas (lihat _undistort()
+                # docstring) — pakai self._dist di sini akan koreksi distorsi 2x.
                 if self._K is not None and len(pts) >= 4:
                     ordered = self._order_corners(pts)
-                    result['pose'] = self._estimate_pose_pts(ordered, self.qr_length)
+                    result['pose'] = self._estimate_pose_pts(
+                        ordered, self.qr_length, K=self._K, dist=np.zeros_like(self._dist))
                 self._dispatch(result)
 
             # Deteksi hook (CAM WALL) — target geometrik non-QR utk HANG (misi 3b) & DOCK (misi 4).
@@ -613,9 +658,10 @@ class VisionPipeline:
                 time.sleep(0.5)
                 continue
 
+            frame = self._undistort(frame, K, dist, self._undist_cache_qr)
             dets = decode_qr(frame)
             if not dets:
-                dets = self._decode_stacked(frame)   # jenjang-5: median antar-frame
+                dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
             if not dets:
                 self._try_wall_fallback(frame)
             elif self._wall_voter is not None:
@@ -628,9 +674,11 @@ class VisionPipeline:
                 area = float(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32)))
                 frame = self._annotate(frame, data, center, pts.astype(int))
                 result = self._build_result(data, center, area, frame)
+                # dist=0: frame sudah di-undistort di atas (lihat _undistort() docstring).
                 if K is not None and len(pts) >= 4:
                     ordered = self._order_corners(pts)
-                    result['pose'] = self._estimate_pose_pts(ordered, self.qr_length, K=K, dist=dist)
+                    result['pose'] = self._estimate_pose_pts(
+                        ordered, self.qr_length, K=K, dist=np.zeros_like(dist))
                 self._dispatch(result)
 
             elapsed = time.time() - t_start
@@ -643,6 +691,7 @@ class VisionPipeline:
             return
         interval = 1.0 / self.fps
         K = self._K_hook if self._K_hook is not None else self._K
+        dist = self._dist_hook if self._K_hook is not None else self._dist
 
         while self._running:
             t_start = time.time()
@@ -652,6 +701,9 @@ class VisionPipeline:
                 time.sleep(0.5)
                 continue
 
+            # detect_hook() cuma pakai focal (skalar), tak ada solvePnP+dist di sini
+            # -- undistort aman tanpa risiko koreksi-2x, tepi pipa hook jadi lebih lurus.
+            frame = self._undistort(frame, K, dist, self._undist_cache_hook)
             focal = float(K[0, 0]) if K is not None else None
             hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
                                min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
@@ -693,7 +745,7 @@ class VisionPipeline:
         return r
 
     def _decode_stacked(self, frame):
-        """Jenjang-5: decode_qr() gagal di semua jenjangnya → coba median dari
+        """Jenjang-7: decode_qr() gagal di semua jenjangnya → coba median dari
         STACK_N frame terakhir. Riak berubah tiap frame, QR+ROV relatif diam
         saat SCAN_QR/hover, jadi median menekan distorsi transien yang jadi
         penyebab dominan gagal decode di air (lihat catatan lapangan riak)."""
@@ -801,6 +853,32 @@ class VisionPipeline:
                   self._calib_name, cw, ch, fw, fh)
         self._K = None
         self._dist = None
+
+    def _undistort(self, frame, K, dist, cache):
+        """Undistort SEBELUM deteksi — praktik standar CV, tak pernah dipakai di
+        pipeline ini sebelum 27 Agu 2026 (K/dist cuma dipakai `_estimate_pose_pts`
+        SESUDAH decode sukses, bukan utk membenahi frame sebelum decode dicoba).
+        k1 kalibrasi real (~-0.28..-0.36, lihat vision/calibration/*.npz) cukup
+        besar utk membengkokkan tepi lurus modul QR yang jauh dari pusat optik.
+
+        `cache` (dict milik CALLER, satu per kamera — _undist_cache/_qr/_hook):
+        peta remap dihitung sekali per resolusi (w,h) yang benar-benar muncul,
+        bukan di __init__ (resolusi live USB/RTSP bisa beda dari cam_width/height
+        yang diminta). K/dist None → no-op, kembalikan frame apa adanya.
+
+        PENTING: setelah undistort, titik hasil decode_qr() SUDAH di ruang
+        pinhole ideal (K, dist=0) — caller WAJIB pakai dist=0 (bukan `dist` asli
+        di sini) saat memanggil _estimate_pose_pts() pada frame ini, kalau tidak
+        distorsi dikoreksi DUA KALI dan pose jadi salah (kelas bug yang sama dgn
+        insiden kalibrasi 22 Agu di atas)."""
+        if K is None or dist is None or frame is None or not CV2_OK:
+            return frame
+        h, w = frame.shape[:2]
+        maps = cache.get((w, h))
+        if maps is None:
+            maps = cv2.initUndistortRectifyMap(K, dist, None, K, (w, h), cv2.CV_32FC1)
+            cache[(w, h)] = maps
+        return cv2.remap(frame, maps[0], maps[1], cv2.INTER_LINEAR)
 
     @staticmethod
     def _order_corners(pts):
