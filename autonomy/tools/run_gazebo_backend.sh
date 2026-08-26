@@ -29,6 +29,10 @@ POOL_CONFIG="${POOL_CONFIG:-config/pool_trial.yaml}"
 # py 4 hook 1/dinding), BUKAN kolam latihan fisik (cuma 1 hook, itu sebabnya
 # tak dimasukkan ke pool_trial.yaml sendiri). Kosongkan kalau tak perlu.
 GAZEBO_CONFIG="${GAZEBO_CONFIG:-config/gazebo_sim.yaml}"
+# HEADLESS: true (default) = gz-sim server saja, tanpa jendela GUI. Set false
+# utk lihat simulasi jalan (perlu DISPLAY/X server tersedia):
+#   HEADLESS=false autonomy/tools/run_gazebo_backend.sh DIVE
+HEADLESS="${HEADLESS:-true}"
 
 echo "[1/4] Membersihkan sisa proses sim lama (kalau ada)..."
 # ros_gz_bridge/parameter_bridge & robot_state_publisher TIDAK match pola
@@ -40,7 +44,7 @@ echo "[1/4] Membersihkan sisa proses sim lama (kalau ada)..."
 (ps aux | grep -E "hydroships|ign gazebo|ros_gz_bridge|parameter_bridge|robot_state_publisher" | grep -v grep | awk '{print $2}' | xargs -r kill -9) || true
 sleep 2
 
-echo "[2/4] Meluncurkan sim headless (ros2_ws @ $ROS2_WS)..."
+echo "[2/4] Meluncurkan sim (headless=$HEADLESS, ros2_ws @ $ROS2_WS)..."
 # PATH dibersihkan dari venv GUI-ROV -- lihat GAZEBO_BACKEND.md soal kenapa
 # (node ros2_ws dgn shebang `env python3` bisa nyasar ke python3 venv salah).
 CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "GUI-ROV/.venv" | paste -sd:)
@@ -51,7 +55,7 @@ CLEAN_PATH=$(echo "$PATH" | tr ':' '\n' | grep -v "GUI-ROV/.venv" | paste -sd:)
   source /opt/ros/humble/setup.bash
   source install/setup.bash
   set -u
-  exec ros2 launch hydroships_bringup hydroships_gui.launch.py headless:=true \
+  exec ros2 launch hydroships_bringup hydroships_gui.launch.py headless:="$HEADLESS" \
       gui_host:=127.0.0.1 cmd_port:=14550 telem_port:=14552 \
       rov_random_spawn:=false rov_x:=0.0 rov_y:=0.0 world:="$WORLD"
 ) > /tmp/gazebo_backend_sim.log 2>&1 < /dev/null &
