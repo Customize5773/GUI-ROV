@@ -85,14 +85,9 @@ export const vehiclePage = {
           </div>
           <div class="veh__plates">
             <figure class="veh__plate">
-              <img src="models/rov2d_1.jpeg" alt="Desain ROV — tampak 1" />
+              <img src="models/rov2d_3.jpeg" alt="Desain ROV — tampak 1" />
               <span class="veh__plate__label">PLAT 01 &middot; TAMPAK 1</span>
               <button class="chip chip--ghost veh__plate__zoom" data-plate-fs="0" title="Perbesar">⛶</button>
-            </figure>
-            <figure class="veh__plate">
-              <img src="models/rov2d_2.jpeg" alt="Desain ROV — tampak 2" />
-              <span class="veh__plate__label">PLAT 02 &middot; TAMPAK 2</span>
-              <button class="chip chip--ghost veh__plate__zoom" data-plate-fs="1" title="Perbesar">⛶</button>
             </figure>
           </div>
         </div>
