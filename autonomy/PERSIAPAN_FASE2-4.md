@@ -23,6 +23,15 @@ Detail cara cek + konstanta → `VERIFIKASI_ARDUSUB.md` tabel A (#1–7).
 - [ ] `rov_link.py` diarahkan ke hardware nyata (bukan SITL): sesuaikan `--mavlink`
       (mis. `/dev/ttyACM0`), jalankan; tunggu `[MAV] terhubung: system=…`.
 - [ ] GUI LIVE (`RPI_ADDR=<ip> npm start`) → telemetri masuk (heading/depth/attitude).
+- [ ] **Safety switch fisik di board Pixhawk** — LED merah berkedip = terkunci,
+      output motor diblokir walau MAVLink sudah melaporkan armed. Tekan SEKALI
+      sampai LED berhenti berkedip. Sekali per siklus nyala power, BUKAN tiap
+      ARM/DISARM — kalau berkedip lagi tiap kali ARM, berarti board sempat
+      reboot/power siklus di antaranya, dicek dulu sebelum lanjut. Terkonfirmasi
+      2026-08-25: ini penyebab "perlu delay sebelum bisa dikendalikan joystick"
+      — bukan bug kode (`rov_agent.py`/GUI tak punya gerbang delay apa pun
+      setelah ARM). Bisa dinonaktifkan permanen via param `BRD_SAFETYENABLE=0`
+      kalau tim memutuskan begitu — keputusan keselamatan, bukan default.
 - [ ] Cek **STOP** dulu sebelum apa pun: tekan STOP → tak ada gerak, disarm.
 
 ### 2.1 Arah thruster (VERIFIKASI #1) — paling kritis

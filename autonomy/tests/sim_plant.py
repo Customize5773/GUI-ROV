@@ -25,6 +25,7 @@ dalam milidetik. Pasang lewat `install_fake_time(mission5, clock)`.
 from __future__ import annotations
 
 import json
+import math
 import types
 from dataclasses import dataclass
 from typing import Optional
@@ -50,6 +51,12 @@ K_VERT_Y         = 0.010          # vert% → m/s pd sumbu y kamera (naik → y 
 
 # ── Offset akuisisi awal saat ROV masuk band (payload off-center & agak jauh) ─────
 INIT_RX, INIT_RY, INIT_RZ = 0.16, 0.10, 0.75      # m (kanan, bawah, jarak)
+# Lenceng LATERAL sepanjang dinding (m) — dimensi yang MARK tak bisa berikan, dan yang
+# harus disisir M5_SEARCH. Payload cuma terlihat bila masuk kerucut kamera:
+#   |lat| < FOV_HALF_K * rz   (HFOV ~60° ⇒ tan30° ≈ 0.58)
+# Tanpa ini semua test "ladder melebar" jadi palsu: QR akan terlihat dari mana saja.
+FOV_HALF_K       = 0.58
+K_SURGE_LAT      = 0.010          # surge% → m/s lateral saat ROV menghadap sejajar dinding
 INIT_YAW_DEG              = 8.0                    # skew fiducial (kosmetik; kp_yaw=0)
 
 # ── Hook (misi 3b HANG & misi 4 DOCK) — target geometrik di dinding (CAM WALL) ────
@@ -109,6 +116,7 @@ class PlantState:
     ry: float = INIT_RY
     rz: float = INIT_RZ
     yaw_deg: float = INIT_YAW_DEG
+    lat: float = 0.0              # m — lenceng lateral sepanjang dinding dari titik gantungan
     # geometri HOOK relatif kamera (m), valid hanya saat in hook-regime (HANG/DOCK)
     hkx: float = HANG_HKX0
     hky: float = HANG_HKY0
@@ -126,8 +134,17 @@ class SimPlant:
       z>target        → +surge menurunkan z
     """
 
-    def __init__(self, target_wall='C', target_dist=0.30, target_area=3000.0):
+    def __init__(self, target_wall='C', target_dist=0.30, target_area=3000.0,
+                 wall_heading=None, lat=0.0, sim_lateral=False):
         self.s = PlantState()
+        # Dimensi lateral OPT-IN. Skenario misi 1-4 berputar ke banyak heading, jadi
+        # kalau kerucut kamera diberlakukan di sana `lat` menumpuk dan QR jadi tak
+        # pernah terlihat — padahal skenario itu memang tak memodelkan posisi lateral.
+        # Test M5_SEARCH menyalakannya; sisanya berperilaku persis seperti dulu.
+        self.sim_lateral = sim_lateral
+        # Heading saat ROV menghadap tegak lurus dinding gantungan (= yang di-MARK).
+        self.wall_heading = self.s.heading if wall_heading is None else wall_heading
+        self.s.lat = lat
         self.target_wall = target_wall
         # data QR = JSON payload terstruktur KKI 2026 (spt cetak PDF tim)
         self.qr_payload = {'mission': 5, 'team': 'HYDROSHIP',
@@ -177,6 +194,15 @@ class SimPlant:
         self.s.roll = _clamp(i['sway'] * 0.15, -20, 20)
         self.s.pitch = _clamp(i['surge'] * 0.10, -15, 15)
 
+        # Proyeksi gerak ke sumbu dinding: menghadap dinding (dh=0) surge murni
+        # MENDEKAT; berbelok 90° (ladder traverse) surge murni MENYUSUR ke samping.
+        if self.sim_lateral:
+            dh = math.radians(self.s.heading - self.wall_heading)
+            toward, along = math.cos(dh), math.sin(dh)
+            self.s.lat += K_SURGE_LAT * i['surge'] * along * dt
+        else:
+            toward = 1.0              # perilaku lama: surge selalu murni mendekat
+
         band = self._in_band()
         if band and not self._in_band_prev:
             # baru masuk regime docking → akuisisi ulang payload (offset segar)
@@ -188,7 +214,7 @@ class SimPlant:
             #   +surge → rz turun (mendekat).
             self.s.rx -= K_SWAY_X * i['sway'] * dt
             self.s.ry += K_VERT_Y * i['vert'] * dt
-            self.s.rz = max(0.05, self.s.rz - K_SURGE_Z * i['surge'] * dt)
+            self.s.rz = max(0.05, self.s.rz - K_SURGE_Z * i['surge'] * toward * dt)
         self._in_band_prev = band
 
         # ── Geometri HOOK (misi 3b/4) — integrasi sama konvensi tanda dgn QR ──────
@@ -208,6 +234,18 @@ class SimPlant:
 
     def _in_band(self) -> bool:
         return HOOK_BAND_LO <= self.s.depth <= HOOK_BAND_HI
+
+    def qr_visible(self) -> bool:
+        """Apakah payload masuk kerucut kamera secara LATERAL.
+
+        Hanya berlaku saat `sim_lateral` (opt-in) — gerbang kedalaman tetap urusan
+        `_in_band`, jangan digabung ke sini: SCAN_QR membaca QR di DASAR kolam, di
+        luar band docking. Mundur (rz membesar) memperlebar kerucut — itulah yang
+        dieksploitasi fase 'backoff' M5_SEARCH: melihat lebih lebar tanpa gerak lateral.
+        """
+        if not self.sim_lateral:
+            return True
+        return abs(self.s.lat) < FOV_HALF_K * max(self.s.rz, 1e-3)
 
     def _hook_regime(self):
         """Regime deteksi hook berdasar kedalaman: 'dock' (permukaan, misi 4),
@@ -365,6 +403,8 @@ class SimVision:
         self._count += 1
         if self.dropout is not None and self.dropout(self._count):
             return None               # simulasi dropout deteksi (riak/glare)
+        if not self.plant.qr_visible():
+            return None               # lenceng lateral: payload di luar kerucut kamera
         self._last = self.plant.detection(self.clock.time(), self.provide_pose)
         return self._last
 
@@ -379,6 +419,8 @@ class SimVision:
         self._hook_count += 1
         if self.hook_dropout is not None and self.hook_dropout(self._hook_count):
             return None               # simulasi dropout deteksi hook (riak/glare)
+        if not self.plant.qr_visible():
+            return None               # hook ada di titik yang sama — ikut keluar kerucut
         self._last_hook = self.plant.hook_detection(now, self.provide_pose)
         return self._last_hook
 

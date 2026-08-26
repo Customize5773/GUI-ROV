@@ -181,15 +181,7 @@ export const setupPage = {
             <span class="panel__eyebrow">THRUSTER TEST</span>
             <h3 class="card__title">Uji Spin Per-Thruster</h3>
             <p class="card__desc">
-              Meniru Motor Test QGroundControl/ArduSub: geser slider tiap thruster
-              untuk memutarnya sebentar (atas = maju, bawah = mundur) — pastikan
-              baling-baling &amp; area sekitar bebas hambatan dulu. Angka % di
-              bawah slider menunjukkan throttle yang sedang dikirim. Slider
-              kembali ke tengah otomatis; thruster berhenti sendiri setelah
-              durasi singkat. Centang "Rev" untuk membalik polaritas satu
-              thruster (terhubung ke toggle "Reverse arah thruster" di kartu
-              THRUSTER SETUP — satu sumber kebenaran, panel ini alat uji, bukan
-              konfigurasi baru).
+              Slider vertikal untuk menguji tiap thruster. Lepas slider = berhenti.
             </p>
             <span class="badge" id="suMotorTestWarn">Slider aktif hanya saat wahana ARMED — uji di darat/tertambat</span>
             <svg id="suMotorSvg" viewBox="0 0 200 190" class="motor-diagram">
@@ -213,11 +205,8 @@ export const setupPage = {
             <span class="panel__eyebrow">PID SETUP</span>
             <h3 class="card__title">Hold Control Gains</h3>
             <p class="card__desc">
-              Gain kontrol hold Yaw, Roll, Pitch &amp; Depth. Nilainya dibaca langsung dari
-              flight controller — Yaw = <code>ATC_RAT_YAW_*</code>, Roll = <code>ATC_RAT_RLL_*</code>,
-              Pitch = <code>ATC_RAT_PIT_*</code>, Depth = <code>PSC_ACCZ_*</code>.
-              Untuk param lain pakai halaman <b>Vehicle</b>.
-            </p>
+              Gain kontrol hold Yaw, Roll, Pitch &amp; Depth. Yaw = <code>ATC_RAT_YAW_*</code>, Roll = <code>ATC_RAT_RLL_*</code>,
+              Pitch = <code>ATC_RAT_PIT_*</code>, Depth = <code>PSC_ACCZ_*</code>.</p>
             <span class="badge" id="suPidSrc">Belum dibaca dari FC</span>
             <label class="card__label">Yaw <small>ATC_RAT_YAW</small></label>
             <div class="card__row card__row--wrap">
@@ -248,8 +237,7 @@ export const setupPage = {
             <span class="panel__eyebrow">TEST POOL</span>
             <h3 class="card__title">Pool &amp; Danger Depth</h3>
             <p class="card__desc">Kedalaman kolam (kalibrasi altitude + batas atas depth-set)
-              &amp; ambang alarm. Setpoint depth-set sendiri direkam dari tombol SET di
-              dashboard, bukan diisi di sini.</p>
+              </p>
             <div class="card__row card__row--wrap">
               ${numField("suPool", "Pool depth", CONFIG.POOL_DEPTH, "0.1", "m")}
               ${numField("suDanger", "Danger depth", CONFIG.DANGER_DEPTH, "0.1", "m")}
@@ -262,10 +250,7 @@ export const setupPage = {
           <div class="card">
             <span class="panel__eyebrow">MISSION SCORING</span>
             <h3 class="card__title">Counter Trial Misi 2 &amp; 3</h3>
-            <p class="card__desc">Sesuai Guidebook KKI 2026 §4.7.4: skor 15/10/5 poin untuk
-              trial ke-1/2/&gt;2 pada Misi 2 (grab) &amp; Misi 3 (hang). Ditekan scorekeeper
-              saat melihat dari kamera percobaan gagal — Control page hanya menampilkan
-              angkanya (indikator), tidak ada tombol di sana supaya tak tersenggol pilot.</p>
+            <p class="card__desc"></p>
             <div class="card__row card__row--wrap">
               <span class="card__info">Misi 2: trial <b id="suM2Fails">1</b> · <b id="suM2Score">15</b> pt</span>
               <button class="btn-wide" id="suM2Fail">Gagal, Ulangi (Misi 2)</button>

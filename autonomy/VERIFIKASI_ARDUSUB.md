@@ -23,10 +23,25 @@ print(m.mode_mapping())
 
 ## Status item 3
 - [x] `set_surface` (selesai, terverifikasi di mock: 0.6 m → 0.0 m)
-- [ ] #1–#7 di atas — **butuh SITL/hardware** (WSL belum terpasang di mesin ini).
+- [x] #1 Arah surge/sway/yaw — **LULUS di kolam, 2026-08-25**
+- [x] #2 z-neutral & arah vertikal — **LULUS di kolam, 2026-08-25**
+- [x] #3 Channel servo gripper — **LULUS di kolam, 2026-08-25** (gerak fisik dikonfirmasi
+      operator; log Pi juga menunjukkan OPEN/CLOSE/STOP terkirim normal)
+- [ ] #4 Channel servo lampu — **DILEWATI**, belum terhubung hardware (`rov_agent.py`
+      command `light` baru menyimpan status, komentarnya sendiri menyatakan ini —
+      lihat catatan Fase 2 di `ROADMAP_MISI5.md`)
+- [x] #5 Nama mode depth-hold — **LULUS di kolam, 2026-08-25**
+- [x] #6 Sumber & skala depth — **LULUS di kolam, 2026-08-25**
+- [x] #7 Arming & failsafe — **LULUS di kolam, 2026-08-25** (ARM/DISARM berulang
+      dikonfirmasi via journal Pi, `result=0` konsisten, tak ada crash/hang)
 
-Saat ArduSub SITL siap, jalankan checklist ini lalu sesuaikan konstanta. Setelah
-semua ✓, point (c) lengkap "nilai-fisik".
+Catatan: item di atas ditulis merujuk `rov_link.py` (jalur SITL/`autonomy/`), tapi yang
+DIUJI di kolam adalah `rov_agent.py` (produksi, `rov-agent.service`) — dua program
+berbeda. Lihat pemetaan lengkap ke lokasi `rov_agent.py` yang benar di catatan Fase 2
+`ROADMAP_MISI5.md` (2026-08-25).
+
+Checklist dasar #1–#7 (minus #4 yang memang belum diimplementasikan) sudah lengkap.
+Point (c) "nilai-fisik" untuk jalur `rov_agent.py` produksi selesai.
 
 ---
 
@@ -45,6 +60,7 @@ Uji BERTAHAP, dari sederhana → kompleks. **Selalu siapkan STOP/Spasi** (failsa
 | M6 | **Merayap grab (ENGAGE)** | Payload masuk gripper mulus tanpa mendorong lepas dari hook sebelum tercengkeram. | `M5_ENGAGE_SURGE` + timing fase di `_state_m5_engage`. |
 | M7 | **Yaw squaring (opsional)** | Default `SERVO_KP_YAW=0.0` (NONAKTIF). Yaw dari 1 QR planar AMBIGU (dua solusi IPPE) → JANGAN aktifkan sebelum diverifikasi solid; bila perlu tegak-lurus, andalkan heading-hold ArduSub. Validasi pasif (tanpa kirim command) tersedia: `python -m autonomy.tests.pool_yaw_validation --calib kalib.npz --qr-size 0.04 --device 0 --duration 30`. | `SERVO_KP_YAW` — biarkan 0 kecuali sudah terbukti stabil. |
 | M8 | **Handoff GUI → autonomous** | 1-4 manual, lalu toggle header → AUTONOMOUS. FSM (sudah jalan, `--start-state M5_REDIVE`) harus mulai. Toggle balik ke MANUAL → FSM abort. | pastikan telem `mode` mengalir (rov_link `loop_telem_tx`). |
+| M9 | **Pencarian lateral M5_SEARCH** (kembali ke gantungan) | **(a)** ✅ Kalibrasi `SEARCH_SPEED`→m/s **SELESAI 2026-08-25** di kolam latihan (2,2×4,4×0,8 m): surge rata² ~20% (x=196/1000) selama 19,86 dtk menempuh 4,4 m ujung-ke-ujung → **v ≈ 0,222 m/s**, nyaris persis asumsi desain (0,2 m/s) — `SEARCH_SPEED` default TAK diubah. **(b)** ✅ Deviasi kompas **SELESAI 2026-08-25**: MARK di hook (109°, depth 0,26 m) → naik ke permukaan → turun lagi ke hook (101°, depth 0,49 m) → **deviasi ~8°, DI BAWAH ambang 15°** — kompas cukup stabil dekat dinding kolam ini. Catatan: kedalaman kedua pembacaan tak persis sama (0,26 vs 0,49 m), jadi bukan titik ulang yang sempurna, tapi hasilnya tetap aman. **(c)** Rasio jarak "quad QR terlihat" vs "QR terbaca" — menentukan `SEARCH_BACKOFF_T`. **BELUM diuji.** **(d)** ✅ Lebar kolam **SELESAI** — kolam latihan cuma 2,2 m, default `SEARCH_SPAN_MAX_T=12s` (≈2,66 m pada v terukur) MELEBIHI lebar itu → diperketat di `config/pool_trial.yaml` blok `search:` (span/leg ≤4,5s, backoff 3,0s, ekskursi ≤~1 m). **WAJIB pakai `--config config/pool_trial.yaml` di kolam ini** — default global tak aman untuk venue sekecil ini. | blok `search:` di config (`SEARCH_SPEED`, `SEARCH_BACKOFF_T`, `SEARCH_LEG_*`, `SEARCH_SPAN_MAX_T`, `SEARCH_CREEP_MAX_T`). |
 
 ## Alur uji lomba (rekomendasi)
 ```
@@ -59,4 +75,5 @@ python fsm/mission5.py --server 127.0.0.1 --vision usb --device 0 \
 ## Status
 - [x] Jalur data + rantai state M5 (mock+SITL: M5_REDIVE→…→DONE, m5=40, PBVS & IBVS)
 - [x] Handoff mode=autonomous (uji: FSM menunggu lalu jalan saat toggle)
-- [ ] M1–M8 di atas — **butuh kolam/hardware** (arah sumbu, jarak, geometri unhook)
+- [ ] M1–M9 di atas — **butuh kolam/hardware** (arah sumbu, jarak, geometri unhook,
+      kalibrasi kecepatan & kompas untuk pencarian lateral)

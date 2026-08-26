@@ -25,6 +25,7 @@ dataset/
 autonomy/Cleaned
 autonomy/calib_imgs_trial2
 autonomy/calib_imgs_trial2_dense
+autonomy/calib_imgs_v3
 # ZIP dinamai dari --outdir (mis. dataset/ -> dataset.zip)
 autonomy/dataset.zip
 dataset.zip
@@ -40,6 +41,7 @@ autonomy/Cleaned_underwater
 public/models/rov.obj
 log-m5
 log-GUI
+Calib image
 
 # Planning
 Planning/ANALISIS-PID-ROLL-PITCH.md
@@ -117,3 +119,9 @@ server/GUI23.log
 public/models/rov2d_1.jpeg
 public/models/rov2d_2.jpeg
 Planning/Panduan KKI 2026_Final_1.pdf
+log-ROV/GUI002.log
+.gitignore
+log-ROV/ROV002.log
+autonomy/m9c_test.csv
+autonomy/m9c_test2.csv
+autonomy/m9c_test33.csv

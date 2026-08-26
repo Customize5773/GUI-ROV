@@ -83,3 +83,13 @@ depth:
 payload:
   mission: 5
   type: payload
+
+# ── Timeout per state — sifat decode/servo, bukan kolam ───────────────────────
+# scan: dinaikkan dari default 20.0 (bukan disamakan ke 45.0 sim — itu
+# dikalibrasi utk biaya retry cv2.QRCodeDetector, bukan pyzbar). Titik awal
+# 30.0 dipilih krn decode_qr() kini punya 1 jenjang tambahan (adaptive-
+# threshold, lihat vision/qr_detect.py) sblm upscale — validasi ulang angka
+# ini pakai tools/analyze_detection_log.py stlh trial kolam berikutnya
+# (docs perbandingan: ros2_ws/docs/MISSION-ALIGNMENT.md).
+timeouts:
+  scan: 30.0

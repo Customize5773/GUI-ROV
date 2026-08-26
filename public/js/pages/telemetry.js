@@ -1,11 +1,14 @@
 // telemetry.js — Halaman Telemetry & Health.
-// Grafik live Yaw/Depth/Pitch/Roll (nilai nyata) + pemantauan arus/status thruster.
+// Grafik live Yaw/Depth/Pitch/Roll (nilai nyata) + pemantauan PWM/status thruster.
 // KKI 2026: maksimal 6 thruster.
 import { log, num } from "../core.js";
+import { CONFIG } from "../config.js";
 import { DEFAULT_WINDOW, makeLineChart, pushRing, renderSeries } from "../chart-line.js";
 
 const WINDOW = DEFAULT_WINDOW;
-const OVERCURRENT = 10;   // A — ambang status thruster "High"
+// ROV ini tak punya sensor arus per-thruster — deadband PWM di sekitar
+// netral dipakai sbg proksi "aktif/diam", bukan ambang overcurrent Ampere.
+const PWM_ACTIVE_DEADBAND = 20;   // µs dari netral
 
 const CHANNELS = [
   { key: "yaw", title: "Yaw", unit: "°" },
@@ -35,7 +38,7 @@ export const telemetryPage = {
   capturing: false,
   samples: 0,
   csvRows: [],
-  thrusters: null,   // arus thruster nyata (A) dari telemetri; null = belum ada data
+  thrusters: null,   // PWM (µs) per-thruster nyata dari telemetri; null = belum ada data
   raf: null,
   visible: false,
   els: {},
@@ -81,7 +84,7 @@ export const telemetryPage = {
           <span class="badge" id="thr-st-${t.id}">No data</span>
         </div>
         <div class="thr-card__stats">
-          <span>Current <b id="thr-c-${t.id}">—</b> A</span>
+          <span>PWM <b id="thr-c-${t.id}">—</b> µs</span>
         </div>`;
       tWrap.appendChild(el);
     });
@@ -130,8 +133,8 @@ export const telemetryPage = {
       poshold: d.poshold === true,
     };
     for (const c of CHANNELS) pushRing(this.buf[c.key], real[c.key], WINDOW);
-    // arus thruster nyata bila ROV mengirim (array A: [T1..T6]); jika tidak, biarkan null
-    if (Array.isArray(d.thrusters)) this.thrusters = d.thrusters;
+    // PWM thruster nyata bila ROV mengirim (array µs: [T1..T6]); jika tidak, biarkan null
+    if (Array.isArray(d.thrusters_pwm)) this.thrusters = d.thrusters_pwm;
     if (this.capturing) {
       this.samples++;
       // Tanpa setpoint tidak ada error yang bermakna -> kolom kosong, bukan 0.
@@ -169,16 +172,17 @@ export const telemetryPage = {
   },
 
   _renderThrusters() {
+    const neutral = CONFIG.THRUSTER.pwmNeutral;
     for (let i = 0; i < THRUSTERS.length; i++) {
       const t = THRUSTERS[i];
-      const amp = this.thrusters && Number.isFinite(this.thrusters[i]) ? this.thrusters[i] : null;
+      const pwm = this.thrusters && Number.isFinite(this.thrusters[i]) ? this.thrusters[i] : null;
       const c = document.getElementById(`thr-c-${t.id}`);
-      if (c) c.textContent = amp === null ? "—" : amp.toFixed(2);
+      if (c) c.textContent = pwm === null ? "—" : pwm;
       const st = document.getElementById(`thr-st-${t.id}`);
       if (st) {
-        const high = amp !== null && amp >= OVERCURRENT;
-        st.textContent = amp === null ? "No data" : (high ? "High" : "Normal");
-        st.className = "badge " + (amp === null ? "" : (high ? "badge--fault" : "badge--ok"));
+        const active = pwm !== null && Math.abs(pwm - neutral) >= PWM_ACTIVE_DEADBAND;
+        st.textContent = pwm === null ? "No data" : (active ? "Active" : "Idle");
+        st.className = "badge " + (pwm === null ? "" : (active ? "badge--active" : "badge--ok"));
       }
     }
   },

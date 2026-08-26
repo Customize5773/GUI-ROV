@@ -123,6 +123,8 @@ class Mission5Runner:
         self._fsm = None
         self._vision = None
         self._thread = None
+        self._runlog = None
+        self._read_mission_counter = self._cfg.get("read_mission_counter")
         self._lock = threading.Lock()
 
     def available(self):
@@ -213,6 +215,32 @@ class Mission5Runner:
         self._apply_configs()
 
         cfg = self._cfg
+
+        # Log JSONL otomatis tiap trial — dulu cuma hidup lewat flag CLI
+        # `--run-log` di mission5.py main(), yang tak pernah dipanggil dari
+        # jalur GUI. Gagal-lunak: log rusak/tak bisa ditulis TIDAK BOLEH
+        # menggagalkan misi, cukup jalan tanpa runlog.
+        runlog = None
+        try:
+            import os as _os
+            import time as _time
+            import tools.run_log as _run_log_mod
+            from tools.run_log import RunLogger
+            # Lokasi "logs/" diturunkan dari tools/ yg BENAR-BENAR ter-resolve
+            # (bukan diasumsikan relatif thd file ini): di repo dev, tools/
+            # ada di autonomy/tools/; di Pi (rov-agent), sudah diratakan jadi
+            # ~/rov-agent/tools/. Menyamakan lokasi log dgn lokasi tools/
+            # otomatis benar di kedua layout tanpa deteksi manual.
+            tools_dir = _os.path.dirname(_os.path.abspath(_run_log_mod.__file__))
+            log_path = _os.path.join(_os.path.dirname(tools_dir), "logs",
+                                     _time.strftime("run_%Y%m%d_%H%M%S.jsonl"))
+            runlog = RunLogger(log_path)
+            files = [p.strip() for p in (cfg.get("config_files") or "").split(",") if p.strip()]
+            runlog.event("config", files=files, start_state=cfg.get("start_state", "M5_REDIVE"))
+        except Exception as e:
+            self._log(f"[M5] run_log tidak tersedia: {e} — trial tetap jalan tanpa log")
+        self._runlog = runlog
+
         vision = VisionPipeline(
             source=cfg.get("vision_source", "usb"),
             device=cfg.get("vision_device", 0),
@@ -234,7 +262,7 @@ class Mission5Runner:
         read_mark = cfg.get("read_mark")
         mh, md = read_mark() if callable(read_mark) else (None, None)
         fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision,
-                          marked_heading=mh, marked_depth=md)
+                          runlog=runlog, marked_heading=mh, marked_depth=md)
         start_state = getattr(State, cfg.get("start_state", "M5_REDIVE"))
 
         def _run():
@@ -250,6 +278,23 @@ class Mission5Runner:
                     vision.stop()
                 except Exception:
                     pass
+                if runlog:
+                    try:
+                        fsm_skor = fsm.score()
+                        mc = self._read_mission_counter() if callable(self._read_mission_counter) else {}
+                        skor = dict(fsm_skor)
+                        skor["m2"] = mc.get("m2", fsm_skor.get("m2", 0))
+                        skor["m3"] = mc.get("m3", fsm_skor.get("m3", 0))
+                        skor["total"] = sum(skor.get(k, 0) for k in ("m1", "m2", "m3", "m4", "m5"))
+                        runlog.close(
+                            state_akhir=fsm._state.name,
+                            skor=skor,
+                            target_wall=fsm._target_wall,
+                            hang_used_fallback=fsm._hang_used_fallback,
+                            dock_used_fallback=fsm._dock_used_fallback,
+                        )
+                    except Exception as e:
+                        self._log(f"[M5] gagal menutup run_log: {e}")
                 self._log("[M5] thread FSM selesai")
 
         with self._lock:

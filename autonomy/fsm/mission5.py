@@ -143,6 +143,30 @@ TIMEOUT_FALLBACK   = 30.0     # detik max jalur timed (degraded, tanpa visual)
 # singkat "dead-reckon hold", baru menyapu TERARAH ke sisi QR terakhir terlihat.
 M5_LOCK_GRACE_T    = 0.6      # detik hold saat dropout sesaat sebelum mulai menyapu
 
+# ── M5_SEARCH: pencarian lateral kembali ke gantungan ────────────────────────
+# MARK merekam heading + depth — 2 dari 3 derajat kebebasan. Itu cukup untuk MENGHADAP
+# dinding di kedalaman benar, tapi TIDAK memberi tahu ROV ada di sebelah mana sepanjang
+# dinding (posisi sandar misi 4 terserah pilot). Sapu yaw di tempat secara fundamental
+# tak bisa memperbaiki lenceng lateral — maka ladder di bawah: mundur dulu memperlebar
+# bidang pandang, lalu zigzag menyusur dinding dgn leg yang MEMBESAR.
+#
+# Gerak lateral lewat yaw+surge, BUKAN sway: frame 3-2-1 cuma punya 1 thruster sway,
+# lemah dan menimbulkan roll mekanis. Yaw bolak-balik pakai kompas ABSOLUT sehingga
+# galat arah tak menumpuk antar leg.
+#
+# SEMUA angka detik di bawah adalah TEBAKAN sampai SEARCH_SPEED dikalibrasi ke m/s di
+# kolam (surge 20% selama 10 s, ukur jarak) — lihat ROADMAP_MISI5.md Fase 3.
+TIMEOUT_SEARCH     = 90.0     # detik max pencarian sebelum degradasi ke fallback timed
+SEARCH_SPEED       = 20       # % surge saat mundur & menyusur (seordo DOCK_APPROACH_SPEED)
+SEARCH_BACKOFF_T   = 6.0      # detik mundur perlebar FOV (~1.2 m; HFOV 60° ⇒ ±0.87 m dari 1.5 m)
+SEARCH_LOOK_T      = 2.0      # detik diam menghadap dinding (≥3 frame vision @10 Hz)
+SEARCH_LEG_T0      = 3.0      # detik leg pertama (~0.6 m ≈ satu lebar FOV, tanpa celah)
+SEARCH_LEG_GROW    = 1.5      # faktor pembesar leg: 3 → 4.5 → 6.75 → 10 s
+SEARCH_LEG_T_MAX   = 10.0     # detik leg maksimum (~2 m; lebih dari itu keluar kolam)
+SEARCH_SPAN_MAX_T  = 12.0     # PAGAR KERAS: |dead-reckon lateral| ≤ ~2.4 m dari titik mark
+SEARCH_YAW_TOL     = 8        # derajat — lebih ketat dari deadband 10° agar leg tegak lurus
+SEARCH_CREEP_MAX_T = 8.0      # detik max merayap ke hint TAK tervalidasi (pola HOOK_ACQUIRE_T)
+
 # ── Misi 3b (HANG) & Misi 4 (DOCK): docking closed-loop ke HOOK (CAM WALL) ────
 # Target visual = hook PVC ¾" (25mm) ujung-U di dinding — TANPA QR/marker sendiri.
 # Deteksi geometrik (vision/hook_detect.py). Servo reuse VisualServo/PoseServo (spt QR).
@@ -175,6 +199,7 @@ class State(Enum):
     DOCK          = auto()   # Misi 4: docking di sisi dinding
     # ── Misi 5 (40 poin) — rantai autonomous closed-loop lepas payload ──
     M5_REDIVE     = auto()   # Misi 5a: selam ulang dari permukaan + akuisisi QR payload
+    M5_SEARCH     = auto()   # Misi 5a': cari gantungan menyusur dinding (lenceng lateral)
     M5_DOCK       = auto()   # Misi 5b: docking closed-loop ke QR (PBVS/IBVS) — "nembak x & y"
     M5_ENGAGE     = auto()   # Misi 5c: grab payload (tetap hold x/y via pose)
     M5_UNHOOK     = auto()   # Misi 5d: angkat lubang payload lepas dari hook
@@ -358,6 +383,16 @@ class Mission5FSM:
         # Loss-of-lock tracker untuk docking HOOK (HANG misi 3b / DOCK misi 4)
         self._hook_last_det_t = 0.0    # waktu terakhir hook terlihat
         self._hook_search_dir = 1      # arah sapu reacquire = sisi hook terakhir
+        # M5_SEARCH — ladder pencarian lateral (di-reset di _transition)
+        self._search_phase   = 'backoff'  # backoff → look → turn_out → traverse → turn_back → look…
+        self._search_phase_t = 0.0        # waktu masuk sub-fase saat ini
+        self._search_leg_t   = SEARCH_LEG_T0   # durasi leg menyusur saat ini (membesar)
+        self._search_dir     = 1          # sisi menyusur (+kanan/−kiri dari marked_heading)
+        self._search_pos_t   = 0.0        # ponytail: dead-reckon integral WAKTU bertanda,
+                                          # satu-satunya "odometri" — murni pagar span,
+                                          # ganti dgn posisi sungguhan bila ada DVL
+        self._search_creep_t = None       # timestamp mulai merayap ke hint (None = tak merayap)
+        self._search_creep_block = False  # True = jangan merayap sampai ROV pindah posisi
         # Sub-fase & degradasi HANG/DOCK (None = belum aktif)
         self._hang_release_t   = None  # timestamp mulai fase lepas payload pasca-align
         self._hang_fallback_t  = None  # timestamp mulai jalur timed HANG (degradasi)
@@ -494,6 +529,8 @@ class Mission5FSM:
                 self._state_dock(telem)
             elif self._state == State.M5_REDIVE:
                 self._state_m5_redive(telem)
+            elif self._state == State.M5_SEARCH:
+                self._state_m5_search(telem)
             elif self._state == State.M5_DOCK:
                 self._state_m5_dock(telem)
             elif self._state == State.M5_ENGAGE:
@@ -914,12 +951,6 @@ class Mission5FSM:
         """Misi 5a: dari permukaan, selam ulang ke kedalaman hook sambil akuisisi QR payload."""
         depth   = telem.get('depth', 0.0)
         elapsed = self._elapsed()
-        if elapsed > TIMEOUT_REDIVE:
-            log.warning("[FSM] M5_REDIVE timeout — QR tak diperoleh, degradasi ke fallback timed")
-            self.cmd.stop_all()
-            self._transition(State.M5_FALLBACK)
-            return
-
         qr = self._fresh_payload(0.5)
         # Kedalaman yang di-MARK menang atas HOOK_DEPTH: ia direkam di gantungan
         # sungguhan, jadi ikut mencoret offset tare permukaan (kedua pembacaan
@@ -927,6 +958,21 @@ class Mission5FSM:
         # geometri kolam di config sudah diisi — lihat _derive_depths().
         target_depth = self._marked_depth if self._marked_depth is not None else HOOK_DEPTH
         near = depth >= target_depth - DEPTH_TOLERANCE
+
+        # Timeout REDIVE kini cuma berarti "gagal MENYELAM", bukan "gagal cari QR" —
+        # pencarian pindah ke M5_SEARCH yang punya anggaran waktunya sendiri. Selama
+        # kedalaman sudah masuk akal, tetap layak mencari drpd langsung lepas buta.
+        if elapsed > TIMEOUT_REDIVE:
+            if depth >= target_depth - 2 * DEPTH_TOLERANCE:
+                log.warning("[FSM] M5_REDIVE timeout tapi kedalaman tercapai — lanjut mencari")
+                self.cmd.stop_all()
+                self._transition(State.M5_SEARCH)
+            else:
+                log.warning("[FSM] M5_REDIVE timeout & gagal menyelam (%.2f/%.2f m) — fallback timed",
+                            depth, target_depth)
+                self.cmd.stop_all()
+                self._transition(State.M5_FALLBACK)
+            return
 
         if qr is not None and near:
             log.info("[FSM] QR payload diperoleh @depth=%.2f (%s) — mulai docking",
@@ -943,21 +989,158 @@ class Mission5FSM:
             self.cmd.send(vert=-DIVE_SPEED, yaw=yaw)
             log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=%s", depth, target_depth, bool(qr))
         else:
-            # Sudah di level hook, QR belum terlihat → hadapkan ke arah gantungan.
-            # Dulu cabang ini memaksa yaw=YAW_SPEED dan mengabaikan MARK, jadi
-            # alur misi 1-4 manual selalu berputar buta sampai timeout.
-            #
-            # Tapi saat BENAR-BENAR tak ada arah (tanpa mark & tanpa _target_wall)
-            # sapuan harus tetap kecepatan PENUH, bukan 0.6x milik
-            # _heading_toward_wall(): pelan-pelan berarti QR tak keburu ketemu
-            # sebelum TIMEOUT_REDIVE — terbukti bikin skenario SITL B jatuh ke
-            # M5_FALLBACK padahal sebelumnya lolos jalur visual.
-            if self._marked_heading is None and self._target_wall is None:
-                yaw = YAW_SPEED
-            else:
-                yaw = self._heading_toward_wall(telem)
-            self.cmd.send(yaw=yaw)
-            log.debug("[FSM] M5_REDIVE sapu cari QR @depth=%.2f", depth)
+            # Sudah di level hook tapi QR belum terlihat. Dulu cabang ini menyapu yaw
+            # DI TEMPAT sampai timeout — dan berputar di tempat secara fundamental tak
+            # bisa memperbaiki LENCENG LATERAL sepanjang dinding (posisi sandar misi 4
+            # terserah pilot). Serahkan ke M5_SEARCH yang benar-benar menyusur dinding.
+            log.info("[FSM] M5_REDIVE @depth=%.2f — QR belum terlihat, mulai pencarian lateral", depth)
+            self.cmd.stop_all()
+            self._transition(State.M5_SEARCH)
+
+    def _hold_depth(self, telem, target: float) -> int:
+        """Perintah vert untuk MENAHAN kedalaman (bang-bang, 0 di dalam toleransi).
+
+        Dipakai M5_SEARCH: pencarian bisa berlangsung puluhan detik, dan cabang sapu
+        lama mengirim `send(yaw=…)` TANPA vert sama sekali sehingga kedalaman hanyut
+        (ROV ini sedikit apung) — QR keluar dari bidang pandang vertikal justru saat
+        sedang dicari. Bang-bang, bukan PID: konsisten dgn _state_dive/_state_surface.
+        """
+        depth = telem.get('depth', 0.0)
+        err = target - depth                       # + = masih terlalu dangkal → turun
+        if abs(err) <= DEPTH_TOLERANCE:
+            return 0
+        return -DIVE_SPEED if err > 0 else ASCEND_SPEED
+
+    def _search_next_phase(self, phase: str):
+        """Pindah sub-fase ladder M5_SEARCH + catat waktunya."""
+        self._search_phase = phase
+        self._search_phase_t = time.time()
+
+    def _search_yaw_to(self, telem, target_hdg: float):
+        """Yaw bang-bang ke heading absolut. Kembalikan (yaw_cmd, sudah_sampai).
+
+        Kompas ABSOLUT — inilah yang membuat zigzag ladder self-correcting: tiap kali
+        ROV berbelok balik menghadap dinding ia mengacu ke marked_heading lagi, jadi
+        galat arah tak menumpuk antar leg (beda dgn dead-reckon yaw-rate).
+        """
+        err = self._heading_error(telem.get('heading', 0.0), target_hdg)
+        if abs(err) < SEARCH_YAW_TOL:
+            return 0, True
+        return (YAW_SPEED if err > 0 else -YAW_SPEED), False
+
+    def _state_m5_search(self, telem):
+        """Misi 5a': cari gantungan yang lenceng ke SAMPING, menyusur dinding.
+
+        MARK memberi heading + depth (2 dari 3 DOF) — arah hadap & kedalaman benar, tapi
+        posisi SEPANJANG dinding tak diketahui. Ladder di bawah menyisir dimensi yang
+        tak diketahui itu: mundur dulu memperlebar bidang pandang, lalu zigzag dgn leg
+        membesar, memakai yaw+surge (sumbu kuat; sway cuma 1 thruster & bikin roll).
+
+        Reakuisisi bertingkat tiap tick — QR terdecode > QR terlihat-tanpa-decode > hook.
+        Tingkat kedua itu kuncinya: quad QR bisa DILOKALISASI jauh sebelum bisa DIBACA,
+        jadi ROV boleh mencari dari jarak lebar lalu merayap mendekat sampai decode jadi.
+        """
+        target_depth = self._marked_depth if self._marked_depth is not None else HOOK_DEPTH
+        vert = self._hold_depth(telem, target_depth)   # SELALU disertakan di tiap send()
+
+        if self._elapsed() > TIMEOUT_SEARCH:
+            log.warning("[FSM] M5_SEARCH timeout %.0fs — gantungan tak ketemu, fallback timed",
+                        TIMEOUT_SEARCH)
+            self.cmd.stop_all()
+            self._transition(State.M5_FALLBACK)
+            return
+
+        # ── (a) Reakuisisi berprioritas ──────────────────────────────────────
+        qr = self._fresh_payload(0.5)
+        if qr is not None:
+            log.info("[FSM] ✓ M5_SEARCH menemukan QR payload (%s) — mulai docking", qr.get('data'))
+            self._note_detection(qr)
+            self.cmd.stop_all()
+            self.servo.reset()
+            self.pose_servo.reset()
+            self._transition(State.M5_DOCK)
+            return
+
+        # QR terlihat tapi belum terbaca (quad dari QRCodeDetector.detect) lebih
+        # dipercaya drpd hook: ia memang QR payload, sedangkan hook bisa tertukar
+        # dgn pipa/tangga lain di kolam.
+        det = self.vision.latest_wall_hint(max_age=1.0) or self._fresh_hook(0.5)
+        if det is not None and det.get('center') is not None and not self._search_creep_block:
+            self._search_creep(det, vert)
+            return
+        if self._search_creep_t is not None:      # target hilang → kembali ke ladder
+            self._end_search_creep("target hilang")
+
+        # ── (b) Ladder yaw+surge ─────────────────────────────────────────────
+        hdg_wall = self._marked_heading if self._marked_heading is not None \
+            else telem.get('heading', 0.0)
+        phase_el = time.time() - self._search_phase_t
+        phase = self._search_phase
+
+        if phase == 'backoff':
+            # Mundur = memperlebar sapuan kamera tanpa gerak lateral sama sekali.
+            yaw, _ = self._search_yaw_to(telem, hdg_wall)
+            self.cmd.send(surge=-SEARCH_SPEED, yaw=yaw, vert=vert)
+            if phase_el > SEARCH_BACKOFF_T:
+                self._search_next_phase('look')
+        elif phase == 'look':
+            self.cmd.send(vert=vert)             # diam — beri vision waktu decode
+            if phase_el > SEARCH_LOOK_T:
+                self._search_next_phase('turn_out')
+        elif phase == 'turn_out':
+            yaw, done = self._search_yaw_to(telem, hdg_wall + self._search_dir * 90)
+            self.cmd.send(yaw=yaw, vert=vert)
+            if done:
+                self._search_next_phase('traverse')
+        elif phase == 'traverse':
+            # Span = akumulasi WAKTU menyusur bertanda; leg berjalan dihitung dari
+            # phase_el (bukan ditambah per-tick) supaya tak bergantung laju loop.
+            span = self._search_pos_t + self._search_dir * phase_el
+            capped = abs(span) >= SEARCH_SPAN_MAX_T
+            self.cmd.send(surge=0 if capped else SEARCH_SPEED, vert=vert)
+            if capped or phase_el > self._search_leg_t:
+                self._search_pos_t = span        # commit leg ini ke total
+                log.debug("[FSM] M5_SEARCH leg selesai (%.1fs, span=%.1f%s)",
+                          phase_el, span, " CAPPED" if capped else "")
+                self._search_next_phase('turn_back')
+        elif phase == 'turn_back':
+            yaw, done = self._search_yaw_to(telem, hdg_wall)
+            self.cmd.send(yaw=yaw, vert=vert)
+            if done:
+                self._search_creep_block = False  # sudah pindah → kandidat baru boleh dicoba
+                self._search_dir *= -1           # zigzag: sisi berikutnya berlawanan
+                self._search_leg_t = min(self._search_leg_t * SEARCH_LEG_GROW, SEARCH_LEG_T_MAX)
+                self._search_next_phase('look')
+
+    def _search_creep(self, det, vert):
+        """Merayap mendekat ke target yang TERLIHAT tapi belum tervalidasi decode."""
+        if self._search_creep_t is None:
+            self._search_creep_t = time.time()
+            self.scan_creep_servo.reset()
+            log.info("[FSM] M5_SEARCH melihat kandidat gantungan — merayap mendekat")
+        if time.time() - self._search_creep_t > SEARCH_CREEP_MAX_T:
+            # Sudah lama merayap tapi decode tak kunjung jadi: kemungkinan besar
+            # objek lain. Jangan menempel dinding sampai timeout — lanjut menyisir.
+            # BLOKIR creep sampai ROV benar-benar PINDAH (akhir leg berikutnya):
+            # tanpa ini kandidat palsu yang menetap (pipa/tangga, atau hook yang
+            # terlihat tapi QR-nya tak terbaca) langsung menarik ROV kembali tiap
+            # tick — creep→menyerah→creep tanpa henti, ladder tak pernah jalan.
+            self._search_creep_block = True
+            self._end_search_creep("decode tak jadi — blokir sampai pindah")
+            return
+        cx, cy = det['center']
+        out = self.scan_creep_servo.step(cx, cy, det['area'], det['frame_w'], det['frame_h'],
+                                         dt=self._servo_dt())
+        if out.aligned:
+            self.cmd.send(vert=vert)             # sudah sedekat target — diam, tunggu decode
+        else:
+            self.cmd.send(surge=out.surge, sway=out.sway, vert=vert)
+
+    def _end_search_creep(self, reason: str):
+        """Hentikan fase merayap, kembali menyisir dinding dari fase 'look'."""
+        log.debug("[FSM] M5_SEARCH berhenti merayap (%s) — lanjut ladder", reason)
+        self._search_creep_t = None
+        self._search_next_phase('look')
 
     def _heading_toward_wall(self, telem) -> int:
         """Yaw menuju heading dinding target (sama dgn NAV_WALL) — dipakai M5_REDIVE
@@ -1135,6 +1318,16 @@ class Mission5FSM:
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
         if new_state in (State.M5_DOCK, State.M5_ENGAGE):
             self._m5_last_det_t = self._state_t
+        # Ladder pencarian selalu mulai dari nol tiap kali masuk M5_SEARCH
+        if new_state == State.M5_SEARCH:
+            self._search_phase   = 'backoff'
+            self._search_phase_t = self._state_t
+            self._search_leg_t   = SEARCH_LEG_T0
+            self._search_dir     = self._m5_search_dir   # mulai ke sisi QR terakhir terlihat
+            self._search_pos_t   = 0.0
+            self._search_creep_t = None
+            self._search_creep_block = False
+            self.scan_creep_servo.reset()
         # Reset tracker & servo hook saat masuk HANG (misi 3b) / DOCK (misi 4)
         if new_state == State.HANG:
             self._hook_last_det_t = self._state_t

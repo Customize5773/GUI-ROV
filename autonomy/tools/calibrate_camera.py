@@ -48,6 +48,13 @@ python tools/pose_webcam_test.py  --device 0 --calib vision/calibration/laptop.n
   # Mode FOLDER (dari gambar tersimpan — paling anti-gagal, tak butuh GUI/tombol)
   python tools/calibrate_camera.py --from-folder calib_imgs --cols 9 --rows 6 --square 25 \
          --out vision/calibration/dwe.npz
+
+  # Dataset BESAR (ratusan+ pose, mis. hasil tools/select_calib_frames.py dari
+  # video): tambah --trim-rounds utk membuang pose ber-reprojection-error
+  # terburuk & kalibrasi ulang berulang -- menekan RMS jauh lebih efektif drpd
+  # cuma menambah pose (blur/riak air bikin sebagian pose jauh lebih noisy).
+  python tools/calibrate_camera.py --from-folder calib_imgs_v3 --cols 10 --rows 7 \
+         --square 25 --trim-rounds 4 --out vision/calibration/dwe_v3.npz
 """
 import argparse
 import glob
@@ -78,6 +85,14 @@ ap.add_argument("--move", type=float, default=25.0,
                 help="mode --auto: min pergeseran papan (px) dari capture terakhir agar variasi pose")
 ap.add_argument("--save-dir", default=None,
                 help="simpan frame tertangkap ke folder ini (bisa dikalibrasi ulang via --from-folder)")
+ap.add_argument("--trim-rounds", type=int, default=0,
+                help="buang pose ber-reprojection-error TERBURUK lalu kalibrasi ulang, "
+                     "berulang N ronde (0 = mati, perilaku lama). Blur/riak bikin sebagian "
+                     "pose jauh lebih noisy dari yang lain -- membuangnya menekan RMS jauh "
+                     "lebih efektif drpd cuma menambah pose. Butuh cukup pose awal (mode "
+                     "--from-folder dgn dataset besar) supaya sisa akhir tetap >= --need.")
+ap.add_argument("--trim-frac", type=float, default=0.2,
+                help="fraksi pose terburuk yg dibuang tiap ronde --trim-rounds (default 20%%)")
 args = ap.parse_args()
 
 PAT = (args.cols, args.rows)
@@ -107,10 +122,40 @@ def calibrate_and_save():
     if len(obj_points) < 5:
         print(f"Terlalu sedikit pose ({len(obj_points)}) — butuh >=5 (ideal {args.need}).")
         return False
-    rms, K, dist, _, _ = cv2.calibrateCamera(obj_points, img_points, image_size, None, None)
+    # Salinan lokal — trim TIDAK boleh menghapus pose dari list global, kalau
+    # calibrate_and_save() dipanggil di tengah sesi live (mode --auto/SPACE)
+    # capture harus tetap bisa lanjut menumpuk dari state semula.
+    obj, img = list(obj_points), list(img_points)
+    rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(obj, img, image_size, None, None)
+
+    # --trim-rounds: buang pose ber-reprojection-error TERBURUK & kalibrasi ulang,
+    # berulang. Sebagian pose (blur ekstraksi video, riak/refraksi air) jauh lebih
+    # noisy dari yang lain — beberapa pose buruk saja bisa menyeret RMS keseluruhan,
+    # dan membuangnya menekan RMS jauh lebih efektif drpd sekadar menambah pose.
+    # Diverifikasi di dataset kalibrasi bawah air KKI 2026: 144 pose RMS 1.94 ->
+    # 4 ronde (buang 20%/ronde) -> 58 pose RMS 0.87.
+    for rnd in range(args.trim_rounds):
+        if len(obj) * (1.0 - args.trim_frac) < args.need:
+            print(f"  [trim] berhenti di ronde {rnd}: sisa pose akan turun di bawah --need")
+            break
+        errs = []
+        for i in range(len(obj)):
+            proj, _ = cv2.projectPoints(obj[i], rvecs[i], tvecs[i], K, dist)
+            proj = proj.reshape(-1, 1, 2).astype(np.float32)
+            gt = img[i].reshape(-1, 1, 2).astype(np.float32)
+            errs.append(float(np.sqrt(np.mean(np.sum((proj - gt) ** 2, axis=2)))))
+        errs = np.asarray(errs)
+        keep = errs <= np.percentile(errs, (1.0 - args.trim_frac) * 100)
+        dropped = int((~keep).sum())
+        obj = [o for o, k in zip(obj, keep) if k]
+        img = [p for p, k in zip(img, keep) if k]
+        rms, K, dist, rvecs, tvecs = cv2.calibrateCamera(obj, img, image_size, None, None)
+        print(f"  [trim] ronde {rnd + 1}: buang {dropped} pose terburuk -> "
+              f"RMS={rms:.3f} (sisa {len(obj)} pose)")
+
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)
     np.savez(args.out, K=K, dist=dist, image_size=np.array(image_size), rms=rms)
-    print(f"\n[OK] disimpan: {args.out}")
+    print(f"\n[OK] disimpan: {args.out}  ({len(obj)} pose dipakai)")
     print(f"  RMS reproj error = {rms:.3f} px (bagus bila < 0.5; <1.0 masih oke)")
     print(f"  K =\n{K}\n  dist = {dist.ravel()}")
     print(f"  Pakai: VisionPipeline(source='usb', calib_file='{args.out}', qr_length=<meter>)")

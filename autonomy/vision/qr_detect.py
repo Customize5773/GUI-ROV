@@ -107,6 +107,11 @@ CLAHE_CLIP   = 2.0     # kekuatan penyetaraan kontras lokal (CLAHE) — lawan gl
 CLAHE_TILE   = 8       # ukuran grid CLAHE (tile CLAHE_TILE×CLAHE_TILE)
 UPSCALE      = 2.0     # faktor perbesaran saat QR terlalu kecil utk pyzbar
 STACK_N      = 3       # jumlah frame utk median-stack jenjang-5 (lawan riak/kaustik transien)
+# Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
+# + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
+# global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
+ADAPT_BLOCK  = 31
+ADAPT_C      = 5
 
 
 def _to_gray_clahe(frame):
@@ -114,6 +119,13 @@ def _to_gray_clahe(frame):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     clahe = cv2.createCLAHE(clipLimit=CLAHE_CLIP, tileGridSize=(CLAHE_TILE, CLAHE_TILE))
     return clahe.apply(gray)
+
+
+def _adaptive_thresh(gray):
+    """Binerisasi adaptif di atas grayscale (CLAHE) — pisahkan modul QR dari
+    latar berfaset/beriak yang lolos dari normalisasi kontras CLAHE saja."""
+    return cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                                 cv2.THRESH_BINARY, ADAPT_BLOCK, ADAPT_C)
 
 
 def _pyzbar_qr(img, scale=1.0):
@@ -137,8 +149,10 @@ def decode_qr(frame, enhance=True):
     Jenjang (berhenti di jenjang pertama yang berhasil):
       1. pyzbar pada frame mentah (cepat, kasus QR jelas).
       2. pyzbar pada grayscale + CLAHE (cahaya tak rata / glare).
-      3. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
-      4. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
+      3. pyzbar pada grayscale+CLAHE yang di-adaptive-threshold (pisahkan modul
+         QR dari lantai berfaset/riak — beda mekanisme dari CLAHE saja).
+      4. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
+      5. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
     enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B)."""
     if not CV2_OK:
         return []
@@ -148,6 +162,9 @@ def decode_qr(frame, enhance=True):
             return res
         gray_clahe = _to_gray_clahe(frame)
         res = _pyzbar_qr(gray_clahe, 1.0)
+        if res:
+            return res
+        res = _pyzbar_qr(_adaptive_thresh(gray_clahe), 1.0)
         if res:
             return res
         big = cv2.resize(gray_clahe, None, fx=UPSCALE, fy=UPSCALE,
