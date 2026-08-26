@@ -24,6 +24,11 @@ shift || true
 #       autonomy/tools/run_gazebo_backend.sh DIVE
 WORLD="${WORLD:-pool_practice_arena.sdf}"
 POOL_CONFIG="${POOL_CONFIG:-config/pool_trial.yaml}"
+# GAZEBO_CONFIG: layer ke-3, ditumpuk PALING AKHIR (menang atas POOL_CONFIG).
+# Default = override wall_heading yg cuma valid lawan Gazebo (world default
+# py 4 hook 1/dinding), BUKAN kolam latihan fisik (cuma 1 hook, itu sebabnya
+# tak dimasukkan ke pool_trial.yaml sendiri). Kosongkan kalau tak perlu.
+GAZEBO_CONFIG="${GAZEBO_CONFIG:-config/gazebo_sim.yaml}"
 
 echo "[1/4] Membersihkan sisa proses sim lama (kalau ada)..."
 # ros_gz_bridge/parameter_bridge & robot_state_publisher TIDAK match pola
@@ -74,6 +79,7 @@ echo "[4/4] Menjalankan mission5.py (start-state=$START_STATE)..."
 cd "$GUI_ROV/autonomy"
 python3 fsm/mission5.py --vision mock --config config/rov_tuned.yaml \
     ${POOL_CONFIG:+--config "$POOL_CONFIG"} \
+    ${GAZEBO_CONFIG:+--config "$GAZEBO_CONFIG"} \
     --start-state "$START_STATE" --no-wait-autonomous "$@"
 
 echo "Selesai. Sim (PID $SIM_PID) masih jalan di background -- 'kill $SIM_PID' atau" \
