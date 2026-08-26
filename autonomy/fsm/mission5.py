@@ -157,6 +157,18 @@ M5_LOCK_GRACE_T    = 0.6      # detik hold saat dropout sesaat sebelum mulai men
 # SEMUA angka detik di bawah adalah TEBAKAN sampai SEARCH_SPEED dikalibrasi ke m/s di
 # kolam (surge 20% selama 10 s, ukur jarak) — lihat ROADMAP_MISI5.md Fase 3.
 TIMEOUT_SEARCH     = 90.0     # detik max pencarian sebelum degradasi ke fallback timed
+
+# ── Jam total heat (jaga-jaga di ATAS jumlah TIMEOUT_* per state) ────────────
+# Tiap TIMEOUT_* di atas independen per state — dijumlahkan berurutan, worst-case
+# misi 5 saja (SEARCH+DOCK+ENGAGE+UNHOOK+ASCEND) >2,5 menit, DI LUAR misi 1-4.
+# TIME_BUDGET_TOTAL adalah pagar KEDUA: kalau waktu heat tersisa sudah lebih
+# kecil dari kebutuhan MINIMUM buat menuntaskan sisa rantai lewat fallback
+# tercepat, state lompat ke fallback SEKARANG alih-alih menghabiskan timeout-nya
+# sendiri dulu — menjamin M5_FALLBACK (yang tetap kasih skor) sempat jalan
+# sebelum peluit, bukan terpotong ABORT diam. Default besar (lebih dari jumlah
+# semua TIMEOUT_* gabungan) supaya SITL/simulator existing TIDAK berubah
+# perilaku kecuali tim mengetatkan lewat --config sesuai durasi heat venue.
+TIME_BUDGET_TOTAL  = 600.0    # detik — TUNE ke durasi heat KKI via --config
 SEARCH_SPEED       = 20       # % surge saat mundur & menyusur (seordo DOCK_APPROACH_SPEED)
 SEARCH_BACKOFF_T   = 6.0      # detik mundur perlebar FOV (~1.2 m; HFOV 60° ⇒ ±0.87 m dari 1.5 m)
 SEARCH_LOOK_T      = 2.0      # detik diam menghadap dinding (≥3 frame vision @10 Hz)
@@ -373,6 +385,7 @@ class Mission5FSM:
 
         self._state   = State.IDLE
         self._state_t = time.time()   # waktu masuk state saat ini
+        self._mission_t0 = None       # diisi start() — None = belum mulai (_time_left "banyak")
         self._target_wall: Optional[str] = None
         self._score   = {'m1': 0, 'm2': 0, 'm3': 0, 'm4': 0, 'm5': 0}
         self._running = False
@@ -410,6 +423,8 @@ class Mission5FSM:
             # Hasil decode QR terakhir dari pipeline vision Python (bukan scan
             # jsQR di browser) — dibaca readout QR di halaman Control.
             'qr_data': None, 'qr_wall': None,
+            # Sisa jam heat (detik) — lihat _time_left(). None sampai start().
+            'time_left': None,
         }
 
     # ── Public API ────────────────────────────────────────────────────────────
@@ -443,6 +458,7 @@ class Mission5FSM:
             return
         self.cmd.arm(True)          # WAJIB: arm dulu sebelum thruster merespons
         time.sleep(0.5)
+        self._mission_t0 = time.time()
         self._transition(start_state)
         self._loop()
 
@@ -492,6 +508,7 @@ class Mission5FSM:
         while self._running and self._state not in (State.DONE, State.ABORT):
             telem = self.telem.get()
             self.telemetry_out['state'] = self._state.name
+            self.telemetry_out['time_left'] = round(self._time_left(), 1)
 
             # QR terakhir yang masih segar, independen dari state saat ini —
             # supaya operator lihat hasil scan pipeline vision di GUI kapan pun.
@@ -835,10 +852,28 @@ class Mission5FSM:
                 log.warning("[FSM] DOCK hook tak terakuisisi %.1fs — degradasi timed", elapsed)
                 self._enter_dock_fallback()
             else:
-                # Cari hook: merayap pelan ke dinding sambil sapu terarah ke sisi terakhir
-                self.cmd.send(surge=int(DOCK_APPROACH_SPEED * 0.5),
+                # Cari hook: merayap pelan ke dinding + turun ke level hook (0.45m) sambil
+                # sapu terarah ke sisi terakhir. WAJIB turun: DOCK masuk dari SURFACE
+                # (depth~0.05m) sedangkan hook fisik ada di HOOK_DEPTH (0.45m) — kamera
+                # depan terpasang LEVEL (tanpa tunduk), jadi tanpa koreksi depth ini hook
+                # selalu di luar FOV vertikal sepanjang pencarian (root cause DOCK 0%
+                # akuisisi, lihat memory dock-hook-acquisition-depth-mismatch).
+                # Proporsional (bukan bang-bang spt HANG): diuji live di Gazebo — bang-bang
+                # penuh (-DIVE_SPEED) numpuk momentum & OVERSHOOT ~0.3m sampai nabrak dasar
+                # kolam (target 0.415m, dasar cuma 0.8m, jarak aman tipis). Proporsional
+                # mengecil otomatis mendekati target (diverifikasi konvergen ke pita
+                # 0.35-0.53m tanpa overshoot ke dasar), tak butuh tuning gain halus.
+                depth = telem.get('depth', 0.0)
+                depth_err = HOOK_DEPTH - depth       # positif = perlu turun
+                if depth_err > DEPTH_TOLERANCE:
+                    vert = -min(DIVE_SPEED, max(10, int(depth_err * 60)))
+                elif depth_err < -DEPTH_TOLERANCE:
+                    vert = min(ASCEND_SPEED, max(10, int(-depth_err * 60)))
+                else:
+                    vert = 0
+                self.cmd.send(surge=int(DOCK_APPROACH_SPEED * 0.5), vert=vert,
                               yaw=YAW_SPEED * self._hook_search_dir)
-                log.debug("[FSM] DOCK cari hook dir=%+d", self._hook_search_dir)
+                log.debug("[FSM] DOCK cari hook depth=%.2f dir=%+d", depth, self._hook_search_dir)
             return
 
         self._note_hook(det)
@@ -1049,6 +1084,12 @@ class Mission5FSM:
             self.cmd.stop_all()
             self._transition(State.M5_FALLBACK)
             return
+        if self._time_left() < self._min_time_needed_from(State.M5_SEARCH):
+            log.warning("[FSM] Waktu heat tersisa %.0fs < kebutuhan minimum → "
+                        "degradasi dini dari M5_SEARCH", self._time_left())
+            self.cmd.stop_all()
+            self._transition(State.M5_FALLBACK)
+            return
 
         # ── (a) Reakuisisi berprioritas ──────────────────────────────────────
         qr = self._fresh_payload(0.5)
@@ -1179,6 +1220,12 @@ class Mission5FSM:
             self.cmd.stop_all()
             self._transition(State.M5_FALLBACK)
             return
+        if self._time_left() < self._min_time_needed_from(State.M5_DOCK):
+            log.warning("[FSM] Waktu heat tersisa %.0fs < kebutuhan minimum → "
+                        "degradasi dini dari M5_DOCK", self._time_left())
+            self.cmd.stop_all()
+            self._transition(State.M5_FALLBACK)
+            return
 
         det = self._fresh_payload(0.5)
         if det is None:
@@ -1208,6 +1255,11 @@ class Mission5FSM:
         elapsed = self._elapsed()
         if elapsed > TIMEOUT_M5_ENGAGE:
             log.warning("[FSM] M5_ENGAGE timeout — degradasi ke fallback timed")
+            self._transition(State.M5_FALLBACK)
+            return
+        if self._time_left() < self._min_time_needed_from(State.M5_ENGAGE):
+            log.warning("[FSM] Waktu heat tersisa %.0fs < kebutuhan minimum → "
+                        "degradasi dini dari M5_ENGAGE", self._time_left())
             self._transition(State.M5_FALLBACK)
             return
 
@@ -1377,6 +1429,26 @@ class Mission5FSM:
 
     def _elapsed(self) -> float:
         return time.time() - self._state_t
+
+    def _time_left(self) -> float:
+        """Detik tersisa dari TIME_BUDGET_TOTAL sejak start(). Belum start()
+        (mission_t0 None, mis. dipanggil dari test tanpa start()) dianggap
+        'banyak waktu' — kembalikan budget penuh, bukan 0 (0 akan memicu
+        degradasi dini yang keliru sebelum misi benar-benar berjalan)."""
+        if self._mission_t0 is None:
+            return TIME_BUDGET_TOTAL
+        return TIME_BUDGET_TOTAL - (time.time() - self._mission_t0)
+
+    def _min_time_needed_from(self, state: State) -> float:
+        """Waktu MINIMUM yang masih dibutuhkan untuk menuntaskan sisa rantai
+        misi 5 dari `state` lewat fallback tercepat (bukan jalur visual penuh)
+        — dipakai sbg ambang degradasi dini di _time_left()."""
+        chain = {
+            State.M5_SEARCH: TIMEOUT_M5_DOCK + TIMEOUT_M5_ENGAGE + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
+            State.M5_DOCK:   TIMEOUT_M5_ENGAGE + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
+            State.M5_ENGAGE: TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
+        }
+        return chain.get(state, 0.0)
 
     @staticmethod
     def _heading_error(current, target) -> float:

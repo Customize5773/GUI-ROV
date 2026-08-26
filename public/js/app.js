@@ -54,12 +54,14 @@ const els = {
   btnGripOpen: $("btnGripOpen"), btnGripClose: $("btnGripClose"),
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
+  mission5TimeLeft: $("mission5TimeLeft"),
   m2Fails: $("m2Fails"), m2Score: $("m2Score"), m3Fails: $("m3Fails"), m3Score: $("m3Score"),
   runLastFile: $("runLastFile"), runLastResult: $("runLastResult"),
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"),
   depthHoldBadge: $("depthHoldBadge"),
+  poolDepthBadge: $("poolDepthBadge"),
   cmdLinkBanner: $("cmdLinkBanner"),
   markBadge: $("markBadge"),
   modeActual: $("modeActual"),
@@ -397,6 +399,7 @@ function applyTelemetry(d) {
   els.depthTarget.textContent = num(d.depth_target, 2);
   applyDepthHold(d);
   applyMarkBadge(d);
+  applyPoolDepth(d);
   applyCmdLink(d);
 }
 
@@ -424,6 +427,17 @@ function applyDepthHold(d) {
 
   els.depthHoldBadge.textContent = holding ? "DEPTH-HOLD ON" : "DEPTH-HOLD OFF";
   els.depthHoldBadge.classList.toggle("badge--ok", holding);
+}
+
+/* Echo pool_depth dari wahana (rov_agent.py state["pool_depth"]) — GUI cuma
+   MENGIRIM nilai ini (lihat sendCmd("pool_depth", ...) di onopen & setup.js),
+   sebelumnya tak pernah dikonfirmasi kembali kalau wahana benar menerimanya. */
+function applyPoolDepth(d) {
+  if (!els.poolDepthBadge) return;
+  const dep = d.pool_depth;
+  const known = Number.isFinite(dep);
+  els.poolDepthBadge.textContent = known ? `KOLAM ${dep.toFixed(2)} m` : "KOLAM —";
+  els.poolDepthBadge.classList.toggle("badge--ok", known);
 }
 
 /* banner "LINK PERINTAH TERPUTUS" — nyala saat Pi substitusi axis netral
@@ -480,6 +494,8 @@ function applyMission5(m5) {
     els.mission5Z.textContent = "—";
     els.mission5OffX.textContent = "—";
     els.mission5OffY.textContent = "—";
+    els.mission5TimeLeft.textContent = "—";
+    els.mission5TimeLeft.className = "readout__v";
     drawHookBbox(null);
     return;
   }
@@ -493,6 +509,11 @@ function applyMission5(m5) {
   els.mission5Z.textContent = num(m5.distance_z, 2);
   els.mission5OffX.textContent = num(m5.offset_x, 1);
   els.mission5OffY.textContent = num(m5.offset_y, 1);
+  // Pagar C (time-budget dinamis, lihat fsm/mission5.py TIME_BUDGET_TOTAL) —
+  // merah begitu sisa < 30s supaya pilot lihat degradasi dini akan/sedang terjadi.
+  const tLeft = m5.time_left;
+  els.mission5TimeLeft.textContent = tLeft == null ? "—" : Math.round(tLeft);
+  els.mission5TimeLeft.className = "readout__v" + (tLeft != null && tLeft < 30 ? " is-fault" : "");
   drawHookBbox(m5);
 
   // Run baru saja berakhir → tarik ringkasannya. Ditunda sesaat karena FSM menulis

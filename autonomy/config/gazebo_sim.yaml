@@ -1,0 +1,36 @@
+# config/gazebo_sim.yaml — HANYA utk uji closed-loop lawan Gazebo (ros2_ws),
+# JANGAN dipakai di kolam/hardware asli.
+#
+# Riwayat: dulu file ini override depth.target_bottom (0.78) utk kompensasi
+# FOV kamera sim yg lebih lebar drpd kamera DWE asli. Root cause itu SUDAH
+# diperbaiki langsung di horizontal_fov kamera sim (hydroships.urdf.xacro,
+# fx sim skrg 457 @ 640px setara fx asli 914 @ 1280px) -- lihat catatan
+# sim-camera-fov-calibrated. target_bottom default (0.70) sudah cukup, hack
+# ini DIHAPUS 26 Agu supaya tak lagi bentrok dgn lantai kolam baru (z=-0.80,
+# 0.78 cuma sisa 0.02m dari lantai -- jauh di bawah bottom_clearance 0.25m
+# yg dimaksud pool_trial.yaml, resiko gripper nabrak dasar).
+#
+# Isi SEKARANG: override wall_heading. World Gazebo default
+# (pool_practice_arena.sdf) sengaja punya 4 hook (satu per dinding, A/B/C/D)
+# supaya jalur "pilih dinding sesuai QR" bisa diuji -- tapi pool_trial.yaml
+# (default POOL_CONFIG, geometri kolam LATIHAN FISIK yg cuma 1 hook) set
+# wall_heading semua = 0 sesuai kondisi fisik itu. Ditumpuk di sini (file
+# belakangan menang) utk mengembalikan heading per-dinding yg benar KHUSUS
+# saat diuji lawan Gazebo -- pool_trial.yaml sendiri TIDAK diubah krn tetap
+# jadi acuan kolam latihan fisik yg sesungguhnya cuma 1 hook.
+# Nilai sama persis dgn default bawaan mission5.py & pool_kki_trial.yaml
+# (A=270,B=90,C=0,D=180), sesuai konvensi A=-Y,B=+Y,C=+X,D=-X di
+# pool_practice_arena.sdf (hook_a selatan, hook_b utara, hook_c timur,
+# hook_d barat).
+#
+# Pakai (file belakangan menang, override rov_tuned.yaml + pool_trial.yaml):
+#   python fsm/mission5.py --config config/rov_tuned.yaml \
+#       --config config/pool_trial.yaml --config config/gazebo_sim.yaml \
+#       --vision rtsp --bottom-url http://127.0.0.1:8090/cam_bottom --wall-url http://127.0.0.1:8090/cam_front
+# (run_gazebo_backend.sh sudah menumpuk ketiganya secara default.)
+
+wall_heading:
+  A: 270
+  B: 90
+  C: 0
+  D: 180

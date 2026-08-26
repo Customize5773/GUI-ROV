@@ -80,6 +80,9 @@ def test_decode_qr_escalates_to_upscale_and_rescales_coords(monkeypatch):
         return [_FakeSym(b'{"id":"A"}',
                          [(200, 200), (240, 200), (240, 240), (200, 240)])]
 
+    # Kanvas seragam tak punya quiet zone nyata — bypass gate itu, test ini soal
+    # urutan/hitungan eskalasi jenjang, bukan geometri quiet zone (diuji terpisah).
+    monkeypatch.setattr(qd, '_quiet_zone_ok', lambda *a, **kw: True)
     monkeypatch.setattr(qd.pyzbar, 'decode', fake_decode)
     frame = np.full((480, 640, 3), 128, np.uint8)
     res = qd.decode_qr(frame, enhance=True)
@@ -108,6 +111,7 @@ def test_decode_qr_escalates_to_adaptive_threshold(monkeypatch):
         return [_FakeSym(b'{"id":"B"}',
                          [(10, 10), (50, 10), (50, 50), (10, 50)])]
 
+    monkeypatch.setattr(qd, '_quiet_zone_ok', lambda *a, **kw: True)
     monkeypatch.setattr(qd.pyzbar, 'decode', fake_decode)
     frame = np.full((480, 640, 3), 128, np.uint8)
     res = qd.decode_qr(frame, enhance=True)
@@ -165,6 +169,50 @@ def test_decode_qr_no_qr_returns_empty():
     from vision.qr_detect import decode_qr
     blank = np.full((480, 640, 3), 200, np.uint8)
     assert decode_qr(blank) == []
+
+
+# ── Gate quiet-zone (port dari ros2_ws qr_logic.py) ────────────────────────────
+def test_quiet_zone_ok_accepts_real_qr_border():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    segno = pytest.importorskip("segno")
+    from vision.qr_detect import _quiet_zone_ok
+    from pyzbar import pyzbar
+
+    text = '{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}'
+    qr = _render_qr_bgr(cv2, np, segno, text, module_px=8)
+    frame, _ = _place_on_canvas(cv2, np, qr)
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    objs = pyzbar.decode(frame)
+    assert objs, "setup test rusak: QR asli harus terbaca pyzbar"
+    pts = np.array([[p.x, p.y] for p in objs[0].polygon], dtype=np.float32)
+    assert _quiet_zone_ok(gray, pts) is True
+
+
+def test_quiet_zone_ok_rejects_silhouette_without_border():
+    """Kontur mirip QR TANPA quiet zone putih di sekelilingnya (mis. siluet hook/
+    dinding yg kebetulan membentuk quad) — harus DITOLAK meski geometrinya valid."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import _quiet_zone_ok
+
+    gray = np.full((480, 640), 60, np.uint8)          # kanvas gelap seragam
+    cv2.rectangle(gray, (280, 200), (360, 280), 90, thickness=-1)  # "quad" sedikit lebih terang
+    pts = np.array([[280, 200], [360, 200], [360, 280], [280, 280]], dtype=np.float32)
+    assert _quiet_zone_ok(gray, pts) is False
+
+
+def test_decode_qr_rejects_fake_corner_without_quiet_zone(monkeypatch):
+    """Integrasi: pyzbar 'berhasil' decode di quad yg dikelilingi kanvas SERAGAM
+    (nol kontras quiet zone) — decode_qr harus tetap menolak di semua jenjang."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    monkeypatch.setattr(qd.pyzbar, 'decode', lambda img, *a, **kw: [
+        _FakeSym(b'{"id":"X"}', [(280, 200), (360, 200), (360, 280), (280, 280)])])
+    frame = np.full((480, 640, 3), 128, np.uint8)     # tak ada quiet zone di mana pun
+    assert qd.decode_qr(frame, enhance=True) == []
 
 
 # ── Jenjang-5: median-stack antar-frame (lawan riak/kaustik transien) ──────────
