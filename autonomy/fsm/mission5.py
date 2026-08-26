@@ -852,10 +852,28 @@ class Mission5FSM:
                 log.warning("[FSM] DOCK hook tak terakuisisi %.1fs — degradasi timed", elapsed)
                 self._enter_dock_fallback()
             else:
-                # Cari hook: merayap pelan ke dinding sambil sapu terarah ke sisi terakhir
-                self.cmd.send(surge=int(DOCK_APPROACH_SPEED * 0.5),
+                # Cari hook: merayap pelan ke dinding + turun ke level hook (0.45m) sambil
+                # sapu terarah ke sisi terakhir. WAJIB turun: DOCK masuk dari SURFACE
+                # (depth~0.05m) sedangkan hook fisik ada di HOOK_DEPTH (0.45m) — kamera
+                # depan terpasang LEVEL (tanpa tunduk), jadi tanpa koreksi depth ini hook
+                # selalu di luar FOV vertikal sepanjang pencarian (root cause DOCK 0%
+                # akuisisi, lihat memory dock-hook-acquisition-depth-mismatch).
+                # Proporsional (bukan bang-bang spt HANG): diuji live di Gazebo — bang-bang
+                # penuh (-DIVE_SPEED) numpuk momentum & OVERSHOOT ~0.3m sampai nabrak dasar
+                # kolam (target 0.415m, dasar cuma 0.8m, jarak aman tipis). Proporsional
+                # mengecil otomatis mendekati target (diverifikasi konvergen ke pita
+                # 0.35-0.53m tanpa overshoot ke dasar), tak butuh tuning gain halus.
+                depth = telem.get('depth', 0.0)
+                depth_err = HOOK_DEPTH - depth       # positif = perlu turun
+                if depth_err > DEPTH_TOLERANCE:
+                    vert = -min(DIVE_SPEED, max(10, int(depth_err * 60)))
+                elif depth_err < -DEPTH_TOLERANCE:
+                    vert = min(ASCEND_SPEED, max(10, int(-depth_err * 60)))
+                else:
+                    vert = 0
+                self.cmd.send(surge=int(DOCK_APPROACH_SPEED * 0.5), vert=vert,
                               yaw=YAW_SPEED * self._hook_search_dir)
-                log.debug("[FSM] DOCK cari hook dir=%+d", self._hook_search_dir)
+                log.debug("[FSM] DOCK cari hook depth=%.2f dir=%+d", depth, self._hook_search_dir)
             return
 
         self._note_hook(det)
