@@ -924,6 +924,26 @@ def test_m5_search_timeout_degrades_to_fallback():
     assert fsm._state == m5.State.M5_FALLBACK
 
 
+# ── Time-budget dinamis: jam TOTAL heat di ATAS timeout per state ────────────
+def test_m5_search_budget_low_degrades_early_to_fallback():
+    """Waktu heat hampir habis → degradasi SEKARANG, walau _elapsed() masih jauh
+    di bawah TIMEOUT_SEARCH — pagar kedua supaya M5_FALLBACK sempat jalan
+    sebelum peluit, bukan terpotong di tengah rantai."""
+    fsm, plant, clock = _search_fsm(lat=99.0)
+    min_needed = fsm._min_time_needed_from(m5.State.M5_SEARCH)
+    fsm._mission_t0 = m5.time.time() - (m5.TIME_BUDGET_TOTAL - min_needed + 1)
+    fsm._state_m5_search(plant.telemetry())
+    assert fsm._state == m5.State.M5_FALLBACK
+
+
+def test_m5_search_budget_ample_no_early_degrade():
+    """Waktu heat masih banyak → perilaku LAMA utuh, tak ada degradasi dini."""
+    fsm, plant, clock = _search_fsm(lat=99.0)
+    fsm._mission_t0 = m5.time.time()   # baru mulai — budget penuh
+    fsm._state_m5_search(plant.telemetry())
+    assert fsm._state == m5.State.M5_SEARCH
+
+
 def test_m5_redive_hands_over_to_search_not_blind_spin():
     """Sampai di kedalaman mark tanpa QR → menyisir lateral, BUKAN berputar di tempat."""
     fsm, plant, clock = _search_fsm(depth=0.45, lat=99.0)

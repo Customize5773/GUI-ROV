@@ -128,16 +128,64 @@ def _adaptive_thresh(gray):
                                  cv2.THRESH_BINARY, ADAPT_BLOCK, ADAPT_C)
 
 
-def _pyzbar_qr(img, scale=1.0):
+def _quiet_zone_ok(gray, pts):
+    """True bila ring sempit di luar quad QR dominan terang (quiet zone putih QR asli).
+
+    Menolak false-positive korner-QR dari siluet hook/dinding/bayangan tanpa quiet
+    zone putih di sekelilingnya (diadaptasi dari ros2_ws qr_logic.py, lihat memory
+    qr-underwater-robustness-limits). Relatif thd kecerahan dalam quad (bukan ambang
+    absolut) agar kebal variasi pencahayaan.
+
+    Ring & inner mengikuti BENTUK quad asli (di-scale dari centroid), bukan lingkaran
+    di sekitar jarak rata-rata sudut — versi ros2_ws asli pakai anulus lingkaran, tapi
+    itu salah-geometri utk quad persegi (di sudut lingkaran pas di quiet zone, di
+    tengah sisi lingkaran sudah jauh melewati quiet zone ke background) — QR sintetis
+    axis-aligned GUI-ROV gagal krn ini, diverifikasi numerik saat port (rasio 1.22 vs
+    ambang asli 1.25, harusnya jelas lolos).
+
+    Ambang asli ros2_ws (1.25) JUGA dikalibrasi ulang ke 1.10: diukur empiris rasio
+    ring/inner QR ASLI (bukan false-positive) di simulasi bawah air GUI-ROV
+    (`tests/underwater_sim.py`, semua level x seed) — turun sampai ~1.19 di kondisi
+    'deep' (haze+blur+warna, tanpa riak); 1.25 akan menolak decode SAH itu. 1.10
+    tetap jelas memisahkan dari siluet tanpa quiet zone sama sekali (rasio ~1.0)."""
+    if gray is None or pts is None or len(pts) < 4:
+        return False
+    q = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+    c = q.mean(axis=0)
+    h, w = gray.shape[:2]
+
+    def _poly_mask(scale):
+        poly = (c + (q - c) * scale).astype(np.int32)
+        m = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(m, [poly], 255)
+        return m > 0
+
+    inner_mask = _poly_mask(0.6)
+    outer_mask = _poly_mask(1.3) & ~_poly_mask(1.02)
+    inner = gray[inner_mask]
+    ring = gray[outer_mask]
+    if ring.size == 0 or inner.size == 0:
+        return False
+    return float(ring.mean()) > 1.10 * float(inner.mean())
+
+
+def _pyzbar_qr(img, scale=1.0, gray_for_gate=None):
     """Decode QR dgn pyzbar; kembalikan list {data, pts} dgn pts di koordinat frame ASLI
-    (dibagi `scale` bila img sudah diperbesar). Hanya simbol tipe QRCODE."""
+    (dibagi `scale` bila img sudah diperbesar). Hanya simbol tipe QRCODE.
+
+    `gray_for_gate` (opsional): grayscale SKALA SAMA dgn `img` (sebelum scale/upscale
+    dibalik) dipakai `_quiet_zone_ok` — bila None, gate dilewati (dipakai saat caller
+    sudah menggate sendiri, mis. fallback cv2.QRCodeDetector)."""
     out = []
     for obj in pyzbar.decode(img):
         if getattr(obj, 'type', 'QRCODE') != 'QRCODE':
             continue
+        pts_scaled = np.array([[p.x, p.y] for p in obj.polygon], dtype=np.float32)
+        if gray_for_gate is not None and not _quiet_zone_ok(gray_for_gate, pts_scaled):
+            continue
         # JANGAN .upper() — isi QR payload = JSON (key/nilai case-sensitive).
         data = obj.data.decode('utf-8', 'ignore').strip()
-        pts = np.array([[p.x / scale, p.y / scale] for p in obj.polygon], dtype=np.float32)
+        pts = pts_scaled / scale
         out.append({'data': data, 'pts': pts})
     return out
 
@@ -153,36 +201,42 @@ def decode_qr(frame, enhance=True):
          QR dari lantai berfaset/riak — beda mekanisme dari CLAHE saja).
       4. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
       5. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
-    enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B)."""
+    enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B).
+
+    Tiap jenjang di-gate `_quiet_zone_ok` — kandidat tanpa quiet zone putih (mis.
+    siluet hook/dinding/bayangan yg kebetulan membentuk quad) DIBUANG dari jenjang
+    itu; kalau semua kandidat jenjang gugur, lanjut ke jenjang berikutnya seakan
+    jenjang itu gagal total (bukan berhenti di kandidat pertama tak tergate)."""
     if not CV2_OK:
         return []
+    gray_raw = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
     if PYZBAR_OK:
-        res = _pyzbar_qr(frame, 1.0)
+        res = _pyzbar_qr(frame, 1.0, gray_for_gate=gray_raw)
         if res or not enhance:
             return res
         gray_clahe = _to_gray_clahe(frame)
-        res = _pyzbar_qr(gray_clahe, 1.0)
+        res = _pyzbar_qr(gray_clahe, 1.0, gray_for_gate=gray_clahe)
         if res:
             return res
-        res = _pyzbar_qr(_adaptive_thresh(gray_clahe), 1.0)
+        adapt = _adaptive_thresh(gray_clahe)
+        res = _pyzbar_qr(adapt, 1.0, gray_for_gate=gray_clahe)
         if res:
             return res
         big = cv2.resize(gray_clahe, None, fx=UPSCALE, fy=UPSCALE,
                          interpolation=cv2.INTER_CUBIC)
-        res = _pyzbar_qr(big, UPSCALE)
+        res = _pyzbar_qr(big, UPSCALE, gray_for_gate=big)
         if res:
             return res
     # Fallback: detektor QR bawaan OpenCV (kadang berhasil di mana pyzbar gagal, & sebaliknya)
     if enhance and hasattr(cv2, 'QRCodeDetector'):
         try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-            ok, decoded, points, _ = cv2.QRCodeDetector().detectAndDecodeMulti(gray)
+            ok, decoded, points, _ = cv2.QRCodeDetector().detectAndDecodeMulti(gray_raw)
             if ok and points is not None:
                 out = []
                 for data, quad in zip(decoded, points):
-                    if data:
-                        out.append({'data': str(data).strip(),
-                                    'pts': np.asarray(quad, dtype=np.float32).reshape(-1, 2)})
+                    pts = np.asarray(quad, dtype=np.float32).reshape(-1, 2)
+                    if data and _quiet_zone_ok(gray_raw, pts):
+                        out.append({'data': str(data).strip(), 'pts': pts})
                 if out:
                     return out
         except cv2.error:
