@@ -273,6 +273,10 @@ function applyTelemetry(d) {
   // tare dua kali di sini akan memotong depth yang sama dua kali lipat.
   els.heading.textContent = num(d.heading, 0);
   els.depth.textContent = num(d.depth, 2);
+  if (els.depthTarget) {
+    els.depthTarget.textContent =
+      Number.isFinite(d.depth_target) ? num(d.depth_target, 2) : "—";
+  }
   // altitude = ketinggian ROV (titik tengah) di atas dasar kolam
   if (els.alt) {
     const alt = Number.isFinite(d.depth) ? Math.max(0, CONFIG.POOL_DEPTH - d.depth) : null;
@@ -779,12 +783,13 @@ function connect() {
     else log(`Uji thruster T${msg.motor} GAGAL: ${msg.reason || "tidak ada respon"}`, "err");
     toPage("setup", "onMotorTestAck", msg);
   }
-  else if (msg.type === "camera_resolution_ack") {
+   else if (msg.type === "camera_resolution_ack") {
     // Balasan panel Camera Stream (Setup) — restart mjpg-streamer di Pi.
     if (msg.ok) log(`Resolusi CAM ${Number(msg.camera) + 1} -> ${msg.resolution} OK`, "ok");
     else log(`Resolusi CAM ${Number(msg.camera) + 1} GAGAL: ${msg.reason || "tidak ada respon"}`, "err");
     toPage("setup", "onCameraResolutionAck", msg);
   }
+
   else if (msg.type === "mavlink_msg") { toPage("analyze", "onMavlinkMsg", msg); }
   else if (msg.type === "statustext") {
     // STATUSTEXT dari FC: inilah cara ArduSub melaporkan penolakan param &
@@ -1263,20 +1268,17 @@ const KEY_DEPTH = { ArrowUp: "depth_up", ArrowDown: "depth_down" };
 
 function getDepthApplyTarget() {
   if (!els.depthTargetInput) return null;
-
-  const raw = Number(els.depthTargetInput.value);
-  if (!Number.isFinite(raw) || raw < 0) {
+  const target = Number(els.depthTargetInput.value);
+  if (!Number.isFinite(target) || target < 0) {
     log("Target depth tidak valid. Masukkan angka >= 0 m.", "warn");
     return null;
   }
-
-  return Math.round(raw * 100) / 100;
+  return Math.round(target * 100) / 100;
 }
 
 function applyDepthTargetFromGui() {
   const target = getDepthApplyTarget();
   if (target == null) return false;
-
   sendCmd("depth_apply", target);
   log(`APPLY target depth: ${target.toFixed(2)} m`, "ok");
   return true;
@@ -1297,8 +1299,7 @@ window.addEventListener("keydown", (e) => {
     // "terus geser setpoint", tapi SET dan ON/OFF sekali-pencet — menahannya
     // hanya akan membuat saklar depth-set berkedip.
     if (e.repeat) return;
-    // Arrow UP/DOWN = APPLY target depth yang diketik di GUI.
-    // Auto-repeat diabaikan: satu tekanan = satu apply.
+    // Arrow UP/DOWN = APPLY target absolut dari GUI.
     applyDepthTargetFromGui();
     return;
   }
@@ -1611,10 +1612,10 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    /* ================= TARGET DEPTH =================
-       D-pad UP dan DOWN sama-sama APPLY angka yang sedang diketik. */
+    /* ================= TARGET DEPTH ================= */
     case "depth_up":
     case "depth_down": {
+      // Kedua D-pad menerapkan angka yang sama dari input GUI.
       applyDepthTargetFromGui();
       return;
     }
