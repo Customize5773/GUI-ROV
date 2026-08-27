@@ -2,7 +2,7 @@
 // (CAM 1 = BOTTOM, CAM 2 = WALL) + deteksi QR Code di feed BOTTOM.
 // QR menentukan sisi dinding (A/B/C/D) tempat payload digantung.
 import { CONFIG } from "../config.js";
-import { log, num, snapshotImage, makeFullscreen, camProxy } from "../core.js";
+import { log, num, snapshotImage, makeFullscreen, camProxy, setClientQr, getQrState } from "../core.js";
 
 export const cameraPage = {
   streaming: false,
@@ -127,7 +127,7 @@ export const cameraPage = {
     this.els.qrStatus = root.querySelector("#qrStatus");
     this.els.qrData = root.querySelector("#qrData");
     this.els.qrTime = root.querySelector("#qrTime");
-    root.querySelector("#qrClear").onclick = () => this._setQR(null, "Menunggu feed BOTTOM…");
+    root.querySelector("#qrClear").onclick = () => { setClientQr(null); this._renderQR("Menunggu feed BOTTOM…"); };
     root.querySelector("#qrFile").onchange = (e) => this._scanFile(e.target.files[0]);
 
     root.querySelector("#camStart").onclick = () => this._toggleStream();
@@ -147,6 +147,9 @@ export const cameraPage = {
       set(`camDepth${i}`, "D " + num(d.depth, 2) + "m");
       set(`camAlt${i}`, "ALT " + num(alt, 2) + "m");
     });
+    // biar data vision Python (mission5.qr_data/qr_wall) langsung terlihat di
+    // sini juga walau tak ada scan lokal baru — lihat core.js:getQrState
+    if (this.els.qrStatus) this._renderQR();
   },
 
   /* saat sel i fullscreen, PiP menampilkan kamera lain */
@@ -281,8 +284,8 @@ export const cameraPage = {
     if (this._lastScan && now - this._lastScan < 160) return;
     this._lastScan = now;
     const code = this._decode(img);
-    if (code) this._setQR(code.data, "QR terdeteksi");
-    else if (this.els.qrStatus.textContent === "Menunggu feed BOTTOM…") this.els.qrStatus.textContent = "Memindai…";
+    if (code) setClientQr(code.data);
+    this._renderQR();
   },
 
   _decode(source, w, h) {
@@ -316,18 +319,20 @@ export const cameraPage = {
     const url = URL.createObjectURL(file);
     im.onload = () => {
       const code = this._decode(im, im.naturalWidth, im.naturalHeight);
-      if (code) this._setQR(code.data, "QR dari gambar");
-      else this._setQR(null, "Tidak ada QR pada gambar");
+      setClientQr(code ? code.data : null);
+      this._renderQR(code ? null : "Tidak ada QR pada gambar");
       URL.revokeObjectURL(url); // bebaskan memori setelah decode
     };
-    im.onerror = () => { URL.revokeObjectURL(url); this._setQR(null, "Gagal memuat gambar"); };
+    im.onerror = () => { URL.revokeObjectURL(url); this.els.qrStatus.textContent = "Gagal memuat gambar"; };
     im.src = url;
   },
 
-  /* tampilkan hasil QR + sisi A/B/C/D */
-  _setQR(data, status) {
-    this.els.qrStatus.textContent = status || "";
-    if (!data) {
+  /* tampilkan hasil QR + sisi A/B/C/D dari sumber bersama (core.js:getQrState) —
+     sama dgn readout Control (#vQR/#vQRSide), Python diprioritaskan bila segar. */
+  _renderQR(idleStatus) {
+    const { raw, side, shown, source } = getQrState();
+    if (!raw) {
+      this.els.qrStatus.textContent = idleStatus || (this.streaming ? "Memindai…" : "Menunggu feed BOTTOM…");
       this.els.qrSide.textContent = "—";
       this.els.qrSide.className = "qr__side";
       this.els.qrData.textContent = "No QR detected";
@@ -335,26 +340,11 @@ export const cameraPage = {
       this.lastQR = "";
       return;
     }
-    // QR payload KKI 2026 = JSON terstruktur, mis:
-    //   {"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}
-    // Ambil sisi dari field "id"; fallback ke huruf sisi terisolasi ("A","SIDE_B","WALL-C")
-    // untuk QR string biasa. Regex tanpa lookbehind agar kompatibel Safari lama.
-    let side = "?", shown = data, parsed = null;
-    try { parsed = JSON.parse(data); } catch (_) { parsed = null; }
-    if (parsed && typeof parsed === "object" && typeof parsed.id === "string" &&
-        /^[ABCD]$/.test(parsed.id.trim().toUpperCase())) {
-      side = parsed.id.trim().toUpperCase();
-      const team = parsed.team ? ` · ${parsed.team}` : "";
-      const miss = parsed.mission != null ? ` · M${parsed.mission}` : "";
-      shown = `id=${side}${miss}${team}`;
-    } else {
-      const m = String(data).toUpperCase().match(/(?:^|[^A-Z])([ABCD])(?![A-Z])/);
-      side = m ? m[1] : "?";
-    }
-    this.els.qrData.textContent = shown;
-    this.els.qrSide.textContent = side;
-    this.els.qrSide.className = "qr__side qr__side--" + (side === "?" ? "unknown" : "ok");
+    this.els.qrStatus.textContent = source === "python" ? "QR terdeteksi (vision Python)" : "QR terdeteksi";
+    this.els.qrData.textContent = shown || raw;
+    this.els.qrSide.textContent = side || "?";
+    this.els.qrSide.className = "qr__side qr__side--" + (side ? "ok" : "unknown");
     this.els.qrTime.textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });
-    if (data !== this.lastQR) { log(`QR terbaca: "${data}" → sisi ${side}`, "ok"); this.lastQR = data; }
+    if (raw !== this.lastQR) { log(`QR terbaca: "${raw}" → sisi ${side || "?"}`, "ok"); this.lastQR = raw; }
   },
 };

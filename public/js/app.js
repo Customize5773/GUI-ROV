@@ -1,7 +1,7 @@
 // app.js — dashboard utama Hydroship ROV
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
-import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy } from "./core.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, getQrState } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
@@ -482,9 +482,7 @@ function drawHookBbox(m5) {
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
-  _pyQrData = (m5 && m5.qr_data) || null;
-  _pyQrWall = (m5 && m5.qr_wall) || null;
-  _pyQrAt = Date.now();
+  setPyQr(m5 && m5.qr_data, m5 && m5.qr_wall);
   renderQrReadout();
 
   if (!els.mission5State) return;
@@ -608,36 +606,32 @@ setInterval(() => {
   }
 }, 500);
 
-/* indikasi QR di strip Control. Dua sumber, pipeline Python (mission5.py,
-   dibaca via applyMission5 di bawah) diutamakan selama masih segar (misi
-   autonomous jalan) karena itu deteksi ROV sungguhan; scan jsQR lokal
-   terhadap #camImg (sama seperti halaman Camera) jadi fallback saat FSM
+/* indikasi QR di strip Control. Sumber data disatukan di core.js
+   (setPyQr/setClientQr/getQrState) supaya konsisten dengan halaman Camera:
+   pipeline Python (mission5.py, via applyMission5 di atas) diutamakan
+   selama masih segar (misi autonomous jalan) karena itu deteksi ROV
+   sungguhan; scan jsQR lokal terhadap #camImg jadi fallback saat FSM
    Python belum/tidak aktif, supaya operator tetap lihat indikasi saat manual. */
 const qrScanCanvas = document.createElement("canvas");
 let _lastQrScan = 0;
-let _pyQrData = null, _pyQrWall = null, _pyQrAt = 0;
-let _clientQrData = null;
-const PY_QR_FRESH_MS = 3000;
 
 function renderQrReadout() {
   if (!els.vQR) return;
-  const pyFresh = _pyQrData && (Date.now() - _pyQrAt < PY_QR_FRESH_MS);
-  const val = pyFresh ? _pyQrData : _clientQrData;
-  const wall = pyFresh ? _pyQrWall : null;
-  if (val) {
-    els.vQR.textContent = val;
-    els.vQR.title = `${val} — sumber: ${pyFresh ? "vision Python" : "scan lokal (browser)"}`;
+  const { raw, side, source } = getQrState();
+  if (raw) {
+    els.vQR.textContent = raw;
+    els.vQR.title = `${raw} — sumber: ${source === "python" ? "vision Python" : "scan lokal (browser)"}`;
     els.qrReadout.classList.add("is-ok");
   } else {
     els.vQR.textContent = "—";
     els.vQR.removeAttribute("title");
     els.qrReadout.classList.remove("is-ok");
   }
-  els.qrReadout.classList.toggle("is-py", !!pyFresh);
+  els.qrReadout.classList.toggle("is-py", source === "python");
   if (els.vQRSide) {
-    els.vQRSide.textContent = wall || "";
-    els.vQRSide.classList.toggle("qr__side--ok", !!wall);
-    els.vQRSide.hidden = !wall;
+    els.vQRSide.textContent = side || "";
+    els.vQRSide.classList.toggle("qr__side--ok", !!side);
+    els.vQRSide.hidden = !side;
   }
 }
 
@@ -693,7 +687,7 @@ function scanControlQR() {
     ctx.drawImage(els.camImg, 0, 0, cw, ch);
     const img = ctx.getImageData(0, 0, cw, ch);
     const code = window.jsQR(img.data, cw, ch);
-    _clientQrData = code ? code.data : null;
+    setClientQr(code ? code.data : null);
     renderQrReadout();
     renderFocusReadout(sharpnessScore(img, cw, ch));
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }

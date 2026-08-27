@@ -161,3 +161,50 @@ export function makeFullscreen(el, { onToggle } = {}) {
 
   return { toggle, isFull };
 }
+
+/* Sumber data QR bersama antara halaman Camera dan readout Control. Python
+   (mission5.py, via applyMission5 di app.js) diprioritaskan selama masih
+   segar (misi autonomous jalan); scan jsQR lokal tiap halaman jadi fallback
+   saat FSM Python belum/tidak aktif. */
+const PY_QR_FRESH_MS = 3000;
+let _pyQrData = null, _pyQrWall = null, _pyQrAt = 0;
+let _clientQrData = null;
+
+export function setPyQr(data, wall) {
+  _pyQrData = data || null;
+  _pyQrWall = wall || null;
+  _pyQrAt = Date.now();
+}
+
+export function setClientQr(data) { _clientQrData = data || null; }
+
+/* pisahkan sisi A/B/C/D dari payload QR (JSON KKI 2026 mis.
+   {"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}, atau huruf
+   sisi terisolasi dalam string biasa). Regex tanpa lookbehind agar
+   kompatibel Safari lama. */
+export function deriveQrSide(raw) {
+  let parsed = null;
+  try { parsed = JSON.parse(raw); } catch (_) { parsed = null; }
+  if (parsed && typeof parsed === "object" && typeof parsed.id === "string" &&
+      /^[ABCD]$/.test(parsed.id.trim().toUpperCase())) {
+    const side = parsed.id.trim().toUpperCase();
+    const team = parsed.team ? ` · ${parsed.team}` : "";
+    const miss = parsed.mission != null ? ` · M${parsed.mission}` : "";
+    return { side, shown: `id=${side}${miss}${team}` };
+  }
+  const m = String(raw).toUpperCase().match(/(?:^|[^A-Z])([ABCD])(?![A-Z])/);
+  return { side: m ? m[1] : null, shown: raw };
+}
+
+export function getQrState() {
+  const pyFresh = !!(_pyQrData && Date.now() - _pyQrAt < PY_QR_FRESH_MS);
+  const raw = pyFresh ? _pyQrData : _clientQrData;
+  const derived = raw ? deriveQrSide(raw) : null;
+  const side = pyFresh && _pyQrWall ? _pyQrWall : (derived ? derived.side : null);
+  return {
+    raw,
+    side,
+    shown: derived ? derived.shown : null,
+    source: pyFresh ? "python" : (raw ? "client" : null),
+  };
+}
