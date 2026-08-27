@@ -15,8 +15,8 @@ export const CONFIG = {
   // rov_agent.py M5_BOTTOM_URL/M5_WALL_URL (dipakai QR docking + drift
   // sensing) ikut diperbaiki bersamaan — lihat rov_agent.py.
   CAMERAS: [
-    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream" },
-    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream" },
+    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream", resolution: "1280x720" },
+    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream", resolution: "1280x720" },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".

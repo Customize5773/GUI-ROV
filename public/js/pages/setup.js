@@ -97,6 +97,14 @@ const numField = (id, label, val, step = "1", unit = "") => `
   <label class="field field--sm"><span>${label}${unit ? ` <small>${unit}</small>` : ""}</span>
     <input id="${id}" type="number" step="${step}" value="${val}" /></label>`;
 
+// resolusi umum yang didukung mjpg-streamer via input_uvc.so -r; daftar tidak
+// divalidasi terhadap kemampuan kamera fisik (lihat autonomy/tools/pi_restart_camera.sh)
+const CAMERA_RESOLUTIONS = ["640x480", "800x600", "1280x720", "1920x1080"];
+const resolutionSelect = (id, current) => `
+  <select id="${id}">
+    ${CAMERA_RESOLUTIONS.map((r) => `<option ${r === (current || "1280x720") ? "selected" : ""}>${r}</option>`).join("")}
+  </select>`;
+
 export const setupPage = {
   els: {},
 
@@ -126,12 +134,15 @@ export const setupPage = {
             <p class="card__desc">URL stream MJPEG/WebRTC dari Raspberry Pi.</p>
             <label class="field field--grow"><span>CAM 1 — BOTTOM</span>
               <input id="suCam0" type="text" placeholder="http://192.168.2.2:8080/stream" value="${(CONFIG.CAMERAS[0]||{}).url || ""}" /></label>
+            <label class="field"><span>Resolusi CAM 1</span>${resolutionSelect("suCamRes0", (CONFIG.CAMERAS[0]||{}).resolution)}</label>
             <label class="field field--grow"><span>CAM 2 — WALL</span>
               <input id="suCam1" type="text" placeholder="http://192.168.2.3:8080/stream" value="${(CONFIG.CAMERAS[1]||{}).url || ""}" /></label>
+            <label class="field"><span>Resolusi CAM 2</span>${resolutionSelect("suCamRes1", (CONFIG.CAMERAS[1]||{}).resolution)}</label>
             <div class="card__row">
               <button class="btn-wide btn-wide--inline" id="suApplyCam">Apply</button>
               <button class="chip" id="suOpenCam">Open Camera Page</button>
             </div>
+            <p class="card__desc" id="suCamResStatus"></p>
           </div>
 
           <!-- THRUSTER SETUP -->
@@ -303,16 +314,28 @@ export const setupPage = {
     };
 
     /* CAMERA */
+    const camResStatus = root.querySelector("#suCamResStatus");
     root.querySelector("#suApplyCam").onclick = () => {
       [0, 1].forEach((i) => {
         const url = root.querySelector(`#suCam${i}`).value.trim();
-        if (CONFIG.CAMERAS[i]) CONFIG.CAMERAS[i].url = url;
+        const resolution = root.querySelector(`#suCamRes${i}`).value;
+        if (CONFIG.CAMERAS[i]) {
+          const resChanged = CONFIG.CAMERAS[i].resolution !== resolution;
+          CONFIG.CAMERAS[i].url = url;
+          CONFIG.CAMERAS[i].resolution = resolution;
+          // restart mjpg-streamer di Pi cuma kalau resolusi memang berubah —
+          // ganti URL saja (tanpa ganti resolusi) tidak perlu restart streamer.
+          // wsSend langsung (bukan sendCmd) karena command ini butuh field
+          // top-level camera/resolution, sama seperti pola motor_test di atas.
+          if (resChanged) wsSend({ type: "cmd", name: "camera_resolution", camera: i, resolution });
+        }
         if (i === 0) CONFIG.CAMERA_URL = url;
       });
       saveSetup();
       // beri tahu halaman Control untuk mengarahkan ulang feed kamera-nya
       window.dispatchEvent(new Event("hydroship:camera-url"));
-      log("URL kamera disimpan", "ok");
+      log("URL & resolusi kamera disimpan", "ok");
+      if (camResStatus) camResStatus.textContent = "Menerapkan resolusi di Pi…";
     };
     root.querySelector("#suOpenCam").onclick = () => document.querySelector('.sidebar__link[data-page="camera"]')?.click();
 
@@ -794,6 +817,17 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
     if (typeof this._startMotorTestFailCooldown === "function") {
       this._startMotorTestFailCooldown();
     }
+  },
+
+  /* Balasan restart mjpg-streamer (autonomy/tools/pi_restart_camera.sh) —
+     panel CAMERA STREAM, dipicu oleh command "camera_resolution". */
+  onCameraResolutionAck(msg) {
+    const el = document.getElementById("suCamResStatus");
+    if (!el || !msg) return;
+    const cam = Number(msg.camera) + 1;
+    el.textContent = msg.ok
+      ? `CAM ${cam} sekarang ${msg.resolution}`
+      : `CAM ${cam} gagal ganti resolusi${msg.reason ? ": " + msg.reason : ""}`;
   },
 
   onThrusterGainTelemetry(gain) {

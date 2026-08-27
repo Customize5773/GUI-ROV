@@ -492,6 +492,11 @@ wss.on("connection", (ws, req) => {
           command.direction = msg.direction;
       }
 
+      if (msg.name === "camera_resolution") {
+          command.camera = msg.camera;
+          command.resolution = msg.resolution;
+      }
+
       const packet = Buffer.from(JSON.stringify(command));
 
       udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
