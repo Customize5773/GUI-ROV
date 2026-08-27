@@ -263,6 +263,78 @@ docking hanya ~0,33% frame (`HOOK_TARGET_AREA`), bahkan di separuh jarak itu
 
 Referensi: `autonomy/vision/hook_detect.py`, `autonomy/tests/test_hook_detect.py`.
 
+### HOOK-03 — Lokalisasi ROV memakai hook sbg landmark (OPSIONAL, 2026-08-27)
+
+**Konteks**: wahana ini tak punya estimasi posisi horizontal sama sekali (tak ada
+GPS/DVL/optical-flow; `LOCAL_POSITION_NED` tak pernah tiba), sehingga M5_REDIVE
+kembali ke gantungan lewat heading+depth yang di-MARK dan M5_SEARCH menyisir
+dinding dgn dead-reckon integral WAKTU (`_search_pos_t`). Hook pipa PVC dipakai
+sbg landmark visual — TANPA menambah fiducial/ArUco/AprilTag ke arena.
+
+**Dibuat**:
+- `vision/hook_localization.py` — `localize_hook()` → pose hook thd kamera →
+  thd `base_link` → pose ROV pada frame map. Dua mode: **PnP 6-DOF** (bila ada
+  ≥4 keypoint) dan **constrained 2.5D** (orientasi dari IMU, z dari depth,
+  vision cuma bearing + jarak proxy `z = fx·d_pipa/width_px`). Titik referensi
+  hook = **pusat lengkung-U**, bukan center bounding box.
+- Ekstraktor keypoint tinggal DI MODUL INI — `hook_detect.py` **nol diff**
+  (file itu dipakai jalur HANG/DOCK yang sudah tervalidasi kolam, lihat HOOK-02).
+- 11 quality gate dgn `status`+`reason` eksplisit: resolusi kalibrasi, confidence,
+  contour se-frame, lebar pipa, rentang jarak, reprojection, ambiguitas planar,
+  identitas hook, konsistensi wall-heading, kontinuitas temporal, map tak lengkap.
+- `HookTracker` — alpha-beta + hold 0,5 s + expire 2,0 s (tak pernah pakai pose
+  basi tanpa batas waktu).
+- `config/hook_map.example.yaml` — pool 4,4×2,2×0,8 m, hooks A/B/C/D, geometri
+  hook, gate, mount kamera. **Menolak nilai null**, jadi file contoh sengaja tak
+  bisa dimuat apa adanya sampai diukur di venue.
+- `tools/probe_stream.py` — Tahap 1 pasif (resolusi/FPS/latensi/dropout), tak
+  pernah mengirim command.
+- 75 test di `tests/test_hook_localization.py`.
+
+**Integrasi sengaja minimal**: satu flag `--hook-map` (default MATI), satu key
+`telemetry_out['hook_loc']`, satu titik panggil di `_loop()` (bukan di
+`_hook_servo_step`). Modul ini murni PENGAMAT — tak satu pun state membaca
+hasilnya untuk keputusan gerak, dan jalur M5 QR tak berubah sama sekali.
+
+**Temuan yang menentukan arsitektur** (diukur, `tests/test_hook_localization.py`):
+titik siluet hook SEBIDANG, dan ambiguitas planar bersifat relatif thd derau —
+
+| derau | sudut pandang | pose PnP terpakai |
+|-------|---------------|-------------------|
+| 0,5 px | miring 35° | 100 % |
+| 2 px | frontal | 12 % |
+| 4 px | frontal / 35° | < 25 % |
+
+Docking mendekati dinding TEGAK LURUS, yaitu geometri near-frontal yang paling
+ambigu — jadi justru saat pose paling dibutuhkan, PnP paling tak bisa. Karena itu
+**constrained 2.5D adalah jalur runtime, PnP dianggap bonus.** Gate-nya bekerja
+benar: kasus-kasus itu disaring, bukan diloloskan.
+
+**Sisa backlog (butuh air — TAK ADA satu pun klaim runtime fisik sejauh ini)**:
+- [ ] **Tahap 1** jalankan `tools/probe_stream.py http://192.168.2.2:8081/stream
+      --calib vision/calibration/wall.npz`. URL harus diperlakukan bisa berubah.
+      Yang paling penting: resolusi stream vs `image_size` kalibrasi (`wall.npz`
+      = 1280×720, fx 864) — kalau tak cocok, gate resolusi menolak semuanya.
+- [ ] **Tahap 2** replay recorded frame: detection rate, false-positive rate,
+      reprojection RMSE, error X/Y/Z, latensi capture→output, CPU/RAM.
+      Ekstraktor keypoint BELUM pernah diuji pada frame bawah air sungguhan —
+      lolos pada hook sintetis tak berarti apa-apa untuk air keruh.
+- [ ] **Tahap 3** uji air dgn operator + STOP aktif, validasi pose relatif saja.
+- [ ] Ukur geometri hook fisik: `leg_length_m` (0.090) & `u_radius_m` (0.035) di
+      `hook_map.example.yaml` masih PERKIRAAN, belum diukur.
+- [ ] Isi `x`/`y`/`wall_heading_deg` tiap hook + `map.x_axis_heading_deg` di
+      venue. Sampai diisi, keluaran maksimal `relative_only`.
+- [ ] Konfirmasi tinggi hook: **0.385 m** dari dasar (kolam latihan, terukur —
+      lihat `pool_trial.yaml`) vs **0.45 m** (spek arena lomba, Guidebook L46).
+      Selisih 65 mm, cukup untuk membuat gripper meleset.
+- [ ] Ukur `camera_to_base` (sudut tunduk kamera + offset dari titik-tengah ROV);
+      default masih nol semua.
+
+Referensi: `autonomy/vision/hook_localization.py`,
+`autonomy/config/hook_map.example.yaml`, `autonomy/tools/probe_stream.py`,
+`autonomy/tests/test_hook_localization.py`, `autonomy/fsm/mission5.py`
+(`--hook-map`, `_hook_localize`).
+
 ### GRIPPER-01 — Mismatch PWM gripper antar dua program (CLOSED 2026-08-22)
 
 **Gejala**: tak ada gejala runtime langsung — potensi servo didorong melebihi
