@@ -4,6 +4,7 @@ import json
 import time
 import threading
 import math
+import subprocess
 from pymavlink import mavutil
 
 from rov_axes import (
@@ -1110,6 +1111,17 @@ def command_listener():
                     target=run_motor_test, args=(payload,), daemon=True
                 ).start()
 
+            elif name == "camera_resolution":
+                # server.js kirim camera/resolution sebagai field top-level
+                # (pola sama dgn motor_test) -- payload dirakit dari msg langsung.
+                payload = {
+                    "camera": msg.get("camera"),
+                    "resolution": msg.get("resolution"),
+                }
+                threading.Thread(
+                    target=run_camera_resolution, args=(payload,), daemon=True
+                ).start()
+
             elif name == "param_list":
                 # Minta seluruh tabel param FC. Jawabannya ~980 PARAM_VALUE
                 # yang ditangani & di-batch di loop RX main().
@@ -1334,6 +1346,51 @@ def run_motor_test(payload):
         send_to_gui({
             "type": "motor_test_ack",
             "motor": motor,
+            "ok": False,
+            "reason": str(e),
+        })
+
+
+def run_camera_resolution(payload):
+    """Restart mjpg-streamer di Pi dengan resolusi baru (panel Setup GUI).
+
+    Bukan MAVLink -- kamera tidak lewat Pixhawk, cuma mjpg-streamer lokal di
+    Pi (lihat public/js/config.js utk pemetaan port/kamera). Eksekusi lewat
+    tools/pi_restart_camera.sh (bukan re-implement di Python) supaya satu
+    tempat yang tahu path binary/plugin mjpg-streamer -- lihat catatan
+    "ASUMSI YANG BELUM DIVERIFIKASI" di script itu.
+    """
+    camera = payload.get("camera") if isinstance(payload, dict) else None
+    resolution = payload.get("resolution") if isinstance(payload, dict) else None
+    base = os.path.dirname(os.path.abspath(__file__))
+    # Deploy di Pi meratakan autonomy/tools/ -> tools/ (lihat connect_raspi.md
+    # "Sync Perubahan"), tapi repo laptop masih autonomy/tools/ -- cek dua-duanya
+    # supaya kode yang sama jalan di kedua layout tanpa env var wajib.
+    candidates = [
+        os.path.join(base, "tools", "pi_restart_camera.sh"),
+        os.path.join(base, "autonomy", "tools", "pi_restart_camera.sh"),
+    ]
+    script = next((p for p in candidates if os.path.isfile(p)), candidates[0])
+    try:
+        result = subprocess.run(
+            ["bash", script, str(camera), str(resolution)],
+            capture_output=True, text=True, timeout=15,
+        )
+        ok = result.returncode == 0 and result.stdout.strip().startswith("OK:")
+        print(f"[CAMERA] resolution camera={camera} -> {resolution}: {result.stdout.strip() or result.stderr.strip()}")
+        send_to_gui({
+            "type": "camera_resolution_ack",
+            "camera": camera,
+            "resolution": resolution,
+            "ok": ok,
+            "reason": None if ok else (result.stdout.strip() or result.stderr.strip()),
+        })
+    except Exception as e:
+        print("[CAMERA] gagal restart streamer:", e)
+        send_to_gui({
+            "type": "camera_resolution_ack",
+            "camera": camera,
+            "resolution": resolution,
             "ok": False,
             "reason": str(e),
         })

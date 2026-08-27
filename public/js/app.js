@@ -779,6 +779,12 @@ function connect() {
     else log(`Uji thruster T${msg.motor} GAGAL: ${msg.reason || "tidak ada respon"}`, "err");
     toPage("setup", "onMotorTestAck", msg);
   }
+  else if (msg.type === "camera_resolution_ack") {
+    // Balasan panel Camera Stream (Setup) — restart mjpg-streamer di Pi.
+    if (msg.ok) log(`Resolusi CAM ${Number(msg.camera) + 1} -> ${msg.resolution} OK`, "ok");
+    else log(`Resolusi CAM ${Number(msg.camera) + 1} GAGAL: ${msg.reason || "tidak ada respon"}`, "err");
+    toPage("setup", "onCameraResolutionAck", msg);
+  }
   else if (msg.type === "mavlink_msg") { toPage("analyze", "onMavlinkMsg", msg); }
   else if (msg.type === "statustext") {
     // STATUSTEXT dari FC: inilah cara ArduSub melaporkan penolakan param &
