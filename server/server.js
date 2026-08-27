@@ -289,9 +289,16 @@ const httpServer = http.createServer((req, res) => {
       return res.end("Not found");
     }
 
-    res.writeHead(200, {
+    const headers = {
       "Content-Type": MIME[path.extname(filePath)] || "application/octet-stream"
-    });
+    };
+    // Model 3D & lib vendored jarang berubah — cache lama supaya tak
+    // re-download puluhan MB tiap reload. JS/HTML app sengaja tak di-cache
+    // panjang supaya update kode langsung kepakai.
+    if (urlPath.startsWith("/models/") || urlPath.startsWith("/vendor/")) {
+      headers["Cache-Control"] = "public, max-age=604800";
+    }
+    res.writeHead(200, headers);
     res.end(data);
   });
 });

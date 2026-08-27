@@ -123,6 +123,10 @@ function showPage(pageName) {
   // Store current page
   sessionStorage.setItem("current-page", pageName);
 
+  // Digital-twin Control render terus-menerus; hentikan saat pilot pindah
+  // halaman lain supaya tak membebani GPU di background.
+  if (scene) { if (pageName === "control") scene.start(); else scene.stop(); }
+
   // Hentikan render-loop halaman sebelumnya, init lazy + tampilkan yang baru
   if (activeModule && activeModule.onHide) { try { activeModule.onHide(); } catch (e) {} }
   activeModule = null;
@@ -1058,8 +1062,13 @@ function renderControlCamPiP(on) {
 
   if (on) {
     const ctx = cv.getContext("2d");
+    let lastRender = 0;
     const loop = () => {
       controlCamPiPRaf = requestAnimationFrame(loop);
+      // Cuma mirror kecil attitude; 15fps cukup, hemat copy GPU->CPU->GPU tiap frame.
+      const now = performance.now();
+      if (now - lastRender < 66) return;
+      lastRender = now;
       const w = cv.clientWidth, h = cv.clientHeight;
       if (!w || !h) return;
       if (cv.width !== w) cv.width = w;

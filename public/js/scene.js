@@ -46,7 +46,19 @@ export class RovScene {
 
     window.addEventListener("resize", () => this._resize());
     this._resize();
+    this._raf = null;
+    this._lastRender = 0;
+    this.start();
+  }
+
+  /* Halaman Control tidak selalu aktif; hentikan RAF saat pilot pindah ke
+     halaman lain supaya render loop tidak jalan terus di background. */
+  start() {
+    if (this._raf) return;
     this._animate();
+  }
+  stop() {
+    if (this._raf) { cancelAnimationFrame(this._raf); this._raf = null; }
   }
 
   _lights() {
@@ -227,7 +239,7 @@ export class RovScene {
   }
 
   _animate() {
-    requestAnimationFrame(() => this._animate());
+    this._raf = requestAnimationFrame(() => this._animate());
     const k = 0.18;
     for (const a of ["roll", "pitch", "yaw"]) {
       let d = this.target[a] - this.current[a];
@@ -268,6 +280,11 @@ export class RovScene {
     }
 
     this.controls.update();
+    // Attitude digital-twin tak butuh 60fps; 30fps cukup halus & separuh lebih
+    // ringan di GPU laptop pilot (RTX 2050 dipakai bersama render lain).
+    const now = performance.now();
+    if (now - this._lastRender < 33) return;
+    this._lastRender = now;
     this.renderer.render(this.scene, this.camera);
   }
 }

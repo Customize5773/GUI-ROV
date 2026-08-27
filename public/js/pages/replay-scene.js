@@ -87,10 +87,15 @@ export function createTrajectoryScene(container) {
 
   let count = 0;      // jumlah titik path yang dimuat
   let raf = null;
+  let lastRender = 0;
 
   function loop() {
     raf = requestAnimationFrame(loop);
     controls.update();
+    // 30fps cukup untuk playback trajectory, lebih ringan di GPU.
+    const now = performance.now();
+    if (now - lastRender < 33) return;
+    lastRender = now;
     renderer.render(scene, camera);
   }
   function start() { if (!raf) loop(); }

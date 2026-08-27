@@ -29,6 +29,7 @@ export const missionPage = {
   visible: false,
   raf: null,
   clock: null,
+  _lastRender: 0,
   els: {},
 
   init(root) {
@@ -265,7 +266,12 @@ export const missionPage = {
     }
 
     t.controls.update();
-    t.renderer.render(t.scene, t.camera);
+    // Trajectory map tak butuh 60fps; 30fps cukup halus & lebih ringan di GPU.
+    const now = performance.now();
+    if (now - this._lastRender >= 33) {
+      this._lastRender = now;
+      t.renderer.render(t.scene, t.camera);
+    }
 
     // readout
     this.els.x.textContent = num(this.pos.x, 2);
