@@ -259,12 +259,13 @@ depth_target = None
 depth_target_active = False
 
 # Supervisory bias hanya untuk z; ALT_HOLD ArduSub tetap controller utama.
-DEPTH_TARGET_DEADBAND = 0.03
-DEPTH_TARGET_KP = 350.0
+DEPTH_TARGET_TRANSITION = 0.08
+DEPTH_TARGET_DEADBAND = 0.02
+DEPTH_TARGET_KP = 270.0
 
 # Minimum vertical correction saat error masih di luar deadband.
 # Nilai awal tuning untuk mengatasi area dekat-neutral/deadzone.
-DEPTH_TARGET_MIN_BIAS = 130
+DEPTH_TARGET_MIN_BIAS = 125
 
 DEPTH_TARGET_MAX_BIAS = 400
 
@@ -1583,25 +1584,60 @@ def apply_absolute_depth_target(mc, axes):
     current = float(state.get("depth", 0.0))
     error = target - current
 
+    # Target TIDAK dinonaktifkan ketika sudah tercapai.
+    # Selama pilot belum menyentuh heave, target tetap aktif.
+    # Di dalam deadband kita kirim neutral z agar ALT_HOLD menjaga
+    # kedalaman yang sudah tercapai tanpa memaksa overshoot.
     if abs(error) <= DEPTH_TARGET_DEADBAND:
-        with depth_lock:
-            depth_target_active = False
-        send_to_gui({
-            "type": "event",
-            "text": f"Target depth tercapai: {current:.2f} m",
-            "level": "ok",
-        })
-        return mc
+        bias = 0
+        out = dict(mc)
+        out["z"] = 500
+        print(
+            f"[DEPTH TARGET] target={target:.2f} "
+            f"current={current:.2f} "
+            f"error={error:+.2f} "
+            f"bias=0 z=500 HOLD"
+        )
+        return out
 
     # error positif = target lebih dalam -> z dikurangi agar turun.
-    bias = int(round(DEPTH_TARGET_KP * error))
+    abs_error = abs(error)
 
-    # Selama error masih di luar deadband, pertahankan minimum bias
-    # agar command tidak jatuh ke area dekat-neutral/deadzone.
-    if 0 < abs(bias) < DEPTH_TARGET_MIN_BIAS:
-        bias = DEPTH_TARGET_MIN_BIAS if error > 0 else -DEPTH_TARGET_MIN_BIAS
+    if abs_error <= DEPTH_TARGET_DEADBAND:
+        # Sudah cukup dekat dengan target.
+        bias = 0
 
-    bias = max(-DEPTH_TARGET_MAX_BIAS, min(DEPTH_TARGET_MAX_BIAS, bias))
+    elif abs_error < DEPTH_TARGET_TRANSITION:
+        # Zona transisi:
+        # bias naik perlahan dari 0 menuju MIN_BIAS.
+        ratio = (
+            (abs_error - DEPTH_TARGET_DEADBAND)
+            / (DEPTH_TARGET_TRANSITION - DEPTH_TARGET_DEADBAND)
+        )
+
+        bias_abs = int(
+            DEPTH_TARGET_MIN_BIAS * ratio
+        )
+
+        bias = bias_abs if error > 0 else -bias_abs
+
+    else:
+        # Error cukup besar -> gunakan kontrol proporsional.
+        bias = int(round(DEPTH_TARGET_KP * error))
+
+        # Tetap pertahankan minimum bias.
+        if 0 < abs(bias) < DEPTH_TARGET_MIN_BIAS:
+            bias = (
+                DEPTH_TARGET_MIN_BIAS
+                if error > 0
+                else -DEPTH_TARGET_MIN_BIAS
+            )
+
+    # Batasi command maksimum.
+    bias = max(
+        -DEPTH_TARGET_MAX_BIAS,
+        min(DEPTH_TARGET_MAX_BIAS, bias)
+    )
 
     out = dict(mc)
     out["z"] = max(0, min(1000, int(mc["z"] - bias)))
