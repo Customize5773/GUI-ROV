@@ -1418,10 +1418,25 @@ def _fsm_read_state():
 # AIR, per-kamera): bottom.npz RMS 0.94px/52 pose, wall.npz RMS 0.97px/52 pose
 # (tools/calibrate_camera.py --trim-rounds 5), jauh lebih baik drpd dwe_v3
 # (RMS 0.87px tapi cuma dari kamera bottom, dipakai sbg fallback wall juga)
-# atau dwe_trial2 (RMS 2.36px) sebelumnya. HARUS cocok resolusi stream kamera
-# (1280x720). Override lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke
-# string kosong utk mematikan PBVS sama sekali (IBVS murni, tak butuh
-# kalibrasi).
+# atau dwe_trial2 (RMS 2.36px) sebelumnya. HARUS cocok resolusi stream kamera.
+#
+# 27 Agu (uji live): module_px QR di jarak kerja normal terukur ~3.2px —
+# di bawah ambang decode robust (~4-5px minimum). Diagnosis dgn ROV
+# terkoneksi: BUKAN exposure (sudah disweep 5-156, tak menolong; kamera
+# exploreHD juga TANPA kontrol fokus) — murni kurang piksel dari sensor +
+# blur optik jarak kerja. ustreamer-cam2 (bottom, port 8081) dinaikkan
+# permanen ke 1920x1080 (native, sama FOV/aspect 16:9 — bukan crop beda) →
+# module_px terukur naik ke ~4.8px, sesuai prediksi skala 1.5x. bottom.npz
+# di atas SUDAH diskalakan ke 1920x1080 via tools/rescale_calib.py (K×1.5,
+# dist tak berubah — valid krn downscale-sama-FOV, lihat docstring tool
+# itu) — bottom_720p_backup.npz simpan versi lama bila cam2 dikembalikan ke
+# 720p. rms=-1 di file berarti "diskalakan, belum diverifikasi ulang via
+# checkerboard sungguhan di 1080p" — jalankan tools/select_calib_frames.py +
+# calibrate_camera.py ulang di resolusi ini saat sempat. wall.npz (kamera
+# WALL, port 8080) TETAP di 720p, tak disentuh.
+#
+# Override lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke string kosong
+# utk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
 M5_CALIB_BOTTOM_DEFAULT = "vision/calibration/bottom.npz"
 M5_CALIB_WALL_DEFAULT = "vision/calibration/wall.npz"
 
