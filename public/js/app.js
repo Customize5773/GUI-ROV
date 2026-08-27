@@ -60,6 +60,7 @@ const els = {
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"),
+  vQRFocus: $("vQRFocus"), qrFocusReadout: $("qrFocusReadout"),
   depthHoldBadge: $("depthHoldBadge"),
   poolDepthBadge: $("poolDepthBadge"),
   cmdLinkBanner: $("cmdLinkBanner"),
@@ -640,6 +641,43 @@ function renderQrReadout() {
   }
 }
 
+/* Skor ketajaman ("focus peaking" ala kamera foto) — varians Laplacian 4-neighbor
+   di atas grayscale. Proxy standar "seberapa tajam", tanpa training/model apa pun.
+   Skala BEDA dari cv2.Laplacian(CV_64F).var() Python (kernel & ukuran gambar beda) —
+   dipakai RELATIF (lihat renderFocusReadout), bukan dibandingkan lintas-bahasa. */
+function sharpnessScore(imgData, w, h) {
+  const gray = new Float32Array(w * h);
+  const d = imgData.data;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  let sum = 0, sumSq = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = y * w + x;
+      const lap = 4 * gray[idx] - gray[idx - 1] - gray[idx + 1] - gray[idx - w] - gray[idx + w];
+      sum += lap; sumSq += lap * lap; n++;
+    }
+  }
+  const mean = sum / n;
+  return sumSq / n - mean * mean;
+}
+
+/* Ambang RELATIF thd puncak yang baru terlihat (bukan angka mutlak di-hardcode) --
+   pencahayaan/kamera beda bikin skala mentah beda, "mendekati puncak terakhir"
+   lebih tahan variasi drpd angka tetap. Meluruh pelan supaya kalau operator geser
+   ke target lain, puncak lama tak nyangkut selamanya sbg acuan palsu. */
+let _focusRecentMax = 0;
+const FOCUS_DECAY_PER_TICK = 0.98;   // ~200ms/tick -> puncak lama meluruh dlm puluhan detik
+
+function renderFocusReadout(score) {
+  if (!els.vQRFocus) return;
+  _focusRecentMax = Math.max(score, _focusRecentMax * FOCUS_DECAY_PER_TICK);
+  els.vQRFocus.textContent = Math.round(score);
+  const isSharp = _focusRecentMax > 0 && score >= 0.9 * _focusRecentMax;
+  if (els.qrFocusReadout) els.qrFocusReadout.classList.toggle("is-ok", isSharp);
+}
+
 function scanControlQR() {
   if (currentPageName !== "control") return;
   if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
@@ -657,6 +695,7 @@ function scanControlQR() {
     const code = window.jsQR(img.data, cw, ch);
     _clientQrData = code ? code.data : null;
     renderQrReadout();
+    renderFocusReadout(sharpnessScore(img, cw, ch));
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
 setInterval(scanControlQR, 200);

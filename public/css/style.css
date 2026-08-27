@@ -539,6 +539,8 @@ body[data-theme="light"] .theme__icon::after {
 .readout--qr.is-ok .readout__v { color: var(--ok); }
 .readout--qr.is-ok:not(.is-py) .readout__v { color: var(--amber); }
 
+#qrFocusReadout.is-ok .readout__v { color: var(--ok); }
+
 .readout__side {
   flex: 0 0 auto; padding: 1px 6px; margin-left: 6px;
   font-family: "Chakra Petch", sans-serif; font-weight: 700; font-size: 13px;
