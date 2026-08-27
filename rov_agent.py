@@ -254,6 +254,13 @@ def _tier_score(fails: int) -> int:
 # =========================
 depth_hold_enabled = False
 
+# Target depth absolut dari GUI.
+# None = belum ada target; active=True berarti controller supervisori sedang
+# menggerakkan ROV menuju target melalui MANUAL_CONTROL.z di ALT_HOLD.
+depth_target = None
+depth_target_active = False
+depth_target_heave_cmd = 0
+
 depth_offset = 0.0
 _raw_depth = 0.0
 
@@ -261,6 +268,15 @@ depth_lock = threading.Lock()
 
 _DEPTH_CMD_RATE_HZ = 2.0
 _depth_cmd_rate = RateLimiter(_DEPTH_CMD_RATE_HZ)
+
+# Supervisory target-depth controller. Ini bukan PID pengganti ArduSub:
+# ALT_HOLD tetap menjadi controller utama; Pi hanya memberi perintah heave
+# terarah sampai error depth masuk deadband, lalu kembali netral.
+DEPTH_TARGET_DEADBAND_M = 0.03
+DEPTH_TARGET_KP = 450.0
+DEPTH_TARGET_MAX_HEAVE = 450
+DEPTH_TARGET_SLEW = 35
+
 
 # Offset tare permukaan (meter), diset lewat command `set_surface`. state["depth"]
 # dihitung sebagai `_raw_depth - depth_offset` (lihat handler AHRS2) supaya
@@ -524,6 +540,8 @@ def send_telemetry():
 
     with depth_lock:
         state["depth_hold"] = depth_hold_enabled
+        state["depth_target"] = depth_target
+        state["depth_target_active"] = depth_target_active
 
     # POSHOLD tidak terlihat di HEARTBEAT (ia berjalan di ALT_HOLD), jadi
     # INILAH satu-satunya cara GUI tahu overlay sedang hidup dan tab mana yang
@@ -599,6 +617,27 @@ def send_gcs_heartbeat():
             0, 0, 0,
         )
 
+def valid_depth_target(value):
+    """Validasi target depth absolut dari GUI dalam meter."""
+    if isinstance(value, bool):
+        return None
+
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return None
+
+    if not math.isfinite(value) or value < 0:
+        return None
+
+    # Harus tahu kedalaman kolam sebelum mengizinkan gerakan otomatis.
+    if pool_depth is None or pool_depth <= 0:
+        return None
+
+    # Sisakan margin 5 cm dari dasar kolam.
+    return min(value, max(0.0, pool_depth - 0.05))
+
+
 # =========================
 # Command handler dari laptop
 # =========================
@@ -611,6 +650,9 @@ def command_listener():
     global pool_depth
     global depth_offset
     global depth_hold_enabled
+    global depth_target
+    global depth_target_active
+    global depth_target_heave_cmd
     global poshold_active
     global heading_target
     global thruster_gain
@@ -730,6 +772,12 @@ def command_listener():
 
                 master.set_mode(mode_mapping[pixhawk_mode])
                 requested_mode = pixhawk_mode
+
+                if pixhawk_mode != "ALT_HOLD":
+                    with depth_lock:
+                        depth_target_active = False
+                        depth_target_heave_cmd = 0
+                        depth_hold_enabled = False
                 requested_mode_ts = time.time()
 
                 # "poshold" dan "depth_hold" sama-sama berujung di ALT_HOLD,
@@ -768,6 +816,8 @@ def command_listener():
                 # sudah direkam masih berguna, operator tinggal menekan ON lagi.
                 with depth_lock:
                     depth_hold_enabled = False
+                    depth_target_active = False
+                    depth_target_heave_cmd = 0
                 send_arm_disarm(False)
 
             elif name == "light":
@@ -839,6 +889,64 @@ def command_listener():
                     "type": "event",
                     "text": f"Counter {mission or 'semua misi'}: {event}",
                     "level": "warn" if event == "fail" else "ok",
+                })
+
+            elif name == "depth_apply":
+
+                target = valid_depth_target(value)
+
+                if target is None:
+                    reason = (
+                        "target tidak valid atau Pool Depth belum diset "
+                        "(target harus 0..Pool Depth-0.05 m)"
+                    )
+                    print(f"[DEPTH] APPLY ditolak: {value!r} — {reason}")
+                    send_to_gui({
+                        "type": "event",
+                        "text": f"Target depth ditolak: {reason}",
+                        "level": "warn",
+                    })
+                    continue
+
+                if not state.get("armed"):
+                    print("[DEPTH] APPLY diabaikan — vehicle belum armed")
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Target depth diabaikan — vehicle belum armed",
+                        "level": "warn",
+                    })
+                    continue
+
+                mode_now = _current_pixhawk_mode()
+                if mode_now not in ("ALT_HOLD",):
+                    print(
+                        f"[DEPTH] APPLY ditolak — mode {mode_now}; "
+                        "gunakan ALT_HOLD"
+                    )
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Target depth membutuhkan mode ALT_HOLD",
+                        "level": "warn",
+                    })
+                    continue
+
+                if not _depth_cmd_rate.allow("depth_apply", time.time()):
+                    continue
+
+                with depth_lock:
+                    depth_target = target
+                    depth_target_active = True
+                    depth_target_heave_cmd = 0
+                    depth_hold_enabled = True
+
+                print(
+                    f"[DEPTH] APPLY -> target {target:.2f} m "
+                    f"(current {state['depth']:.2f} m)"
+                )
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Target depth APPLY -> {target:.2f} m",
+                    "level": "ok",
                 })
 
             elif name == "depth_hold":
@@ -1550,6 +1658,72 @@ def joystick_sender():
         state["cmd_link"] = "stale" if stale else "ok"
 
         # =========================
+        # ABSOLUTE DEPTH TARGET
+        # =========================
+        # Manual heave selalu punya prioritas. Jika operator menyentuh R/F,
+        # target otomatis dibatalkan agar controller tidak melawan pilot.
+        manual_heave = abs(eff_axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON
+
+        with depth_lock:
+            target = depth_target
+            target_active = depth_target_active
+
+        if target_active and stale:
+            target_active = False
+
+        if target_active and manual_heave:
+            with depth_lock:
+                depth_target_active = False
+                depth_target_heave_cmd = 0
+                depth_hold_enabled = False
+
+            target_active = False
+            send_to_gui({
+                "type": "event",
+                "text": "Target depth dibatalkan — manual heave mengambil alih",
+                "level": "warn",
+            })
+
+        if target_active and _current_pixhawk_mode() == "ALT_HOLD":
+            current_depth = float(state.get("depth", 0.0))
+            error = target - current_depth
+
+            if abs(error) <= DEPTH_TARGET_DEADBAND_M:
+                with depth_lock:
+                    depth_target_active = False
+                    depth_target_heave_cmd = 0
+
+                auto_heave = 0
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Target depth tercapai: {current_depth:.2f} m",
+                    "level": "ok",
+                })
+            else:
+                # target > current => perlu turun => heave negatif.
+                desired = int(round(-DEPTH_TARGET_KP * error))
+                desired = max(
+                    -DEPTH_TARGET_MAX_HEAVE,
+                    min(DEPTH_TARGET_MAX_HEAVE, desired),
+                )
+
+                with depth_lock:
+                    prev = depth_target_heave_cmd
+                    if desired > prev:
+                        depth_target_heave_cmd = min(
+                            desired, prev + DEPTH_TARGET_SLEW
+                        )
+                    else:
+                        depth_target_heave_cmd = max(
+                            desired, prev - DEPTH_TARGET_SLEW
+                        )
+                    auto_heave = depth_target_heave_cmd
+
+            if auto_heave:
+                eff_axes = dict(eff_axes)
+                eff_axes["heave"] = auto_heave
+
+        # =========================
         # THRUSTER GAIN
         # =========================
         gain = thruster_gain
@@ -1944,6 +2118,9 @@ def main():
                     if depth_hold_enabled:
                         globals()["depth_hold_enabled"] = False
                         print("[DEPTH] Depth-set OFF — vehicle disarm")
+                    with depth_lock:
+                        globals()["depth_target_active"] = False
+                        globals()["depth_target_heave_cmd"] = 0
 
             # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
             if requested_mode is not None and state["mode"] == requested_mode:

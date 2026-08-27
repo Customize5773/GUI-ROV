@@ -59,6 +59,7 @@ const els = {
   runLastFile: $("runLastFile"), runLastResult: $("runLastResult"),
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
+  depthTargetInput: $("depthTargetInput"),
   vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"),
   vQRFocus: $("vQRFocus"), qrFocusReadout: $("qrFocusReadout"),
   depthHoldBadge: $("depthHoldBadge"),
@@ -1254,6 +1255,27 @@ const KEY_AXIS = {
    ↑ = SET (rekam kedalaman saat ini), ↓ = ON/OFF. Sama seperti D-pad. */
 const KEY_DEPTH = { ArrowUp: "depth_up", ArrowDown: "depth_down" };
 
+function getDepthApplyTarget() {
+  if (!els.depthTargetInput) return null;
+
+  const raw = Number(els.depthTargetInput.value);
+  if (!Number.isFinite(raw) || raw < 0) {
+    log("Target depth tidak valid. Masukkan angka >= 0 m.", "warn");
+    return null;
+  }
+
+  return Math.round(raw * 100) / 100;
+}
+
+function applyDepthTargetFromGui() {
+  const target = getDepthApplyTarget();
+  if (target == null) return false;
+
+  sendCmd("depth_apply", target);
+  log(`APPLY target depth: ${target.toFixed(2)} m`, "ok");
+  return true;
+}
+
 const heldKeys = new Set();
 function pilotKeyActive(e) {
   return activeController === "Keyboard" && e.target === document.body && KEY_AXIS[e.code];
@@ -1269,8 +1291,9 @@ window.addEventListener("keydown", (e) => {
     // "terus geser setpoint", tapi SET dan ON/OFF sekali-pencet — menahannya
     // hanya akan membuat saklar depth-set berkedip.
     if (e.repeat) return;
-    // value null di depth_hold = toggle (lihat handler di rov_agent.py).
-    sendCmd(KEY_DEPTH[e.code], null);
+    // Arrow UP/DOWN = APPLY target depth yang diketik di GUI.
+    // Auto-repeat diabaikan: satu tekanan = satu apply.
+    applyDepthTargetFromGui();
     return;
   }
   if (!pilotKeyActive(e) || heldKeys.has(e.code)) return;
@@ -1582,14 +1605,11 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    /* ================= DEPTH-SET ================= */
-    case "depth_up": {
-      sendCmd("depth_up", null);
-      return;
-    }
-
+    /* ================= TARGET DEPTH =================
+       D-pad UP dan DOWN sama-sama APPLY angka yang sedang diketik. */
+    case "depth_up":
     case "depth_down": {
-      sendCmd("depth_down", null);
+      applyDepthTargetFromGui();
       return;
     }
   }
