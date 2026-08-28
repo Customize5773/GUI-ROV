@@ -651,20 +651,18 @@ function renderQrReadout() {
 let _qrPreviewImg = null;
 let _qrPreviewRaw = null;
 
-// deteksi payload yg menunjuk ke gambar: data-URL image atau URL gambar
+// deteksi payload yang menunjuk ke gambar: data-URL image atau URL http(s)
 function isImagePayload(raw) {
   if (!raw) return false;
   const s = String(raw).trim();
   if (/^data:image\/[^;]+;base64,/.test(s)) return true;
-  // URL http(s) yang berakhiran ekstensi gambar (atau query dgn ekstensi)
-  if (/^https?:\/\//i.test(s)) {
-    const path = s.split(/[?#]/)[0];
-    return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path);
-  }
-  return false;
+  return /^https?:\/\//i.test(s);
 }
 
-// muat sumber gambar (data-URL atau URL) sekali, cache di Image
+// muat sumber gambar (data-URL atau URL) sekali, cache di Image. Tanpa
+// crossOrigin: drawImage gambar cross-origin tetap sah (canvas mungkin
+// ter-taint tapi kita tak pernah membaca pikselnya), jadi tak bergantung
+// header CORS di host gambar publik macam etsy.
 function loadQrPreviewImage(raw) {
   if (_qrPreviewImg && _qrPreviewImg._src === raw) return Promise.resolve(_qrPreviewImg);
   return new Promise((resolve) => {
@@ -718,12 +716,18 @@ function renderQrPreviewImage(raw) {
     // payload = link gambar → tampilkan gambar hasil decode, hanya saat payload berubah
     if (_qrPreviewRaw !== raw) {
       loadQrPreviewImage(raw).then((img) => {
-        if (!img || getQrState().raw !== raw || !els.qrPreview) return;
+        if (!els.qrPreview || getQrState().raw !== raw) return;
         const c2 = els.qrPreview.getContext("2d");
-        c2.clearRect(0, 0, pw, ph);
-        const s = Math.min(pw / img.width, ph / img.height);
-        const dw = img.width * s, dh = img.height * s;
-        c2.drawImage(img, (pw - dw) / 2, (ph - dh) / 2, dw, dh);
+        const w2 = els.qrPreview.width, h2 = els.qrPreview.height;
+        c2.clearRect(0, 0, w2, h2);
+        if (img) {
+          const sc = Math.min(w2 / img.width, h2 / img.height);
+          const dw = img.width * sc, dh = img.height * sc;
+          c2.drawImage(img, (w2 - dw) / 2, (h2 - dh) / 2, dw, dh);
+        } else {
+          // gagal dimuat (hotlink/CORS/timeout) → tampilkan teks link hasil decode
+          paintQrText(c2, w2, h2, raw);
+        }
         _qrPreviewRaw = raw;
       });
     }
