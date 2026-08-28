@@ -376,5 +376,7 @@ sudo systemctl stop rov-agent
 
 # 2. Shutdown OS RPI
 sudo poweroff
+
+sudo systemctl stop rov-agent && sudo poweroff
 # ssh hydroships@192.168.2.2 "sudo systemctl stop rov-agent && sudo poweroff"
 ```

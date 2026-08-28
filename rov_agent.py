@@ -259,15 +259,18 @@ depth_target = None
 depth_target_active = False
 
 # Supervisory bias hanya untuk z; ALT_HOLD ArduSub tetap controller utama.
-DEPTH_TARGET_TRANSITION = 0.08
-DEPTH_TARGET_DEADBAND = 0.02
+DEPTH_TARGET_TRANSITION = 0.7
+DEPTH_TARGET_DEADBAND = 0.01
 DEPTH_TARGET_KP = 270.0
+
+DEPTH_TARGET_SLOW_ZONE = 0.05
+DEPTH_TARGET_SLOW_MIN_BIAS = 30
+DEPTH_TARGET_HOLD_EXIT = 0.04
 
 # Minimum vertical correction saat error masih di luar deadband.
 # Nilai awal tuning untuk mengatasi area dekat-neutral/deadzone.
-DEPTH_TARGET_MIN_BIAS = 125
-
-DEPTH_TARGET_MAX_BIAS = 400
+DEPTH_TARGET_MIN_BIAS = 120
+DEPTH_TARGET_MAX_BIAS = 390
 
 depth_offset = 0.0
 _raw_depth = 0.0
@@ -1560,10 +1563,9 @@ def setup_mission5_runner():
     mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
     return mission5_runner
 
-
 def apply_absolute_depth_target(mc, axes):
-    """Tambahkan koreksi hanya pada z untuk menuju target depth."""
     global depth_target_active
+    global depth_target
 
     with depth_lock:
         target = depth_target
@@ -1571,61 +1573,121 @@ def apply_absolute_depth_target(mc, axes):
 
     if not active or target is None:
         return mc
+    
+    # ============================================================
+    # PILOT OVERRIDE
+    # ============================================================
+    # Begitu operator menggerakkan stik HEAVE, target depth langsung
+    # dibatalkan. Kontrol vertical kembali sepenuhnya ke pilot.
+    heave = axes.get("heave", 0)
 
-    if _current_pixhawk_mode() != "ALT_HOLD":
-        return mc
-
-    # Pilot selalu menang: R/F membatalkan target otomatis.
-    if abs(axes.get("heave", 0)) > HEAVE_MANUAL_EPSILON:
+    if abs(heave) > HEAVE_MANUAL_EPSILON:
         with depth_lock:
             depth_target_active = False
+
+        print(
+            f"[DEPTH TARGET] CANCEL "
+            f"pilot heave={heave}"
+        )
+
         return mc
 
-    current = float(state.get("depth", 0.0))
+    try:
+        current = float(state.get("depth", 0.0))
+    except (TypeError, ValueError):
+        return mc
+
     error = target - current
-
-    # Target TIDAK dinonaktifkan ketika sudah tercapai.
-    # Selama pilot belum menyentuh heave, target tetap aktif.
-    # Di dalam deadband kita kirim neutral z agar ALT_HOLD menjaga
-    # kedalaman yang sudah tercapai tanpa memaksa overshoot.
-    if abs(error) <= DEPTH_TARGET_DEADBAND:
-        bias = 0
-        out = dict(mc)
-        out["z"] = 500
-        print(
-            f"[DEPTH TARGET] target={target:.2f} "
-            f"current={current:.2f} "
-            f"error={error:+.2f} "
-            f"bias=0 z=500 HOLD"
-        )
-        return out
-
-    # error positif = target lebih dalam -> z dikurangi agar turun.
     abs_error = abs(error)
 
+    # ============================================================
+    # DEPTH TARGET HOLD
+    # ============================================================
+    # Jika sudah berada dalam deadband, jangan matikan target.
+    # ALT_HOLD ArduSub tetap menjadi controller utama.
     if abs_error <= DEPTH_TARGET_DEADBAND:
-        # Sudah cukup dekat dengan target.
         bias = 0
 
-    elif abs_error < DEPTH_TARGET_TRANSITION:
-        # Zona transisi:
-        # bias naik perlahan dari 0 menuju MIN_BIAS.
+        out = dict(mc)
+        out["z"] = 500
+
+        print(
+            f"[DEPTH TARGET] "
+            f"target={target:.2f} "
+            f"current={current:.2f} "
+            f"error={error:+.3f} "
+            f"bias=0 "
+            f"z=500 HOLD"
+        )
+
+        return out
+
+    # ============================================================
+    # SLOW APPROACH ZONE
+    # ============================================================
+    # Ketika sudah dekat target, kurangi bias secara bertahap
+    # agar ROV tidak memiliki momentum terlalu besar saat masuk
+    # ke target.
+    if abs_error < DEPTH_TARGET_SLOW_ZONE:
+
         ratio = (
             (abs_error - DEPTH_TARGET_DEADBAND)
-            / (DEPTH_TARGET_TRANSITION - DEPTH_TARGET_DEADBAND)
+            / (
+                DEPTH_TARGET_SLOW_ZONE
+                - DEPTH_TARGET_DEADBAND
+            )
         )
 
-        bias_abs = int(
-            DEPTH_TARGET_MIN_BIAS * ratio
+        ratio = max(0.0, min(1.0, ratio))
+
+        bias_abs = (
+            DEPTH_TARGET_SLOW_MIN_BIAS
+            + (
+                DEPTH_TARGET_MIN_BIAS
+                - DEPTH_TARGET_SLOW_MIN_BIAS
+            ) * ratio
         )
 
-        bias = bias_abs if error > 0 else -bias_abs
+        bias = int(round(bias_abs))
 
+        if error < 0:
+            bias = -bias
+
+    # # ============================================================
+    # # TRANSITION ZONE
+    # # ============================================================
+    # elif abs_error < DEPTH_TARGET_TRANSITION:
+
+    #     ratio = (
+    #         (abs_error - DEPTH_TARGET_SLOW_ZONE)
+    #         / (
+    #             DEPTH_TARGET_TRANSITION
+    #             - DEPTH_TARGET_SLOW_ZONE
+    #         )
+    #     )
+
+    #     ratio = max(0.0, min(1.0, ratio))
+
+    #     bias_abs = (
+    #         DEPTH_TARGET_MIN_BIAS
+    #         + (
+    #             DEPTH_TARGET_KP * DEPTH_TARGET_TRANSITION
+    #             - DEPTH_TARGET_MIN_BIAS
+    #         ) * ratio
+    #     )
+
+    #     bias = int(round(bias_abs))
+
+    #     if error < 0:
+    #         bias = -bias
+
+    # ============================================================
+    # NORMAL CONTROL
+    # ============================================================
     else:
-        # Error cukup besar -> gunakan kontrol proporsional.
         bias = int(round(DEPTH_TARGET_KP * error))
 
-        # Tetap pertahankan minimum bias.
+        # Minimum bias untuk mengatasi deadzone vertical thruster.
         if 0 < abs(bias) < DEPTH_TARGET_MIN_BIAS:
             bias = (
                 DEPTH_TARGET_MIN_BIAS
@@ -1633,25 +1695,37 @@ def apply_absolute_depth_target(mc, axes):
                 else -DEPTH_TARGET_MIN_BIAS
             )
 
-    # Batasi command maksimum.
+    # ============================================================
+    # MAXIMUM LIMIT
+    # ============================================================
     bias = max(
         -DEPTH_TARGET_MAX_BIAS,
         min(DEPTH_TARGET_MAX_BIAS, bias)
     )
 
+    # ============================================================
+    # APPLY KE MANUAL_CONTROL.Z
+    # ============================================================
     out = dict(mc)
-    out["z"] = max(0, min(1000, int(mc["z"] - bias)))
+
+    out["z"] = max(
+        0,
+        min(
+            1000,
+            int(mc["z"] - bias)
+        )
+    )
 
     print(
-        f"[DEPTH TARGET] target={target:.2f} "
+        f"[DEPTH TARGET] "
+        f"target={target:.2f} "
         f"current={current:.2f} "
-        f"error={error:+.2f} "
+        f"error={error:+.3f} "
         f"bias={bias:+d} "
         f"z={out['z']}"
     )
 
     return out
-
 
 def joystick_sender():
     """Kirim MANUAL_CONTROL 20 Hz.
