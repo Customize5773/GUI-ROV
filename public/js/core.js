@@ -169,14 +169,33 @@ export function makeFullscreen(el, { onToggle } = {}) {
 const PY_QR_FRESH_MS = 3000;
 let _pyQrData = null, _pyQrWall = null, _pyQrAt = 0;
 let _clientQrData = null;
+let _lastStableQr = null, _lastStableSource = null;
 
 export function setPyQr(data, wall) {
   _pyQrData = data || null;
   _pyQrWall = wall || null;
   _pyQrAt = Date.now();
+  if (data && data !== _lastStableQr) {
+    _lastStableQr = data;
+    _lastStableSource = "python";
+  }
 }
 
-export function setClientQr(data) { _clientQrData = data || null; }
+export function setClientQr(data) {
+  _clientQrData = data || null;
+  if (data && data !== _lastStableQr) {
+    _lastStableQr = data;
+    _lastStableSource = "client";
+  }
+}
+
+export function clearQr() {
+  _clientQrData = null;
+  _pyQrData = null;
+  _pyQrWall = null;
+  _lastStableQr = null;
+  _lastStableSource = null;
+}
 
 /* pisahkan sisi A/B/C/D dari payload QR (JSON KKI 2026 mis.
    {"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}, atau huruf
@@ -198,13 +217,18 @@ export function deriveQrSide(raw) {
 
 export function getQrState() {
   const pyFresh = !!(_pyQrData && Date.now() - _pyQrAt < PY_QR_FRESH_MS);
-  const raw = pyFresh ? _pyQrData : _clientQrData;
+  let raw = pyFresh ? _pyQrData : _clientQrData;
+  let source = pyFresh ? "python" : (raw ? "client" : null);
+  if (!raw && _lastStableQr) {
+    raw = _lastStableQr;
+    source = _lastStableSource;
+  }
   const derived = raw ? deriveQrSide(raw) : null;
-  const side = pyFresh && _pyQrWall ? _pyQrWall : (derived ? derived.side : null);
+  const side = (pyFresh && _pyQrWall) ? _pyQrWall : (derived ? derived.side : null);
   return {
     raw,
     side,
     shown: derived ? derived.shown : null,
-    source: pyFresh ? "python" : (raw ? "client" : null),
+    source,
   };
 }

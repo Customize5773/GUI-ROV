@@ -2,7 +2,7 @@
 // (CAM 1 = BOTTOM, CAM 2 = WALL) + deteksi QR Code di feed BOTTOM.
 // QR menentukan sisi dinding (A/B/C/D) tempat payload digantung.
 import { CONFIG } from "../config.js";
-import { log, num, snapshotImage, makeFullscreen, camProxy, setClientQr, getQrState } from "../core.js";
+import { log, num, snapshotImage, makeFullscreen, camProxy, setClientQr, clearQr, getQrState } from "../core.js";
 
 export const cameraPage = {
   streaming: false,
@@ -127,7 +127,7 @@ export const cameraPage = {
     this.els.qrStatus = root.querySelector("#qrStatus");
     this.els.qrData = root.querySelector("#qrData");
     this.els.qrTime = root.querySelector("#qrTime");
-    root.querySelector("#qrClear").onclick = () => { setClientQr(null); this._renderQR("Menunggu feed BOTTOM…"); };
+    root.querySelector("#qrClear").onclick = () => { clearQr(); this._renderQR("Menunggu feed BOTTOM…"); };
     root.querySelector("#qrFile").onchange = (e) => this._scanFile(e.target.files[0]);
 
     root.querySelector("#camStart").onclick = () => this._toggleStream();
