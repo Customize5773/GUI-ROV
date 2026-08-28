@@ -4,10 +4,11 @@ vision/qr_detect.py — KKI 2026 ROV QR Vision Pipeline
 Deteksi **QR Code** payload dari kamera (fokus tunggal — deteksi ArUco sudah dihapus).
 Target visual misi = QR payload (4×4 cm) yang dicetak tim, BUKAN marker ArUco.
 
-Mendukung 3 sumber kamera:
+Mendukung 4 sumber:
   - 'mock'  : simulasi tanpa kamera fisik (untuk testing)
   - 'usb'   : USB webcam langsung di laptop (cv2.VideoCapture(index))
   - 'rtsp'  : stream dari Raspberry Pi / Jetson via RTSP/HTTP
+  - 'image' : file gambar statis (cv2.imread) — pipeline berhenti setelah satu pass
 
 Output:
   - Callback on_detection(result: dict) dipanggil tiap ada deteksi QR
@@ -297,6 +298,7 @@ class VisionPipeline:
         source: str = 'mock',
         device=0,
         rtsp_url: str = 'rtsp://hydroship:8554/cam',
+        image_path: Optional[str] = None,
         callback: Optional[Callable] = None,
         fps: int = 10,
         cam_width: int = 1280,
@@ -319,9 +321,10 @@ class VisionPipeline:
         """
         Parameters
         ----------
-        source     : 'mock' | 'usb' | 'rtsp'
+        source     : 'mock' | 'usb' | 'rtsp' | 'image'
         device     : index USB webcam (default 0)
         rtsp_url   : URL RTSP/HTTP jika source='rtsp'
+        image_path : path file gambar statis (jpg/png) jika source='image'
         callback   : fungsi dipanggil tiap deteksi QR
         fps        : target frame-rate capture
         cam_width, cam_height : resolusi capture USB (px). HARUS sama dgn resolusi saat
@@ -354,6 +357,10 @@ class VisionPipeline:
         self.source = source
         self.device = device
         self.rtsp_url = rtsp_url
+        self.image_path = image_path
+        if source == 'image' and not image_path:
+            log.warning("[vision] source='image' tapi image_path kosong — fallback ke mock")
+            self.source = 'mock'
         self.callback = callback
         self.fps = fps
         self.cam_width = cam_width
@@ -461,7 +468,12 @@ class VisionPipeline:
         if self._running:
             return
         self._running = True
-        if self._dual and self.source != 'mock':
+        if self.source == 'image':
+            self._thread = threading.Thread(target=self._run_image, daemon=True,
+                                            name='VisionThreadImage')
+            self._thread.start()
+            log.info("[vision] Started image source: %s", self.image_path)
+        elif self._dual and self.source != 'mock':
             self._thread_qr = threading.Thread(target=self._run_qr_camera, daemon=True,
                                                name='VisionThreadQR')
             self._thread_hook = threading.Thread(target=self._run_hook_camera, daemon=True,
@@ -559,6 +571,61 @@ class VisionPipeline:
                 zz = self.MOCK_TARGET_DIST + 0.5 * err
                 self._last_hook['pose'] = {'x': 0.16 * err, 'y': -0.14 * err, 'z': zz, 'dist': zz}
             time.sleep(1.0 / self.fps)
+
+    def _run_image(self):
+        """Proses satu file gambar statis lalu berhenti.
+
+        Memuat frame via cv2.imread, menjalankan pipeline yang sama persis dengan
+        _run_camera() (undistort, decode_qr berjenjang, wall-CNN fallback,
+        detect_hook), lalu menghentikan thread sendiri setelah satu pass.
+        """
+        if not CV2_OK:
+            log.error("[vision] opencv tidak tersedia — source='image' butuh cv2")
+            self._running = False
+            return
+        frame = cv2.imread(self.image_path)
+        if frame is None:
+            log.error("[vision] Tidak bisa membaca file gambar: %s", self.image_path)
+            self._running = False
+            return
+        log.info("[vision] Memproses image: %s (%dx%d)", self.image_path,
+                 frame.shape[1], frame.shape[0])
+
+        self._verify_calib_size(frame)
+        frame = self._undistort(frame, self._K, self._dist, self._undist_cache)
+
+        dets = decode_qr(frame)
+        if not dets:
+            dets = self._decode_stacked(frame)
+        if not dets:
+            self._try_wall_fallback(frame)
+        elif self._wall_voter is not None:
+            self._wall_voter.reset()
+            self._last_wall_hint = None
+        for det in dets:
+            data = det['data']
+            pts = det['pts']
+            center = (int(pts[:, 0].mean()), int(pts[:, 1].mean()))
+            area = float(cv2.contourArea(pts.reshape(-1, 1, 2).astype(np.float32)))
+            frame = self._annotate(frame, data, center, pts.astype(int))
+            result = self._build_result(data, center, area, frame)
+            if self._K is not None and len(pts) >= 4:
+                ordered = self._order_corners(pts)
+                result['pose'] = self._estimate_pose_pts(
+                    ordered, self.qr_length, K=self._K, dist=np.zeros_like(self._dist))
+            self._dispatch(result)
+
+        focal = float(self._K[0, 0]) if self._K is not None else None
+        hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
+                           min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
+                           focal_px=focal)
+        if hook is not None:
+            self._last_hook = hook
+            log.debug("[vision] Deteksi hook center=%s area=%.0f conf=%.2f method=%s",
+                      hook['center'], hook['area'], hook['confidence'], hook['method'])
+
+        self._running = False
+        log.info("[vision] Image source selesai — thread berhenti")
 
     def _run_camera(self):
         """Capture loop nyata (USB / RTSP) — QR saja."""
@@ -959,9 +1026,10 @@ if __name__ == '__main__':
                         format='%(asctime)s %(levelname)s %(message)s')
 
     ap = argparse.ArgumentParser(description='QR vision pipeline test')
-    ap.add_argument('--source', default='mock', choices=['mock', 'usb', 'rtsp'])
+    ap.add_argument('--source', default='mock', choices=['mock', 'usb', 'rtsp', 'image'])
     ap.add_argument('--device', type=int, default=0)
     ap.add_argument('--rtsp', default='rtsp://192.168.1.10:8554/cam')
+    ap.add_argument('--image', default=None, help='path file gambar statis (untuk --source image)')
     args = ap.parse_args()
 
     detections = []
@@ -970,8 +1038,13 @@ if __name__ == '__main__':
         detections.append(r)
         print(f"  → {r['type']} | data={r['data']} | wall={r['wall']} | area={r['area']:.0f}")
 
-    cam = VisionPipeline(source=args.source, device=args.device,
-                         rtsp_url=args.rtsp, callback=on_det)
+    kwargs = dict(source=args.source, callback=on_det)
+    if args.source == 'image':
+        kwargs['image_path'] = args.image
+    else:
+        kwargs['device'] = args.device
+        kwargs['rtsp_url'] = args.rtsp
+    cam = VisionPipeline(**kwargs)
     cam.start()
     print(f"[test] Pipeline jalan (source={args.source}). Ctrl+C untuk berhenti.")
     try:

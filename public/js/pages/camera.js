@@ -38,6 +38,7 @@ export const cameraPage = {
                 <span class="qr__status" id="qrStatus">Menunggu feed BOTTOM…</span>
                 <span class="qr__data" id="qrData">No QR detected</span>
                 <span class="qr__time" id="qrTime"></span>
+                <span class="qr-dot" id="qrDotCam" aria-hidden="true"></span>
               </div>
             </div>
           </div>
@@ -127,6 +128,7 @@ export const cameraPage = {
     this.els.qrStatus = root.querySelector("#qrStatus");
     this.els.qrData = root.querySelector("#qrData");
     this.els.qrTime = root.querySelector("#qrTime");
+    this.els.qrDotCam = root.querySelector("#qrDotCam");
     root.querySelector("#qrClear").onclick = () => { clearQr(); this._renderQR("Menunggu feed BOTTOM…"); };
     root.querySelector("#qrFile").onchange = (e) => this._scanFile(e.target.files[0]);
 
@@ -330,13 +332,14 @@ export const cameraPage = {
   /* tampilkan hasil QR + sisi A/B/C/D dari sumber bersama (core.js:getQrState) —
      sama dgn readout Control (#vQR/#vQRSide), Python diprioritaskan bila segar. */
   _renderQR(idleStatus) {
-    const { raw, side, shown, source } = getQrState();
+    const { raw, side, shown, source, changeType } = getQrState();
     if (!raw) {
       this.els.qrStatus.textContent = idleStatus || (this.streaming ? "Memindai…" : "Menunggu feed BOTTOM…");
       this.els.qrSide.textContent = "—";
       this.els.qrSide.className = "qr__side";
       this.els.qrData.textContent = "No QR detected";
       this.els.qrTime.textContent = "";
+      if (this.els.qrDotCam) this.els.qrDotCam.className = "qr-dot";
       this.lastQR = "";
       return;
     }
@@ -345,6 +348,9 @@ export const cameraPage = {
     this.els.qrSide.textContent = side || "?";
     this.els.qrSide.className = "qr__side qr__side--" + (side ? "ok" : "unknown");
     this.els.qrTime.textContent = new Date().toLocaleTimeString("id-ID", { hour12: false });
+    if (this.els.qrDotCam) {
+      this.els.qrDotCam.className = "qr-dot" + (changeType === "new" ? " qr-dot--new" : changeType === "same" ? " qr-dot--same" : "");
+    }
     if (raw !== this.lastQR) { log(`QR terbaca: "${raw}" → sisi ${side || "?"}`, "ok"); this.lastQR = raw; }
   },
 };

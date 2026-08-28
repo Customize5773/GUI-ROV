@@ -60,7 +60,7 @@ const els = {
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   depthTargetInput: $("depthTargetInput"),
-  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"), qrDot: $("qrDot"),
   vQRFocus: $("vQRFocus"), qrFocusReadout: $("qrFocusReadout"),
   depthHoldBadge: $("depthHoldBadge"),
   poolDepthBadge: $("poolDepthBadge"),
@@ -622,7 +622,7 @@ let _lastQrScan = 0;
 
 function renderQrReadout() {
   if (!els.vQR) return;
-  const { raw, side, source } = getQrState();
+  const { raw, side, source, changeType } = getQrState();
   if (raw) {
     els.vQR.textContent = raw;
     els.vQR.title = `${raw} — sumber: ${source === "python" ? "vision Python" : "scan lokal (browser)"}`;
@@ -637,6 +637,9 @@ function renderQrReadout() {
     els.vQRSide.textContent = side || "";
     els.vQRSide.classList.toggle("qr__side--ok", !!side);
     els.vQRSide.hidden = !side;
+  }
+  if (els.qrDot) {
+    els.qrDot.className = "qr-dot" + (changeType === "new" ? " qr-dot--new" : changeType === "same" ? " qr-dot--same" : "");
   }
 }
 

@@ -547,6 +547,18 @@ body[data-theme="light"] .theme__icon::after {
   border-radius: 5px; border: 1px solid rgba(255,255,255,.12); color: var(--ink-dim);
 }
 .readout__side.qr__side--ok { color: var(--abyss); background: var(--ok); border-color: var(--ok); }
+.qr-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--ink-dim);
+  transition: all .2s ease; align-self: center; margin-left: 6px; flex-shrink: 0;
+}
+.qr-dot--new {
+  background: var(--ok);
+  box-shadow: 0 0 10px rgba(55, 211, 146, .5);
+}
+.qr-dot--same {
+  background: var(--alert);
+  box-shadow: 0 0 10px rgba(255, 90, 90, .5);
+}
 
 /* main grid */
 .grid {

@@ -7,6 +7,7 @@ decode_qr() (grayscale+CLAHE / upscale). Butuh cv2 + pyzbar + segno; di-skip bil
 """
 import os
 import sys
+import tempfile
 
 import pytest
 
@@ -357,3 +358,55 @@ def test_estimate_pose_after_undistort_requires_zero_dist():
         f"dist=0 pasca-undistort harus pulihkan z sebenarnya ({tvec_gt[2]}), dapat {correct['z']}"
     assert abs(buggy['z'] - tvec_gt[2]) > 0.05, \
         "dist asli dipakai lagi pasca-undistort (bug) seharusnya menyimpang jelas dari z sebenarnya"
+
+
+# ── Source 'image' (file gambar statis) ───────────────────────────────────────
+def test_image_source_decodes_qr_and_dispatches():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    segno = pytest.importorskip("segno")
+    from vision.qr_detect import VisionPipeline
+
+    text = '{"mission":5,"team":"HYDROSHIP","type":"payload","id":"D"}'
+    qr = _render_qr_bgr(cv2, np, segno, text, module_px=8)
+    frame, _ = _place_on_canvas(cv2, np, qr)
+
+    with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+        cv2.imwrite(tmp.name, frame)
+        path = tmp.name
+
+    try:
+        results = []
+        def on_det(r):
+            results.append(r)
+
+        cam = VisionPipeline(source='image', image_path=path, callback=on_det)
+        cam.start()
+        cam._thread.join(timeout=5)
+        assert not cam._thread.is_alive(), "thread image harus berhenti sendiri setelah satu pass"
+        assert len(results) == 1
+        assert results[0]['data'] == text
+        assert results[0]['wall'] == 'D'
+        cx, cy = results[0]['center']
+        assert abs(cx - 320) < 2 and abs(cy - 240) < 2
+        latest = cam.latest_qr()
+        assert latest is not None and latest['data'] == text
+    finally:
+        os.unlink(path)
+
+
+def test_image_source_missing_file_logs_error_and_stops():
+    cv2 = pytest.importorskip("cv2")
+    from vision.qr_detect import VisionPipeline
+
+    cam = VisionPipeline(source='image', image_path='/path/tdk/ada.jpg')
+    cam.start()
+    cam._thread.join(timeout=3)
+    assert not cam._thread.is_alive(), "thread harus berhenti tanpa crash walau file hilang"
+
+
+def test_image_source_empty_path_falls_back_to_mock():
+    from vision.qr_detect import VisionPipeline
+
+    cam = VisionPipeline(source='image', image_path=None)
+    assert cam.source == 'mock', "image_path kosong harus fallback ke mock"

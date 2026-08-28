@@ -170,6 +170,7 @@ const PY_QR_FRESH_MS = 3000;
 let _pyQrData = null, _pyQrWall = null, _pyQrAt = 0;
 let _clientQrData = null;
 let _lastStableQr = null, _lastStableSource = null;
+let _lastDisplayedQr = null;
 
 export function setPyQr(data, wall) {
   _pyQrData = data || null;
@@ -195,6 +196,7 @@ export function clearQr() {
   _pyQrWall = null;
   _lastStableQr = null;
   _lastStableSource = null;
+  _lastDisplayedQr = null;
 }
 
 /* pisahkan sisi A/B/C/D dari payload QR (JSON KKI 2026 mis.
@@ -225,10 +227,18 @@ export function getQrState() {
   }
   const derived = raw ? deriveQrSide(raw) : null;
   const side = (pyFresh && _pyQrWall) ? _pyQrWall : (derived ? derived.side : null);
+  let changeType = null;
+  if (raw) {
+    changeType = raw !== _lastDisplayedQr ? "new" : "same";
+    _lastDisplayedQr = raw;
+  } else {
+    _lastDisplayedQr = null;
+  }
   return {
     raw,
     side,
     shown: derived ? derived.shown : null,
     source,
+    changeType,
   };
 }
