@@ -533,7 +533,7 @@ body[data-theme="light"] .theme__icon::after {
 
 .readout--qr { align-items: flex-start; }
 .readout--qr .readout__v {
-  font-size: 14px; max-width: 220px;
+  font-size: 28px; max-width: 220px;
   white-space: normal; word-break: break-all; text-align: right;
 }
 .readout--qr.is-ok .readout__v { color: var(--ok); }
