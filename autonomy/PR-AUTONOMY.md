@@ -319,6 +319,27 @@ benar: kasus-kasus itu disaring, bukan diloloskan.
       reprojection RMSE, error X/Y/Z, latensi capture→output, CPU/RAM.
       Ekstraktor keypoint BELUM pernah diuji pada frame bawah air sungguhan —
       lolos pada hook sintetis tak berarti apa-apa untuk air keruh.
+      **Masih BUTUH rekaman kamera WALL** (approach ke hook dari jarak docking,
+      siluet U penuh) — belum ada per 28 Agu 2026.
+- [ ] **TEMUAN 28 Agu 2026** (survei pasif, 1270 frame nyata dari kamera
+      **BOTTOM/gripper**, `Data dari pyload.zip` + `Data dari Pyload 2.zip` —
+      resolusi 1920×1088 & 1280×736, KEDUANYA tak cocok satu pun kalibrasi di
+      `vision/calibration/*.npz`; 1088/736 ciri khas padding H.264 kelipatan
+      16 dari 1080/720, bukan resolusi asli): `detect_hook()` **TRIGGER di
+      1270/1270 frame (100%)**, confidence 0.44–0.95 (p50 0.59) — SELURUHNYA
+      lolos gate `min_confidence=0.35` milik `hook_localization`. Inspeksi
+      visual 8 sample beranotasi: bbox konsisten mengunci ke **partikel keruh
+      melayang, noda dinding, atau bentuk gripper sendiri** — TAK SATU PUN ke
+      pipa/hook yang benar-benar terlihat di frame (cuma potongan pipa+siku
+      point-blank saat HANG/ENGAGE, bukan siluet U dari jarak docking).
+      Data ini kamera SALAH (bukan WALL) jadi bukan bukti final, tapi
+      indikasinya kuat: spesifisitas `detect_hook()` terhadap air keruh
+      sungguhan rendah — kelas masalah sama semangat HOOK-02 (blob lolos gate
+      shape/size), manifestasi baru: banyak blob KECIL salah sasaran, bukan
+      satu blob raksasa. Tindak lanjut: ulangi survei ini begitu ada rekaman
+      WALL sungguhan; pertimbangkan menaikkan `min_confidence` atau menambah
+      gate bentuk (mis. syarat dua "kaki" simetris) bila pola berulang di
+      kamera yang benar.
 - [ ] **Tahap 3** uji air dgn operator + STOP aktif, validasi pose relatif saja.
 - [ ] Ukur geometri hook fisik: `leg_length_m` (0.090) & `u_radius_m` (0.035) di
       `hook_map.example.yaml` masih PERKIRAAN, belum diukur.
