@@ -336,7 +336,7 @@ log run ke disk untuk perbandingan gain pasca-trial (run 1 vs run 2).
 - [x] GUI toggle test: FSM waits, starts on "autonomous" (`verify_handoff.mjs` 3/3)
 - [x] No memory leaks, clean shutdown
 - [x] Jalur degradasi `M5_FALLBACK` tidak ABORT (pytest, simulator)
-- [x] Unit test: 135 passed, 2 skipped (`PYTHONPATH= pytest tests/ -q`)
+- [x] Unit test: 271 passed, 2 skipped (`python3 -m pytest autonomy/tests/ -q`, 2026-08-29)
 
 **Hardware Readiness**
 - [ ] Pixhawk connected via USB/tether
@@ -352,7 +352,7 @@ log run ke disk untuk perbandingan gain pasca-trial (run 1 vs run 2).
 
 ---
 
-**Status:** Ready to execute SITL → Bench → Pool progression  
+**Status:** SITL VERIFIED → Bench/Pool progression jalan (trial 22 & 25 Agu 2026)  
 **Owner:** Rasya (autonomy integration)  
-**Last Updated:** 2026-08-21  
+**Last Updated:** 2026-08-29  
 **Next Review:** After first pool test
