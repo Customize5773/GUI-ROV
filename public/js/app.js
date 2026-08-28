@@ -644,81 +644,96 @@ function renderQrReadout() {
   }
 }
 
-/* Preview QR sebagai IMG hasil decode (bukan screenshot deteksi). Kalau payload
-   berupa data-URL gambar (mis. base64 dari misi), tampilkan gambar hasil decode;
-   selain itu (JSON KKI / huruf sisi / link / teks) render teks hasil decode jadi
-   gambar di canvas — supaya preview memperlihatkan isi decode, bukan potongan
-   dari bingkai kamera. Sumber diambil dari getQrState() (vision Python + scan
-   lokal) biar konsisten dengan readout. */
+/* Preview QR — sekedar pembacaan hasil decode. Bila payload QR adalah LINK ke
+   gambar (data-URL image atau URL http/https gambar) tampilkan gambar tsb di
+   canvas; selain itu (JSON KKI / huruf sisi / teks) cukup render teks hasil
+   decode. Ini murni view berpasif thd hasil decode, bukan screenshot deteksi. */
 let _qrPreviewImg = null;
+let _qrPreviewRaw = null;
 
-// muat payload data-URL gambar sekali, cache di Image
+// deteksi payload yg menunjuk ke gambar: data-URL image atau URL gambar
+function isImagePayload(raw) {
+  if (!raw) return false;
+  const s = String(raw).trim();
+  if (/^data:image\/[^;]+;base64,/.test(s)) return true;
+  // URL http(s) yang berakhiran ekstensi gambar (atau query dgn ekstensi)
+  if (/^https?:\/\//i.test(s)) {
+    const path = s.split(/[?#]/)[0];
+    return /\.(png|jpe?g|gif|webp|bmp|svg)$/i.test(path);
+  }
+  return false;
+}
+
+// muat sumber gambar (data-URL atau URL) sekali, cache di Image
 function loadQrPreviewImage(raw) {
   if (_qrPreviewImg && _qrPreviewImg._src === raw) return Promise.resolve(_qrPreviewImg);
-  if (!/^data:image\/[^;]+;base64,/.test(raw || "")) return Promise.resolve(null);
   return new Promise((resolve) => {
     const img = new Image();
+    let done = false;
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 8000);
     img._src = raw;
-    img.onload = () => { _qrPreviewImg = img; resolve(img); };
-    img.onerror = () => resolve(null);
+    img.onload = () => { if (done) return; done = true; clearTimeout(timer); _qrPreviewImg = img; resolve(img); };
+    img.onerror = () => { if (done) return; done = true; clearTimeout(timer); resolve(null); };
     img.src = raw;
   });
 }
 
-let _qrPreviewRaw = null;
+function paintQrText(pCtx, pw, ph, text) {
+  pCtx.fillStyle = "rgba(255,255,255,.97)";
+  pCtx.fillRect(0, 0, pw, ph);
+  pCtx.fillStyle = "#101418";
+  pCtx.textAlign = "center";
+  pCtx.textBaseline = "middle";
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = "";
+  for (const w of words) {
+    const test = line ? line + " " + w : w;
+    pCtx.font = "10px ui-monospace, monospace";
+    if (pCtx.measureText(test).width <= pw - 12) { line = test; }
+    else { if (line) lines.push(line); line = w; }
+  }
+  if (line) lines.push(line);
+  const lh = 14;
+  let y = ph / 2 - ((lines.length - 1) * lh) / 2;
+  for (const l of lines.slice(0, Math.floor(ph / lh))) {
+    pCtx.font = "10px ui-monospace, monospace";
+    pCtx.fillText(l, pw / 2, y);
+    y += lh;
+  }
+}
 
 function renderQrPreviewImage(raw) {
   if (!els.qrPreview) return;
   const pCtx = els.qrPreview.getContext("2d");
   const pw = els.qrPreview.width, ph = els.qrPreview.height;
-  pCtx.clearRect(0, 0, pw, ph);
 
-  if (!raw) { _qrPreviewRaw = null; return; }
+  if (!raw) {
+    pCtx.clearRect(0, 0, pw, ph);
+    _qrPreviewRaw = null;
+    return;
+  }
 
-  const paintText = (text) => {
-    pCtx.fillStyle = "rgba(255,255,255,.97)";
-    pCtx.fillRect(0, 0, pw, ph);
-    pCtx.fillStyle = "#101418";
-    pCtx.textAlign = "center";
-    pCtx.textBaseline = "middle";
-    const words = String(text).split(/\s+/);
-    const lines = [];
-    let line = "";
-    for (const w of words) {
-      const test = line ? line + " " + w : w;
-      pCtx.font = "10px ui-monospace, monospace";
-      if (pCtx.measureText(test).width <= pw - 12) { line = test; }
-      else { if (line) lines.push(line); line = w; }
-    }
-    if (line) lines.push(line);
-    const lh = 14;
-    let y = ph / 2 - ((lines.length - 1) * lh) / 2;
-    for (const l of lines.slice(0, Math.floor(ph / lh))) {
-      pCtx.font = "10px ui-monospace, monospace";
-      pCtx.fillText(l, pw / 2, y);
-      y += lh;
-    }
-    _qrPreviewRaw = raw;
-  };
-
-  if (/^data:image\/[^;]+;base64,/.test(raw || "")) {
-    // gambar di-encode dalam QR → tampilkan hasil decode, hanya saat payload berubah
+  if (isImagePayload(raw)) {
+    // payload = link gambar → tampilkan gambar hasil decode, hanya saat payload berubah
     if (_qrPreviewRaw !== raw) {
       loadQrPreviewImage(raw).then((img) => {
         if (!img || getQrState().raw !== raw || !els.qrPreview) return;
-        const pCtx2 = els.qrPreview.getContext("2d");
-        pCtx2.clearRect(0, 0, pw, ph);
+        const c2 = els.qrPreview.getContext("2d");
+        c2.clearRect(0, 0, pw, ph);
         const s = Math.min(pw / img.width, ph / img.height);
         const dw = img.width * s, dh = img.height * s;
-        pCtx2.drawImage(img, (pw - dw) / 2, (ph - dh) / 2, dw, dh);
+        c2.drawImage(img, (pw - dw) / 2, (ph - dh) / 2, dw, dh);
         _qrPreviewRaw = raw;
       });
     }
     return;
   }
 
-  // payload JSON / sisi / link / teks biasa → render teks hasil decode jadi gambar
-  paintText(raw);
+  // payload biasa (JSON / sisi / teks) → render teks hasil decode jadi gambar
+  pCtx.clearRect(0, 0, pw, ph);
+  paintQrText(pCtx, pw, ph, raw);
+  _qrPreviewRaw = raw;
 }
 
 /* Skor ketajaman ("focus peaking" ala kamera foto) — varians Laplacian 4-neighbor
