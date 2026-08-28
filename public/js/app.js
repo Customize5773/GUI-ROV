@@ -704,20 +704,15 @@ function scanControlQR() {
       const pw = els.qrPreview.width, ph = els.qrPreview.height;
       pCtx.clearRect(0, 0, pw, ph);
       if (code && code.location) {
-        const pScale = Math.min(pw / sw, ph / sh);
-        const dw = sw * pScale, dh = sh * pScale;
+        const xs = code.location.map(p => p.x);
+        const ys = code.location.map(p => p.y);
+        const x0 = Math.min(...xs), y0 = Math.min(...ys);
+        const x1 = Math.max(...xs), y1 = Math.max(...ys);
+        const bw = x1 - x0, bh = y1 - y0;
+        const pScale = Math.min(pw / bw, ph / bh) * 0.9;
+        const dw = bw * pScale, dh = bh * pScale;
         const dx = (pw - dw) / 2, dy = (ph - dh) / 2;
-        pCtx.drawImage(els.camImg, dx, dy, dw, dh);
-        const sx = dw / cw, sy = dh / ch;
-        pCtx.strokeStyle = "#37d392";
-        pCtx.lineWidth = 2;
-        pCtx.beginPath();
-        code.location.forEach((pt, i) => {
-          const x = dx + pt.x * sx, y = dy + pt.y * sy;
-          i === 0 ? pCtx.moveTo(x, y) : pCtx.lineTo(x, y);
-        });
-        pCtx.closePath();
-        pCtx.stroke();
+        pCtx.drawImage(qrScanCanvas, x0, y0, bw, bh, dx, dy, dw, dh);
       }
     }
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }

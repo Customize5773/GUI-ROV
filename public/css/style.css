@@ -563,7 +563,9 @@ body[data-theme="light"] .theme__icon::after {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-top: 8px;
+  align-items: flex-end;
+  flex: 0 0 100%;
+  pointer-events: auto;
 }
 .qr-preview {
   width: 160px;
@@ -661,6 +663,8 @@ body[data-theme="light"] .theme__icon::after {
   top: 14px;
   right: 14px;
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 12px;
   pointer-events: none;
   /* z-index eksplisit: elemen ini dipindah ke dalam .cam saat kamera fullscreen
