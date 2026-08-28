@@ -60,7 +60,7 @@ const els = {
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   depthTargetInput: $("depthTargetInput"),
-  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"), qrDot: $("qrDot"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"), qrDot: $("qrDot"), qrPreview: $("qrPreview"),
   vQRFocus: $("vQRFocus"), qrFocusReadout: $("qrFocusReadout"),
   depthHoldBadge: $("depthHoldBadge"),
   poolDepthBadge: $("poolDepthBadge"),
@@ -698,6 +698,28 @@ function scanControlQR() {
     setClientQr(code ? code.data : null);
     renderQrReadout();
     renderFocusReadout(sharpnessScore(img, cw, ch));
+
+    if (els.qrPreview) {
+      const pCtx = els.qrPreview.getContext("2d");
+      const pw = els.qrPreview.width, ph = els.qrPreview.height;
+      pCtx.clearRect(0, 0, pw, ph);
+      if (code && code.location) {
+        const pScale = Math.min(pw / sw, ph / sh);
+        const dw = sw * pScale, dh = sh * pScale;
+        const dx = (pw - dw) / 2, dy = (ph - dh) / 2;
+        pCtx.drawImage(els.camImg, dx, dy, dw, dh);
+        const sx = dw / cw, sy = dh / ch;
+        pCtx.strokeStyle = "#37d392";
+        pCtx.lineWidth = 2;
+        pCtx.beginPath();
+        code.location.forEach((pt, i) => {
+          const x = dx + pt.x * sx, y = dy + pt.y * sy;
+          i === 0 ? pCtx.moveTo(x, y) : pCtx.lineTo(x, y);
+        });
+        pCtx.closePath();
+        pCtx.stroke();
+      }
+    }
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
 setInterval(scanControlQR, 200);
