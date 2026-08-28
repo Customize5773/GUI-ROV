@@ -1,0 +1,134 @@
+# config/hook_map.example.yaml — MAP ARENA utk hook localization (OPSIONAL)
+# ============================================================================
+# Dipakai `vision/hook_localization.py` untuk mengubah deteksi hook menjadi pose
+# ROV pada frame map arena. Fitur ini OPSIONAL dan MATI secara default:
+#
+#   python fsm/mission5.py --config config/rov_tuned.yaml \
+#          --config config/pool_trial.yaml \
+#          --hook-map config/hook_map.local.yaml     # ← tanpa flag ini, fitur OFF
+#
+# ⚠ FILE INI SENGAJA TIDAK BISA DIMUAT APA ADANYA. Semua koordinat hook masih
+#   `null`, dan `load_hook_map()` MENOLAK null dengan pesan yang menyebut hook
+#   mana yang kosong. Itu memang tujuannya: pose map yang terbit dari koordinat
+#   tebakan jauh lebih berbahaya daripada tidak ada pose sama sekali — wahana ini
+#   tak punya sensor posisi lateral apa pun untuk mengoreksinya.
+#
+# Alur pakai (sama konvensi config lain di folder ini):
+#   1. cp config/hook_map.example.yaml config/hook_map.local.yaml
+#   2. UKUR di venue, isi setiap `null` di bawah
+#   3. python3 -m vision.hook_localization --map config/hook_map.local.yaml   # validasi
+#   *.local.yaml diabaikan git (.gitignore) — aman diubah tanpa bikin noise commit.
+
+# ── Jejak kolam (meter) ──────────────────────────────────────────────────────
+# Nilai di bawah = KOLAM LATIHAN AKTUAL (4,4 × 2,2 × 0,8 m), konsisten dengan
+# config/pool_trial.yaml. JANGAN pakai asumsi arena resmi 5×5 / 10×10 m di sini
+# kecuali memang sedang di arena itu (lihat pool_kki_trial/pool_kki_running.yaml).
+pool:
+  length_x: 4.4      # m — arah PANJANG kolam = sumbu +x map
+  width_y:  2.2      # m — arah LEBAR kolam   = sumbu +y map
+  depth:    0.8      # m — kedalaman air; dipakai utk z_map = depth − depth_sensor
+
+# ── Orientasi frame map terhadap kompas ──────────────────────────────────────
+# Bearing kompas (derajat, 0 = Utara, searah jarum jam) dari sumbu +x map.
+# Cara ukur paling gampang: hadapkan ROV lurus menyusuri sisi PANJANG kolam,
+# baca heading di GUI, tulis angkanya di sini.
+#
+# ⚠ GOTCHA TANDA — frame map right-handed dengan z KE ATAS, jadi sumbu +y map ada
+#   di bearing (x_axis_heading_deg − 90°), yaitu 90° BERLAWANAN jarum jam dari +x
+#   (ke KIRI bila berdiri menghadap +x). Bearing kompas justru bertambah SEARAH
+#   jarum jam. Salah tanda di sini menaruh ROV di sisi kolam yang berseberangan,
+#   diam-diam, tanpa pesan error. Cek sekali dengan satu titik yang sudah pasti.
+map:
+  x_axis_heading_deg: null    # ⚠ WAJIB DIISI — hasil baca kompas ROV di kolam
+
+# ── Geometri fisik hook (meter) ──────────────────────────────────────────────
+# Origin frame hook = PUSAT LENGKUNG-U. Bounding-box center SENGAJA tidak dipakai
+# sebagai pose final (ia bergeser mengikuti bagian hook mana yang kebetulan
+# terlihat). Default = HOOK_MODEL di vision/hook_localization.py.
+hook_geometry:
+  pipe_diameter_m:     0.025   # pipa PVC ¾" = 25 mm (sama HOOK_PIPE_DIAM_M di mission5.py)
+  leg_length_m:        0.090   # panjang kaki DI ATAS pusat-U — ⚠ UKUR, ini masih perkiraan
+  u_radius_m:          0.035   # radius garis-tengah lengkung U — ⚠ UKUR
+  wall_mount_offset_m: 0.060   # jarak titik sambungan dinding di BELAKANG bidang U — ⚠ UKUR
+
+# ── Posisi tiap hook pada frame map ──────────────────────────────────────────
+# x, y : meter pada frame map (0..length_x, 0..width_y) — di luar itu ditolak.
+# z    : meter dari DASAR kolam KE ATAS (dasar = 0).
+# wall_heading_deg : heading kompas ROV saat MENGHADAP TEGAK LURUS ke dinding
+#                    tempat hook itu terpasang. Dipakai gate konsistensi arah
+#                    DAN untuk membedakan hook mana yang sedang dilihat.
+#
+# ⚠ IDENTITAS A/B/C/D DIACAK PANITIA tiap trial. Tidak ada satu pun sisi yang
+#   di-hardcode ke huruf tertentu di kode — pemetaan hanya dari file ini.
+#   Hapus saja entri hook yang memang tidak ada di kolam (kolam latihan cuma
+#   punya SATU hook; lihat catatan wall_heading di config/pool_trial.yaml).
+#
+# ⚠ TINGGI HOOK — ADA DUA ANGKA BERBEDA, JANGAN TERTUKAR:
+#     0.385 m dari dasar  = KOLAM LATIHAN, hasil ukur langsung (415 mm dari
+#                           permukaan pada air 0,80 m). Ini yang dipakai default
+#                           di bawah, konsisten `pool_trial.yaml`.
+#     0.450 m dari dasar  = SPEK ARENA LOMBA (Guidebook KKI 2026 L46).
+#   Selisihnya 65 mm — cukup untuk membuat gripper meleset. UKUR ULANG di venue
+#   dan jangan menyalin angka dari kolam yang lain.
+hooks:
+  A:
+    x: null                   # ⚠ UKUR/MARK di venue
+    y: null                   # ⚠ UKUR/MARK di venue
+    z: 0.385                  # kolam latihan; arena lomba 0.45 — VERIFIKASI
+    wall_heading_deg: null    # ⚠ KALIBRASI kompas menghadap dinding hook ini
+  B:
+    x: null
+    y: null
+    z: 0.385
+    wall_heading_deg: null
+  C:
+    x: null
+    y: null
+    z: 0.385
+    wall_heading_deg: null
+  D:
+    x: null
+    y: null
+    z: 0.385
+    wall_heading_deg: null
+
+# ── Pemetaan payload → hook untuk trial berjalan ─────────────────────────────
+# Diisi setelah panitia mengumumkan penugasan trial. Kunci = id payload (string,
+# apa adanya dari QR), nilai = huruf hook di blok `hooks:` di atas. Boleh kosong:
+# kalau kosong, identitas hook ditentukan dari kecocokan heading saja.
+trial_assignment:
+  payload_id_to_hook_id: {}
+  # contoh: {"1": "C", "2": "A"}
+
+# ── Quality gate ─────────────────────────────────────────────────────────────
+# Semua opsional — yang tak ditulis memakai DEFAULT_GATES di hook_localization.py.
+# Nilai di bawah adalah default itu, ditulis eksplisit supaya gampang di-tuning
+# di kolam. Yang paling mungkin perlu diubah setelah trial: min_confidence,
+# max_range_m, max_jump_m.
+gates:
+  min_confidence:       0.35   # confidence detect_hook minimum
+  max_area_frac:        0.25   # tolak contour >25% frame (kelas bug HOOK-02, air keruh)
+  min_width_px:         2.0
+  max_width_px:         400.0
+  min_range_m:          0.15
+  max_range_m:          5.0    # ⚠ > diagonal kolam (4,92 m) = pasti salah
+  max_reproj_px:        3.0    # ambang terima pose PnP
+  ambiguity_ratio:      0.60   # err_terbaik/err_kedua di ATAS ini → dua solusi sama bagus → ambigu
+  wall_tol_deg:         35.0   # simpangan heading maksimum dari wall_heading_deg hook
+  max_jump_m:           0.80   # lompatan posisi map maksimum antar frame
+  sigma_width_px:       2.0    # ketidakpastian ukur lebar pipa → σ jarak
+  sigma_center_px:      3.0    # riak/glare menggeser centroid beberapa piksel
+  sigma_depth_m:        0.02
+  sigma_att_deg:        2.0
+  sigma_yaw_2p5d_deg:  30.0    # yaw TIDAK diamati vision di mode 2.5D — sengaja besar
+  sigma_yaw_pnp_deg:    5.0    # ⚠ belum divalidasi di air
+
+# ── Pemasangan kamera terhadap base_link ─────────────────────────────────────
+# base_link = FRD (+x depan, +y kanan, +z bawah). Kamera WALL menghadap DEPAN.
+# mount_pitch_deg POSITIF = kamera MENUNDUK.
+# offset_m = posisi kamera di base_link (meter, FRD) — [depan, kanan, bawah].
+camera_to_base:
+  mount_roll_deg:  0.0
+  mount_pitch_deg: 0.0    # ⚠ UKUR sudut tunduk kamera terpasang
+  mount_yaw_deg:   0.0
+  offset_m: [0.0, 0.0, 0.0]   # ⚠ UKUR jarak kamera dari titik-tengah ROV

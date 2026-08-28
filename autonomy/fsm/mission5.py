@@ -333,7 +333,8 @@ class Mission5FSM:
 
     def __init__(self, cmd: CommandSender, telem: TelemetryReceiver,
                  vision: VisionPipeline, runlog=None,
-                 marked_heading=None, marked_depth=None):
+                 marked_heading=None, marked_depth=None, hook_map_file=None,
+                 hook_calib_file=None):
         # Tanda gantungan yang direkam operator lewat tombol MARK saat misi 3
         # (command `mark_hook` di rov_agent.py), yaitu SAAT payload benar-benar
         # tergantung di hook. Dipakai M5_REDIVE untuk kembali ke sana.
@@ -425,7 +426,38 @@ class Mission5FSM:
             'qr_data': None, 'qr_wall': None,
             # Sisa jam heat (detik) — lihat _time_left(). None sampai start().
             'time_left': None,
+            # Lokalisasi hook (OPSIONAL, lihat --hook-map). None = fitur mati,
+            # yang juga kondisi default. Field baru saja — rov_link.py menyalin
+            # dict ini bulat-bulat, jadi field lama tak terganggu.
+            'hook_loc': None,
         }
+
+        # ── Lokalisasi hook (OPSIONAL) ────────────────────────────────────────
+        # Mati total kecuali --hook-map diberikan. Gagal muat = warning, BUKAN
+        # abort: ini fitur tambahan, misi 5 QR harus tetap jalan tanpanya.
+        self.hook_loc = None
+        self._hook_loc_t = 0.0        # throttle (~2 Hz, pola sama _log_sample)
+        if hook_map_file:
+            try:
+                from vision.hook_localization import (HookTracker, load_calibration,
+                                                      load_hook_map)
+                # Kalibrasi dimuat dari file (bukan dari K yang sudah ada di
+                # VisionPipeline) SEMATA supaya `image_size` ikut terbaca — tanpa
+                # itu gate resolusi tak bisa menilai apa pun, dan gate itulah yang
+                # menangkap kelas bug 22 Agu (K resolusi lain → jarak meleset
+                # berlipat, diam-diam). Lihat qr_detect._verify_calib_size().
+                calib = load_calibration(hook_calib_file) if hook_calib_file else None
+                self.hook_loc = {
+                    'map': load_hook_map(hook_map_file),
+                    'tracker': HookTracker(),
+                    'calib': calib,
+                }
+                log.info("[FSM] Hook localization AKTIF — map %s, kalibrasi %s",
+                         hook_map_file, hook_calib_file or '(dari VisionPipeline)')
+            except Exception as e:
+                log.warning("[FSM] Hook localization NONAKTIF — gagal muat %s: %s",
+                            hook_map_file, e)
+                self.hook_loc = None
 
     # ── Public API ────────────────────────────────────────────────────────────
 
@@ -516,6 +548,8 @@ class Mission5FSM:
             self.telemetry_out['qr_data'] = qr['data'] if qr else None
             self.telemetry_out['qr_wall'] = qr['wall'] if qr else None
 
+            self._hook_localize(telem)
+
             # Handoff GUI: bila operator kembalikan ke MANUAL saat autonomous → abort.
             #
             # `control_mode`, bukan `mode` — lihat catatan di _wait_for_autonomous().
@@ -564,6 +598,62 @@ class Mission5FSM:
 
         self.cmd.stop_all()
         self._print_score()
+
+    def _hook_localize(self, telem):
+        """Lokalisasi hook OPSIONAL → telemetry_out['hook_loc'] (+ run log ~2 Hz).
+
+        Sengaja dipanggil DI SINI (satu tempat, di refresh telemetri _loop) dan
+        BUKAN di _hook_servo_step(): satu titik menutup semua state, dan logika
+        servo yang sudah tervalidasi kolam tak ikut tersentuh sama sekali. Modul
+        ini murni PENGAMAT — tak satu pun state membaca hasilnya untuk mengambil
+        keputusan gerak."""
+        if self.hook_loc is None:
+            return
+        now = time.time()
+        if now - self._hook_loc_t < 0.5:      # 2 Hz cukup; loop 10 Hz cuma bikin panas
+            return
+        self._hook_loc_t = now
+        try:
+            det = self.vision.latest_hook(max_age=1.0)
+            if det is None:
+                self.telemetry_out['hook_loc'] = None
+                return
+            from vision.hook_localization import localize_hook
+            hl = self.hook_loc
+            calib = hl['calib']
+            if calib is None:                 # tak ada file → pinjam K VisionPipeline
+                # `is None` eksplisit, BUKAN `a or b`: K/dist itu ndarray, dan
+                # bool(ndarray) melempar ValueError "truth value is ambiguous" —
+                # yang di sini akan tertelan except di bawah & mematikan fitur
+                # diam-diam tiap siklus.
+                K = getattr(self.vision, '_K_hook', None)
+                dist = getattr(self.vision, '_dist_hook', None)
+                if K is None:
+                    K = getattr(self.vision, '_K', None)
+                    dist = getattr(self.vision, '_dist', None)
+                if K is None:
+                    return
+                calib = {'K': K, 'dist': dist, 'image_size': None,
+                         'name': 'VisionPipeline'}
+            res = localize_hook(det, calib, hook_map=hl['map'], vehicle_state=telem,
+                                camera_to_base=hl['map']['camera_to_base'],
+                                tracker=hl['tracker'])
+            # Ringkas utk telemetri — covariance 36 elemen tiap paket UDP itu
+            # boros dan tak dipakai GUI; ambil sigma diagonal posisi saja.
+            cov = res.get('covariance')
+            self.telemetry_out['hook_loc'] = {
+                'status': res['status'], 'hook_id': res['hook_id'],
+                'pose_map': res['pose_map_base'], 'rel_base': res['relative_pose_base'],
+                'reproj_px': res['reprojection_error_px'],
+                'sigma_xy_m': round(cov[0] ** 0.5, 3) if cov else None,
+                'reason': res['reason'],
+            }
+            if self.runlog:
+                self.runlog.event('hook_loc', **self.telemetry_out['hook_loc'])
+        except Exception as e:
+            # Fitur tambahan TIDAK boleh menjatuhkan loop misi.
+            log.debug("[FSM] hook localization error: %s", e)
+            self.telemetry_out['hook_loc'] = None
 
     def _log_sample(self, telem):
         """Cuplik telemetri ke run log ~2 Hz (loop jalan 10 Hz — merekam tiap iterasi
@@ -1553,6 +1643,11 @@ def main():
                     help='kalibrasi .npz kamera BOTTOM (mode dual-camera)')
     ap.add_argument('--calib-wall', default=CALIB_FILE_WALL,
                     help='kalibrasi .npz kamera WALL (mode dual-camera)')
+    ap.add_argument('--hook-map', default=None, metavar='FILE',
+                    help='AKTIFKAN lokalisasi hook (OPSIONAL, default MATI): path map arena '
+                         '.yaml/.yml/.json — lihat config/hook_map.example.yaml. Hasilnya cuma '
+                         'diterbitkan ke telemetri/run-log; TIDAK ada state yang memakainya '
+                         'untuk mengambil keputusan gerak, dan jalur M5 QR tak berubah.')
     ap.add_argument('--no-wall-cnn', action='store_true',
                     help='matikan fallback wall-CNN saat decode_qr() gagal (default: AKTIF)')
     ap.add_argument('--wall-cnn-votes', type=int, default=3,
@@ -1622,7 +1717,9 @@ def main():
     log.info("[main] Mulai setelah 3 detik... (Ctrl+C untuk abort)")
     time.sleep(3)
 
-    fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam, runlog=runlog)
+    fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam, runlog=runlog,
+                      hook_map_file=args.hook_map,
+                      hook_calib_file=args.calib_wall if args.hook_map else None)
     alasan = 'selesai'
     try:
         fsm.start(start_state=State[args.start_state], wait_mode=not args.no_wait_autonomous)
