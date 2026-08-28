@@ -489,6 +489,7 @@ function drawHookBbox(m5) {
 function applyMission5(m5) {
   setPyQr(m5 && m5.qr_data, m5 && m5.qr_wall);
   renderQrReadout();
+  renderQrPreviewImage(getQrState().raw);
 
   if (!els.mission5State) return;
   if (!m5) {
@@ -643,6 +644,83 @@ function renderQrReadout() {
   }
 }
 
+/* Preview QR sebagai IMG hasil decode (bukan screenshot deteksi). Kalau payload
+   berupa data-URL gambar (mis. base64 dari misi), tampilkan gambar hasil decode;
+   selain itu (JSON KKI / huruf sisi / link / teks) render teks hasil decode jadi
+   gambar di canvas — supaya preview memperlihatkan isi decode, bukan potongan
+   dari bingkai kamera. Sumber diambil dari getQrState() (vision Python + scan
+   lokal) biar konsisten dengan readout. */
+let _qrPreviewImg = null;
+
+// muat payload data-URL gambar sekali, cache di Image
+function loadQrPreviewImage(raw) {
+  if (_qrPreviewImg && _qrPreviewImg._src === raw) return Promise.resolve(_qrPreviewImg);
+  if (!/^data:image\/[^;]+;base64,/.test(raw || "")) return Promise.resolve(null);
+  return new Promise((resolve) => {
+    const img = new Image();
+    img._src = raw;
+    img.onload = () => { _qrPreviewImg = img; resolve(img); };
+    img.onerror = () => resolve(null);
+    img.src = raw;
+  });
+}
+
+let _qrPreviewRaw = null;
+
+function renderQrPreviewImage(raw) {
+  if (!els.qrPreview) return;
+  const pCtx = els.qrPreview.getContext("2d");
+  const pw = els.qrPreview.width, ph = els.qrPreview.height;
+  pCtx.clearRect(0, 0, pw, ph);
+
+  if (!raw) { _qrPreviewRaw = null; return; }
+
+  const paintText = (text) => {
+    pCtx.fillStyle = "rgba(255,255,255,.97)";
+    pCtx.fillRect(0, 0, pw, ph);
+    pCtx.fillStyle = "#101418";
+    pCtx.textAlign = "center";
+    pCtx.textBaseline = "middle";
+    const words = String(text).split(/\s+/);
+    const lines = [];
+    let line = "";
+    for (const w of words) {
+      const test = line ? line + " " + w : w;
+      pCtx.font = "10px ui-monospace, monospace";
+      if (pCtx.measureText(test).width <= pw - 12) { line = test; }
+      else { if (line) lines.push(line); line = w; }
+    }
+    if (line) lines.push(line);
+    const lh = 14;
+    let y = ph / 2 - ((lines.length - 1) * lh) / 2;
+    for (const l of lines.slice(0, Math.floor(ph / lh))) {
+      pCtx.font = "10px ui-monospace, monospace";
+      pCtx.fillText(l, pw / 2, y);
+      y += lh;
+    }
+    _qrPreviewRaw = raw;
+  };
+
+  if (/^data:image\/[^;]+;base64,/.test(raw || "")) {
+    // gambar di-encode dalam QR → tampilkan hasil decode, hanya saat payload berubah
+    if (_qrPreviewRaw !== raw) {
+      loadQrPreviewImage(raw).then((img) => {
+        if (!img || getQrState().raw !== raw || !els.qrPreview) return;
+        const pCtx2 = els.qrPreview.getContext("2d");
+        pCtx2.clearRect(0, 0, pw, ph);
+        const s = Math.min(pw / img.width, ph / img.height);
+        const dw = img.width * s, dh = img.height * s;
+        pCtx2.drawImage(img, (pw - dw) / 2, (ph - dh) / 2, dw, dh);
+        _qrPreviewRaw = raw;
+      });
+    }
+    return;
+  }
+
+  // payload JSON / sisi / link / teks biasa → render teks hasil decode jadi gambar
+  paintText(raw);
+}
+
 /* Skor ketajaman ("focus peaking" ala kamera foto) — varians Laplacian 4-neighbor
    di atas grayscale. Proxy standar "seberapa tajam", tanpa training/model apa pun.
    Skala BEDA dari cv2.Laplacian(CV_64F).var() Python (kernel & ukuran gambar beda) —
@@ -698,23 +776,7 @@ function scanControlQR() {
     setClientQr(code ? code.data : null);
     renderQrReadout();
     renderFocusReadout(sharpnessScore(img, cw, ch));
-
-    if (els.qrPreview) {
-      const pCtx = els.qrPreview.getContext("2d");
-      const pw = els.qrPreview.width, ph = els.qrPreview.height;
-      pCtx.clearRect(0, 0, pw, ph);
-      if (code && code.location) {
-        const xs = code.location.map(p => p.x);
-        const ys = code.location.map(p => p.y);
-        const x0 = Math.min(...xs), y0 = Math.min(...ys);
-        const x1 = Math.max(...xs), y1 = Math.max(...ys);
-        const bw = x1 - x0, bh = y1 - y0;
-        const pScale = Math.min(pw / bw, ph / bh) * 0.9;
-        const dw = bw * pScale, dh = bh * pScale;
-        const dx = (pw - dw) / 2, dy = (ph - dh) / 2;
-        pCtx.drawImage(qrScanCanvas, x0, y0, bw, bh, dx, dy, dw, dh);
-      }
-    }
+    renderQrPreviewImage(getQrState().raw);
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
 setInterval(scanControlQR, 200);
