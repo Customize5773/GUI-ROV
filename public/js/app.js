@@ -645,34 +645,41 @@ function renderQrReadout() {
 }
 
 /* Preview QR — sekedar pembacaan hasil decode. Bila payload QR adalah LINK ke
-   gambar (data-URL image atau URL http/https gambar) tampilkan gambar tsb di
-   canvas; selain itu (JSON KKI / huruf sisi / teks) cukup render teks hasil
-   decode. Ini murni view berpasif thd hasil decode, bukan screenshot deteksi. */
+   gambar (data-URL image atau URL http/https — halaman web yang menampilkan
+   gambar sekalipun, resolusi gambarnya dilakukan server via /qr/preview karena
+   browser tak bisa fetch lintas-origin) tampilkan gambar tsb di canvas; selain
+   itu (JSON KKI / huruf sisi / teks) cukup render teks hasil decode. Ini murni
+   view berpasif thd hasil decode, bukan screenshot deteksi. */
 let _qrPreviewImg = null;
 let _qrPreviewRaw = null;
+const QR_PREVIEW_PROXY = "/qr/preview?url=";
 
-// deteksi payload yang menunjuk ke gambar: data-URL image atau URL http(s)
-function isImagePayload(raw) {
-  if (!raw) return false;
+// URL sumber yang boleh digambar: data-URL image langsung, URL http(s) lewat
+// proxy same-origin (server mengikuti redirect & mengekstrak gambar dari
+// halaman HTML). Selain itu → null (bukan gambar, render teks).
+function qrPreviewSrc(raw) {
+  if (!raw) return null;
   const s = String(raw).trim();
-  if (/^data:image\/[^;]+;base64,/.test(s)) return true;
-  return /^https?:\/\//i.test(s);
+  if (/^data:image\/[^;]+;base64,/.test(s)) return s;
+  if (/^https?:\/\//i.test(s)) return QR_PREVIEW_PROXY + encodeURIComponent(s);
+  return null;
 }
 
-// muat sumber gambar (data-URL atau URL) sekali, cache di Image. Tanpa
-// crossOrigin: drawImage gambar cross-origin tetap sah (canvas mungkin
-// ter-taint tapi kita tak pernah membaca pikselnya), jadi tak bergantung
-// header CORS di host gambar publik macam etsy.
+// muat sumber gambar (data-URL atau URL hasil proxy) sekali, cache di Image.
+// DrawImage gambar cross-origin tetap sah (canvas mungkin ter-taint tapi kita
+// tak pernah membaca pikselnya), jadi tak bergantung header CORS di host
+// gambar publik macam etsy / cdn3.me-qr.com.
 function loadQrPreviewImage(raw) {
   if (_qrPreviewImg && _qrPreviewImg._src === raw) return Promise.resolve(_qrPreviewImg);
   return new Promise((resolve) => {
     const img = new Image();
     let done = false;
-    const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 8000);
+    // resolusi server bisa dua-langkah (redirect + HTML→gambar), kasih kelonggaran
+    const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 20000);
     img._src = raw;
     img.onload = () => { if (done) return; done = true; clearTimeout(timer); _qrPreviewImg = img; resolve(img); };
     img.onerror = () => { if (done) return; done = true; clearTimeout(timer); resolve(null); };
-    img.src = raw;
+    img.src = qrPreviewSrc(raw) || raw;
   });
 }
 
@@ -712,8 +719,9 @@ function renderQrPreviewImage(raw) {
     return;
   }
 
-  if (isImagePayload(raw)) {
-    // payload = link gambar → tampilkan gambar hasil decode, hanya saat payload berubah
+  if (qrPreviewSrc(raw)) {
+    // payload = link gambar/halaman → tampilkan gambar hasil decode (via proxy),
+    // hanya saat payload berubah
     if (_qrPreviewRaw !== raw) {
       loadQrPreviewImage(raw).then((img) => {
         if (!els.qrPreview || getQrState().raw !== raw) return;

@@ -112,6 +112,102 @@ function camStreamKey(target) {
   return t.toString();
 }
 
+/* ----------------------- QR preview proxy ----------------------- */
+const QR_UA =
+  "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
+const QR_MAX_HTML = 4 * 1024 * 1024; // batas buang halaman HTML yang diparse
+const QR_MAX_HOPS = 5;               // max redirect + hop ekstraksi gambar
+
+function qrFetch(href, cb) {
+  const u = new URL(href);
+  const mod = u.protocol === "https:" ? https : http;
+  const req = mod.get(u, {
+    headers: {
+      "User-Agent": QR_UA,
+      "Accept": "text/html,application/xhtml+xml,image/avif,image/webp,image/*,*/*;q=0.8",
+    },
+    timeout: 8000,
+  }, (res) => cb(null, res));
+  req.on("error", cb);
+  req.on("timeout", () => req.destroy(Object.assign(new Error("timeout"), { code: "ETIMEDOUT" })));
+}
+
+// Gambar "utama" sebuah halaman HTML: img http non-svg dengan area terbesar
+// (ikon header/thumbnail kecil ber-width < 80 px dibuang), fallback og:image.
+function extractQrPageImage(href, html) {
+  const best = [];
+  const re = /<img\b[^>]*>/gi;
+  let m;
+  while ((m = re.exec(html)) !== null) {
+    const tag = m[0];
+    const srcM = tag.match(/\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+    if (!srcM) continue;
+    const src = (srcM[1] || srcM[2] || srcM[3] || "").trim();
+    if (!src) continue;
+    if (/\.svg(\?|#|$)/i.test(src)) continue;
+    let abs;
+    try { abs = new URL(src.replace(/&amp;/g, "&"), href).href; }
+    catch { continue; }
+    if (!/^https?:\/\//i.test(abs)) continue;
+    const w = Number((tag.match(/\bwidth\s*=\s*["']?(\d+)/i) || [0, "0"])[1]);
+    const h = Number((tag.match(/\bheight\s*=\s*["']?(\d+)/i) || [0, "0"])[1]);
+    if (w && w < 80) continue; // ikon/thumbnail kecil
+    best.push({ url: abs, area: w * h });
+  }
+  if (best.length) return best.sort((a, b) => b.area - a.area)[0].url;
+
+  const og = html.match(/<meta[^>]+property=["']og:image["'][^>]*>/i);
+  const ogUrl = og && (og[0].match(/content\s*=\s*(?:"([^"]*)"|'([^']*)')/) || [])[1];
+  if (ogUrl) {
+    try { return new URL(ogUrl.replace(/&amp;/g, "&"), href).href; } catch { /* lanjut */ }
+  }
+  return null;
+}
+
+// Stream bytes gambar dari href (lewat redirect/HTML). hops = pelindung loop.
+function qrStreamPreview(href, res, hops) {
+  const bail = () => { if (!res.headersSent) res.writeHead(404); res.end(); };
+  qrFetch(href, (err, upstream) => {
+    if (err || !upstream) return bail();
+    const status = upstream.statusCode || 0;
+    const ct = String(upstream.headers["content-type"] || "").split(";")[0].trim().toLowerCase();
+
+    if (status >= 300 && status < 400 && upstream.headers.location) {
+      upstream.destroy();
+      if (hops >= QR_MAX_HOPS) return bail();
+      let next;
+      try { next = new URL(upstream.headers.location, href).href; }
+      catch { return bail(); }
+      return qrStreamPreview(next, res, hops + 1);
+    }
+
+    if (status >= 400) { upstream.destroy(); return bail(); }
+
+    if (ct.startsWith("image/")) {
+      res.writeHead(200, {
+        "Content-Type": upstream.headers["content-type"],
+        "Cache-Control": "public, max-age=86400",
+      });
+      return upstream.pipe(res);
+    }
+
+    if (ct.startsWith("text/html")) {
+      let size = 0;
+      const chunks = [];
+      upstream.on("data", (d) => { size += d.length; if (size <= QR_MAX_HTML) chunks.push(d); });
+      upstream.on("end", () => {
+        const img = extractQrPageImage(href, Buffer.concat(chunks).toString());
+        if (img) return qrStreamPreview(img, res, hops + 1);
+        bail();
+      });
+      return;
+    }
+
+    upstream.destroy();
+    bail();
+  });
+}
+
 const httpServer = http.createServer((req, res) => {
   let urlPath = decodeURIComponent(req.url.split("?")[0]);
 
@@ -189,6 +285,27 @@ const httpServer = http.createServer((req, res) => {
       }
     });
     return;
+  }
+
+  // ================= QR PREVIEW PROXY =================
+  // Payload QR berupa URL halaman web (mis. q.me-qr.com/xxx → halaman HTML yang
+  // menampilkan gambar) tidak bisa di-fetch browser (CORS lintas-origin). Resolusi
+  // "URL → gambar yang benar" dikerjakan di server: 1) ikuti redirect sampai habis,
+  // bila langsung image → stream bytes-nya; 2) bila HTML → ekstrak gambar utama
+  // halaman, lalu stream bytes gambar tsb; 3) gagal → 404 (client jatuh ke teks).
+  // QR dari misi boleh menunjuk mana saja, jadi proxy ini sengaja tidak membatasi
+  // host (berbeda dgn /cam yang memang hanya untuk kamera LAN).
+  if (urlPath === "/qr/preview") {
+    const target = new URL(req.url, `http://localhost:${WS_PORT}`).searchParams.get("url");
+    if (!target) { res.writeHead(400); return res.end("param 'url' wajib"); }
+    let t;
+    try { t = new URL(target); }
+    catch { res.writeHead(400); return res.end("url tidak valid"); }
+    if (t.protocol !== "http:" && t.protocol !== "https:") {
+      res.writeHead(400);
+      return res.end("protokol tidak didukung");
+    }
+    return qrStreamPreview(t.href, res, 0);
   }
 
   // ================= PLAYBACK / REPLAY (HTTP) =================
