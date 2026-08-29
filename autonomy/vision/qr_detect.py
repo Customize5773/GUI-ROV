@@ -116,6 +116,9 @@ CLAHE_CLIP   = 2.0     # kekuatan penyetaraan kontras lokal (CLAHE) — lawan gl
 CLAHE_TILE   = 8       # ukuran grid CLAHE (tile CLAHE_TILE×CLAHE_TILE)
 UPSCALE      = 2.0     # faktor perbesaran saat QR terlalu kecil utk pyzbar
 STACK_N      = 3       # jumlah frame utk median-stack jenjang-7 (lawan riak/kaustik transien)
+RECTIFY_SIZE = 500     # ukuran kanvas QR setelah diluruskan
+RECTIFY_MARGIN = 1.5   # margin quiet-zone saat perspective warp
+ZXING_SCALES = (2.0, 4.0)  # dibuktikan pada rekaman payload tidur: modul kecil perlu diperbesar
 # Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
 # + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
 # global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
@@ -135,6 +138,12 @@ def _adaptive_thresh(gray):
     latar berfaset/beriak yang lolos dari normalisasi kontras CLAHE saja."""
     return cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                  cv2.THRESH_BINARY, ADAPT_BLOCK, ADAPT_C)
+
+
+def _unsharp(gray):
+    """Pulihkan tepi modul yang melembut karena haze/kompresi, tanpa model baru."""
+    blur = cv2.GaussianBlur(gray, (0, 0), 2.0)
+    return cv2.addWeighted(gray, 2.0, blur, -1.0, 0)
 
 
 def _quiet_zone_ok(gray, pts):
@@ -199,6 +208,89 @@ def _pyzbar_qr(img, scale=1.0, gray_for_gate=None):
     return out
 
 
+def _order_quad_points(pts):
+    """Urutkan empat sudut menjadi top-left, top-right, bottom-right, bottom-left."""
+    q = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
+    if len(q) != 4:
+        return None
+    sums = q.sum(axis=1)
+    diffs = np.diff(q, axis=1).reshape(-1)
+    return q[[np.argmin(sums), np.argmin(diffs),
+              np.argmax(sums), np.argmax(diffs)]]
+
+
+def _decode_rectified(frame, gray):
+    """Cari quad QR, luruskan dengan perspective warp, lalu decode ulang."""
+    if not hasattr(cv2, 'QRCodeDetector'):
+        return []
+    try:
+        detector = cv2.QRCodeDetector()
+        ok, found = detector.detect(gray)
+        if not ok or found is None:
+            return []
+        pts = _order_quad_points(found)
+        if pts is None:
+            return []
+        center = pts.mean(axis=0)
+        src = center + (pts - center) * RECTIFY_MARGIN
+        dst = np.float32([[0, 0], [RECTIFY_SIZE - 1, 0],
+                          [RECTIFY_SIZE - 1, RECTIFY_SIZE - 1],
+                          [0, RECTIFY_SIZE - 1]])
+        matrix = cv2.getPerspectiveTransform(src, dst)
+        warped = cv2.warpPerspective(gray, matrix,
+                                     (RECTIFY_SIZE, RECTIFY_SIZE),
+                                     borderValue=255)
+    except cv2.error:
+        return []
+
+    if PYZBAR_OK:
+        clahe = _to_gray_clahe(warped)
+        for candidate in (warped, clahe, _adaptive_thresh(clahe)):
+            for result in pyzbar.decode(candidate):
+                if getattr(result, 'type', 'QRCODE') != 'QRCODE':
+                    continue
+                data = result.data.decode('utf-8', 'ignore').strip()
+                if data:
+                    return [{'data': data, 'pts': pts}]
+
+    try:
+        data = detector.detectAndDecode(warped)[0]
+    except cv2.error:
+        data = ''
+    return [{'data': str(data).strip(), 'pts': pts}] if data else []
+
+
+def _zxing_qr(gray, scale=1.0):
+    """Decode checksum-verified QR ZXing dan kembalikan titik ke skala frame asli.
+
+    Hasil ZXing tidak lagi di-*quiet-zone gate*: decoder ini sudah memverifikasi
+    struktur dan checksum QR, sedangkan glare pada video ROV sering menutupi quiet
+    zone yang sah. Gate tetap dipakai pada kandidat pyzbar/OpenCV yang belum punya
+    verifikasi independen itu.
+    """
+    try:
+        results = zxingcpp.read_barcodes(
+            gray, formats=zxingcpp.BarcodeFormat.QRCode)
+    except Exception:
+        return []
+
+    out = []
+    for result in results:
+        data = str(getattr(result, 'text', '')).strip()
+        if not data:
+            continue
+        try:
+            pos = result.position
+            pts = np.array([[pos.top_left.x, pos.top_left.y],
+                            [pos.top_right.x, pos.top_right.y],
+                            [pos.bottom_right.x, pos.bottom_right.y],
+                            [pos.bottom_left.x, pos.bottom_left.y]], dtype=np.float32)
+        except (AttributeError, TypeError):
+            continue
+        out.append({'data': data, 'pts': pts / scale})
+    return out
+
+
 def decode_qr(frame, enhance=True):
     """Deteksi QR robust dari 1 frame. Kembalikan list {'data': str,
     'pts': ndarray(N,2) koordinat frame ASLI}.
@@ -209,9 +301,10 @@ def decode_qr(frame, enhance=True):
       3. pyzbar pada grayscale+CLAHE yang di-adaptive-threshold (pisahkan modul
          QR dari lantai berfaset/riak — beda mekanisme dari CLAHE saja).
       4. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
-      5. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
-      6. zxing-cpp pada grayscale mentah (decoder terpisah, jauh lebih toleran thd
-         tilt/perspective — lihat komentar di titik pemanggilannya).
+      5. cv2 detect → perspective warp → decode (QR miring/distorsi).
+      6. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
+      7. zxing-cpp pada grayscale 2x, 4x, lalu 4x unsharp (decoder terpisah untuk
+         modul kecil/lunak akibat haze dan kompresi).
     enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B).
 
     Tiap jenjang di-gate `_quiet_zone_ok` — kandidat tanpa quiet zone putih (mis.
@@ -238,6 +331,10 @@ def decode_qr(frame, enhance=True):
         res = _pyzbar_qr(big, UPSCALE, gray_for_gate=big)
         if res:
             return res
+    if enhance:
+        res = _decode_rectified(frame, gray_raw)
+        if res:
+            return res
     # Fallback: detektor QR bawaan OpenCV (kadang berhasil di mana pyzbar gagal, & sebaliknya)
     if enhance and hasattr(cv2, 'QRCodeDetector'):
         try:
@@ -252,30 +349,24 @@ def decode_qr(frame, enhance=True):
                     return out
         except cv2.error:
             pass
-    # Jenjang 6: zxing-cpp — decoder terpisah (bukan pyzbar/zbar), jauh lebih toleran
+    # Jenjang 7: zxing-cpp — decoder terpisah (bukan pyzbar/zbar), jauh lebih toleran
     # thd tilt/perspective. Divalidasi: pipeline di atas sudah gagal total pada QR
     # sintetis yg di-tilt 20°, zxing-cpp masih berhasil sampai ~45°. ROV jarang persis
     # tegak lurus ke payload sebelum visual servo align penuh — ini kelas kegagalan
     # yg berbeda dari kontras/riak yg jenjang 1-5 targetkan. Lebih cepat dari jenjang
-    # lain juga (~7ms), jadi tak menambah beban berarti di jalur gagal.
+    # lain juga. Hanya dijalankan setelah seluruh jalur cepat gagal.
     if enhance and ZXING_OK:
-        try:
-            results = zxingcpp.read_barcodes(gray_raw)
-        except Exception:
-            results = []
-        out = []
-        for r in results:
-            if not r.text:
-                continue
-            pos = r.position
-            pts = np.array([[pos.top_left.x, pos.top_left.y],
-                            [pos.top_right.x, pos.top_right.y],
-                            [pos.bottom_right.x, pos.bottom_right.y],
-                            [pos.bottom_left.x, pos.bottom_left.y]], dtype=np.float32)
-            if _quiet_zone_ok(gray_raw, pts):
-                out.append({'data': r.text, 'pts': pts})
-        if out:
-            return out
+        for candidate, scale in (
+                (cv2.resize(gray_raw, None, fx=ZXING_SCALES[0], fy=ZXING_SCALES[0],
+                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[0]),
+                (cv2.resize(gray_raw, None, fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
+                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1]),
+                (cv2.resize(_unsharp(gray_raw), None,
+                            fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
+                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1])):
+            res = _zxing_qr(candidate, scale)
+            if res:
+                return res
     return []
 
 

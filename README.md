@@ -93,7 +93,8 @@ GUI memenuhi ketentuan Panduan KKI 2026 §4.7.3:
   Tidak perlu lagi `crossOrigin="anonymous"` maupun konfigurasi CORS di mjpg-streamer.
 - Proxy membatasi tujuan ke host LAN privat (127/10/192.168/172.16–31, `*.local`,
   `localhost`) untuk mencegah open-proxy. Override dengan env `CAM_ALLOW_ANY=1` bila perlu.
-- Untuk decode QR canvas diperkecil ke maks 800 px agar ringan pada feed 1080p.
+- Untuk decode QR, canvas mempertahankan resolusi hingga 1280 px; bila decode mentah gagal,
+  browser mencoba inversion dan adaptive threshold agar QR 4×4 cm tidak kehilangan detail.
 - Fallback tetap ada: tombol **"Scan dari gambar"** men-decode QR dari berkas gambar.
 - Catatan: proxy hanya aktif saat dijalankan via `server.js` (bukan penyaji statis lain).
 
@@ -311,12 +312,16 @@ di kolam yang disarankan.
 
 ### Kontrak gerak autonomous Mission 5
 
-Implementasi Pi teman saat ini memakai motion per CASE dengan format
-`(surge, sway, heading_set, depth_set, gripper)`. `surge` dan `sway` adalah
-command axis internal, `heading_set` dalam derajat, `depth_set` dalam meter,
-dan `gripper` bernilai `open`, `close`, atau `hold`. GUI menampilkan tuple aktif
-dari telemetry sebagai monitor read-only; GUI belum mengirim pengaturan gerak
-karena `rov_agent.py` Pi belum memiliki handler `mission5_motion`.
+GUI menerima input fisik Selam/Naik/Maju dalam `m/s` dan Putar dalam `°/s`, lalu mengirim object
+`mission5_motion` ke Pi. Pi memvalidasi nilai dan menyimpannya hanya ketika FSM
+berhenti; konfigurasi berlaku pada start Mission 5 berikutnya.
+
+Selam/Naik mengatur laju perubahan setpoint kedalaman ALT_HOLD, Maju mengatur
+skala command surge termasuk gerak menyusur dinding pada `M5_SEARCH`, dan Putar
+membatasi command yaw heading-hold. Nilai
+kecepatan adalah target berbasis kalibrasi awal, bukan jaminan kecepatan nyata.
+Konversi dilakukan di Pi; GUI menampilkan nilai kalibrasi Pi melalui telemetry
+agar operator dapat melihat hubungan nilai fisik dan command axis.
 
 ALT_HOLD tetap menjadi pengendali depth di ArduSub. Jika gerak perlu dibuat
 configurable dari GUI, handler versi baru harus ditambahkan dan diuji di Pi

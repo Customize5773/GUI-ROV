@@ -258,11 +258,9 @@ def test_deep_breaks_decoding():
     assert not decode_qr(out), "'deep' seharusnya mematahkan decode (preset terlalu lembut?)"
 
 
-def test_ripple_is_the_dominant_failure_mode():
-    """Temuan yang mengarahkan tuning lapangan: pada 'deep', mematikan HANYA riak
-    memulihkan decode — sedangkan efek fotometrik (warna/kabut/blur) sendirian tak
-    pernah mematahkan pyzbar. Artinya: prioritaskan stabilisasi/geometri, bukan
-    sekadar perbaikan kontras."""
+def test_enhanced_decoder_recovers_ripple_case():
+    """Riak tetap mematahkan jalur mentah, tetapi fallback enhanced harus boleh
+    memulihkannya. Ini menjaga tes selaras dengan decoder ZXing 4x terbaru."""
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")
     segno = pytest.importorskip("segno")
@@ -280,7 +278,8 @@ def test_ripple_is_the_dominant_failure_mode():
     out_ripple, _ = simulate_underwater(frame, 'deep', rng=np.random.default_rng(0),
                                         jitter=0.0, effects={'ripple'})
     assert decode_qr(out_photo), "tanpa riak, degradasi fotometrik 'deep' masih terbaca"
-    assert not decode_qr(out_ripple), "riak sendirian sudah cukup mematahkan decode"
+    assert not decode_qr(out_ripple, enhance=False), "riak harus mematahkan jalur mentah"
+    assert decode_qr(out_ripple), "fallback enhanced harus memulihkan riak sintetis"
 
 
 def test_enhancement_rescues_small_qr_in_hazy_water():

@@ -85,7 +85,7 @@ def _evaluate(fsm, plant, clock, transitions, dock_error, provide_pose,
               start_state, target_wall):
     score   = fsm.score()
     visited = {t[1] for t in transitions} | {t[2] for t in transitions}
-    final   = transitions[-1][2] if transitions else start_state.name
+    final   = fsm._state.name
 
     used_visual   = ('M5_DOCK' in visited and 'M5_ENGAGE' in visited)
     used_fallback = ('M5_FALLBACK' in visited)

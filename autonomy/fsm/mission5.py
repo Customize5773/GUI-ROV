@@ -81,6 +81,7 @@ SCAN_CREEP_MAX_SPEED  = 18     # % — TUNE di kolam (lebih pelan dari servo doc
 
 TIMEOUT_DIVE          = 15.0   # detik max untuk menyelam
 TIMEOUT_SCAN          = 20.0   # detik max untuk scan QR
+SCAN_SWEEP_T           = 3.0    # detik tiap arah sweep yaw saat QR belum terlihat
 TIMEOUT_GRAB          = 10.0   # detik max untuk ambil payload
 TIMEOUT_NAV           = 30.0   # detik max navigasi ke dinding
 TIMEOUT_HANG          = 15.0   # detik max gantung payload
@@ -394,6 +395,8 @@ class Mission5FSM:
         # Loss-of-lock tracker untuk docking misi 5 (M5_DOCK / M5_ENGAGE)
         self._m5_last_det_t  = 0.0     # waktu terakhir QR payload terlihat
         self._m5_search_dir  = 1       # arah sapu reacquire = sisi QR terakhir (+kanan/−kiri)
+        self._scan_sweep_dir = 1
+        self._scan_sweep_t = self._state_t
         # Loss-of-lock tracker untuk docking HOOK (HANG misi 3b / DOCK misi 4)
         self._hook_last_det_t = 0.0    # waktu terakhir hook terlihat
         self._hook_search_dir = 1      # arah sapu reacquire = sisi hook terakhir
@@ -736,9 +739,12 @@ class Mission5FSM:
                       hint['wall'], hint['confidence'], out.aligned)
         else:
             self.scan_creep_servo.reset()
-            # Rotasi perlahan untuk cari QR
-            self.cmd.send(yaw=YAW_SPEED)
-            log.debug("[FSM] SCAN_QR mencari QR elapsed=%.1fs", elapsed)
+            # Sweep bolak-balik mencegah ROV terus berputar satu arah.
+            if time.time() - self._scan_sweep_t >= SCAN_SWEEP_T:
+                self._scan_sweep_dir *= -1
+                self._scan_sweep_t = time.time()
+            self.cmd.send(yaw=self._scan_sweep_dir * YAW_SPEED)
+            log.debug("[FSM] SCAN_QR sweep dir=%+d elapsed=%.1fs", self._scan_sweep_dir, elapsed)
 
     def _state_grab(self, telem):
         """Misi 2: ambil payload dengan gripper."""
@@ -1017,7 +1023,8 @@ class Mission5FSM:
 
     def _servo_step(self, det):
         """Satu langkah visual servo dari deteksi QR. PBVS (pose 3D) bila ada, IBVS bila tidak.
-        Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Dipakai M5_DOCK & M5_ENGAGE (hold x/y)."""
+        Kembalikan (ServoOutput, 'PBVS'|'IBVS'). Dipakai M5_REDIVE, M5_DOCK,
+        dan M5_ENGAGE (hold x/y)."""
         dt = self._servo_dt()
         pose = det.get('pose')
         self.telemetry_out['active_cam'] = 'BOTTOM'
@@ -1093,10 +1100,9 @@ class Mission5FSM:
                 self.cmd.stop_all()
                 self._transition(State.M5_SEARCH)
             else:
-                log.warning("[FSM] M5_REDIVE timeout & gagal menyelam (%.2f/%.2f m) — fallback timed",
+                log.error("[FSM] M5_REDIVE gagal menyelam (%.2f/%.2f m) — ABORT",
                             depth, target_depth)
-                self.cmd.stop_all()
-                self._transition(State.M5_FALLBACK)
+                self.abort()
             return
 
         if qr is not None and near:
@@ -1107,12 +1113,20 @@ class Mission5FSM:
             self.pose_servo.reset()
             self._transition(State.M5_DOCK)
         elif not near:
-            # Turun ke level hook; sambil arahkan heading balik ke dinding target,
-            # bukan sapu buta — arah datang dari MARK operator atau QR misi 1,
-            # jadi tak perlu "ingat" posisi x/y (yang memang tak tersedia).
-            yaw = 0 if qr is not None else self._heading_toward_wall(telem)
-            self.cmd.send(vert=-DIVE_SPEED, yaw=yaw)
-            log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=%s", depth, target_depth, bool(qr))
+            if qr is not None:
+                # QR payload menjadi patokan posisi relatif selama turun. Terapkan
+                # koreksi lateral/heading saja; jangan maju sebelum level hook agar
+                # tidak menabrak dinding. Kedalaman tetap dikendalikan pressure sensor.
+                self._note_detection(qr)
+                out, mode = self._servo_step(qr)
+                self.cmd.send(sway=out.sway, yaw=out.yaw, vert=-DIVE_SPEED)
+                log.debug("[FSM] M5_REDIVE visual %s depth=%.2f→%.2f sway=%.0f yaw=%.0f",
+                          mode, depth, target_depth, out.sway, out.yaw)
+            else:
+                # QR belum terlihat: gunakan heading hasil MARK untuk pendekatan kasar.
+                self.cmd.send(vert=-DIVE_SPEED, yaw=self._heading_toward_wall(telem))
+                log.debug("[FSM] M5_REDIVE selam depth=%.2f→%.2f qr=False",
+                          depth, target_depth)
         else:
             # Sudah di level hook tapi QR belum terlihat. Dulu cabang ini menyapu yaw
             # DI TEMPAT sampai timeout — dan berputar di tempat secara fundamental tak
@@ -1169,16 +1183,14 @@ class Mission5FSM:
         vert = self._hold_depth(telem, target_depth)   # SELALU disertakan di tiap send()
 
         if self._elapsed() > TIMEOUT_SEARCH:
-            log.warning("[FSM] M5_SEARCH timeout %.0fs — gantungan tak ketemu, fallback timed",
+            log.error("[FSM] M5_SEARCH timeout %.0fs — gantungan tak ketemu, ABORT",
                         TIMEOUT_SEARCH)
-            self.cmd.stop_all()
-            self._transition(State.M5_FALLBACK)
+            self.abort()
             return
         if self._time_left() < self._min_time_needed_from(State.M5_SEARCH):
-            log.warning("[FSM] Waktu heat tersisa %.0fs < kebutuhan minimum → "
-                        "degradasi dini dari M5_SEARCH", self._time_left())
-            self.cmd.stop_all()
-            self._transition(State.M5_FALLBACK)
+            log.error("[FSM] Waktu heat tersisa %.0fs < kebutuhan minimum — ABORT pencarian",
+                      self._time_left())
+            self.abort()
             return
 
         # ── (a) Reakuisisi berprioritas ──────────────────────────────────────
@@ -1457,6 +1469,9 @@ class Mission5FSM:
                               lama_state_s=round(time.time() - self._state_t, 2))
         self._state   = new_state
         self._state_t = time.time()
+        if new_state == State.SCAN_QR:
+            self._scan_sweep_dir = 1
+            self._scan_sweep_t = self._state_t
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
         if new_state in (State.M5_DOCK, State.M5_ENGAGE):
             self._m5_last_det_t = self._state_t

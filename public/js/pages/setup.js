@@ -67,6 +67,7 @@ function saveSetup() {
       TEAM_NAME: CONFIG.TEAM_NAME, UNIVERSITY: CONFIG.UNIVERSITY,
       CAMERAS: CONFIG.CAMERAS, THRUSTER: CONFIG.THRUSTER,
       POOL_DEPTH: CONFIG.POOL_DEPTH, DANGER_DEPTH: CONFIG.DANGER_DEPTH,
+      AUTONOMY_MOTION: CONFIG.AUTONOMY_MOTION_CONFIGURED ? CONFIG.AUTONOMY_MOTION : null,
     }));
     /* PID SENGAJA TIDAK ikut disimpan: sumber kebenarannya sekarang flight
        controller, dibaca ulang tiap kali halaman ini dibuka. Menyimpannya
@@ -87,6 +88,10 @@ export function loadSetup() {
     // masih ada di localStorage operator lama ikut terbuang di sini.
     if (Number.isFinite(s.POOL_DEPTH)) CONFIG.POOL_DEPTH = s.POOL_DEPTH;
     if (Number.isFinite(s.DANGER_DEPTH)) CONFIG.DANGER_DEPTH = s.DANGER_DEPTH;
+    if (s.AUTONOMY_MOTION && typeof s.AUTONOMY_MOTION === "object") {
+      Object.assign(CONFIG.AUTONOMY_MOTION, s.AUTONOMY_MOTION);
+      CONFIG.AUTONOMY_MOTION_CONFIGURED = true;
+    }
     // s.DEPTH_DEFAULT sengaja DIABAIKAN: setpoint depth-set tidak lagi berasal
     // dari angka yang diketik, melainkan dari tombol SET. Entri lama di
     // localStorage operator ikut terbuang di sini.
@@ -96,6 +101,22 @@ export function loadSetup() {
 const numField = (id, label, val, step = "1", unit = "") => `
   <label class="field field--sm"><span>${label}${unit ? ` <small>${unit}</small>` : ""}</span>
     <input id="${id}" type="number" step="${step}" value="${val}" /></label>`;
+
+const MOTION_FIELDS = [
+  { key: "dive_mps", label: "Selam", unit: "m/s", min: 0, max: 0.20, step: "0.01" },
+  { key: "ascend_mps", label: "Naik", unit: "m/s", min: 0, max: 0.20, step: "0.01" },
+  { key: "surge_mps", label: "Maju", unit: "m/s", min: 0, max: 0.30, step: "0.01" },
+  { key: "yaw_dps", label: "Putar", unit: "°/s", min: 0, max: 45, step: "1" },
+];
+
+export function autonomyMotionConfig(values) {
+  return Object.fromEntries(MOTION_FIELDS.map((field) => [field.key, Number(values[field.key]) || 0]));
+}
+
+const motionField = (field, values) => `
+  <label class="field field--sm"><span>${field.label} <small>${field.unit}</small></span>
+    <input id="suMotion${field.key}" type="number" min="${field.min}" max="${field.max}"
+           step="${field.step}" value="${values[field.key] ?? 0}" inputmode="decimal" /></label>`;
 
 // resolusi umum yang didukung mjpg-streamer via input_uvc.so -r; daftar tidak
 // divalidasi terhadap kemampuan kamera fisik (lihat autonomy/tools/pi_restart_camera.sh)
@@ -111,7 +132,7 @@ export const setupPage = {
   init(root) {
     loadSetup();
     const host = location.hostname || "localhost";
-    const T = CONFIG.THRUSTER, P = CONFIG.PID;
+    const T = CONFIG.THRUSTER, P = CONFIG.PID, A = CONFIG.AUTONOMY_MOTION;
     const lanUrl = `http://${host}:${location.port || 8080}`;
 
     root.innerHTML = `
@@ -261,11 +282,15 @@ export const setupPage = {
           <div class="card">
             <span class="panel__eyebrow">AUTONOMOUS MOTION</span>
             <h3 class="card__title">Mission 5 Movement</h3>
-            <p class="card__desc">Kontrak Pi saat ini memakai tuple per CASE:
-              <code>(surge, sway, heading_set, depth_set, gripper)</code>.
-              Nilai ditentukan oleh Mission 5 di Pi dan kartu ini hanya memantau
-              command aktif; belum ada command Apply gerak yang didukung.</p>
-            <span class="card__info" id="suMotionContract">Menunggu telemetry Mission 5</span>
+            <p class="card__desc">Kecepatan gerak otomatis saat misi 5. Maju juga mengatur laju pencarian kembali ke gantungan.</p>
+            <div class="card__row card__row--wrap">
+              ${MOTION_FIELDS.map((field) => motionField(field, A)).join("")}
+            </div>
+            <button class="btn-wide" id="suApplyMotion">Apply Autonomous Motion</button>
+            <span class="card__info" id="suMotionInfo">ALT_HOLD tetap aktif; mixer/PWM tetap di ArduSub</span>
+            <span class="card__info" id="suMotionMap">Pemetaan Pi: menunggu telemetry</span>
+            <span class="card__info" id="suMotionVehicle">Setting di Pi: menunggu telemetry</span>
+            <span class="card__info" id="suMotionContract">Scan: menunggu telemetry Mission 5</span>
             <span class="card__info" id="suMotionActual">Aktual: menunggu telemetry</span>
           </div>
 
@@ -690,9 +715,32 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m`, "ok");
     };
 
-    /* Mission 5 motion — kontrak teman: tuple read-only dari telemetry Pi. */
+    /* Mission 5 motion — target fisik dikirim ke handler Pi. */
+    this.els.motionInputs = Object.fromEntries(
+      MOTION_FIELDS.map((field) => [field.key, root.querySelector(`#suMotion${field.key}`)])
+    );
+    this.els.motionInfo = root.querySelector("#suMotionInfo");
+    this.els.motionMap = root.querySelector("#suMotionMap");
+    this.els.motionVehicle = root.querySelector("#suMotionVehicle");
     this.els.motionContract = root.querySelector("#suMotionContract");
     this.els.motionActual = root.querySelector("#suMotionActual");
+    root.querySelector("#suApplyMotion").onclick = () => {
+      const next = {};
+      for (const field of MOTION_FIELDS) {
+        const value = Number(this.els.motionInputs[field.key].value);
+        if (!Number.isFinite(value) || value < field.min || value > field.max) {
+          log(`${field.label} harus ${field.min}..${field.max} ${field.unit}`, "warn");
+          return;
+        }
+        next[field.key] = value;
+      }
+      CONFIG.AUTONOMY_MOTION = next;
+      CONFIG.AUTONOMY_MOTION_CONFIGURED = true;
+      saveSetup();
+      sendCmd("mission5_motion", autonomyMotionConfig(next));
+      this.els.motionInfo.textContent = "Menunggu konfirmasi Pi...";
+      log("Tuning gerak Mission 5 dikirim ke Pi", "ok");
+    };
 
     /* MISSION SCORING */
     this.els.suM2Fails = root.querySelector("#suM2Fails");
@@ -748,10 +796,31 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
      meneruskan tiap sampel telemetry ke sini lewat m.onTelemetry(d). */
   onTelemetry(d) {
     const motion = d.mission5_motion;
+    const config = d.mission5_motion_config;
+    const calibration = d.mission5_motion_calibration;
+    if (config && this.els.motionInputs) {
+      for (const field of MOTION_FIELDS) {
+        const value = Number(config[field.key]);
+        if (Number.isFinite(value) && this.els.motionInputs[field.key] && document.activeElement !== this.els.motionInputs[field.key]) {
+          this.els.motionInputs[field.key].value = String(value);
+        }
+      }
+      const fmt = (key, unit) => `${Number(config[key]).toFixed(unit === "°/s" ? 1 : 2)} ${unit}`;
+      if (this.els.motionVehicle) {
+        this.els.motionVehicle.textContent = `Setting di Pi: Selam ${fmt("dive_mps", "m/s")} · Naik ${fmt("ascend_mps", "m/s")} · Maju ${fmt("surge_mps", "m/s")} · Putar ${fmt("yaw_dps", "°/s")}`;
+      }
+      if (this.els.motionInfo) {
+        this.els.motionInfo.textContent = "Sinkron dari Pi — siap diubah";
+      }
+    }
+    if (this.els.motionMap && calibration) {
+      this.els.motionMap.textContent = `Pemetaan Pi: Selam/Naik = laju setpoint ALT_HOLD · Maju/M5_SEARCH ${calibration.surge_mps_at_100} m/s = axis 100 · Putar ${calibration.yaw_dps_at_100} °/s = axis 100`;
+    }
     if (this.els.motionContract) {
-      this.els.motionContract.textContent = Array.isArray(motion) && motion.length >= 5
-        ? `CASE motion: surge ${motion[0]} · sway ${motion[1]} · heading ${motion[2]}° · depth ${motion[3]} m · gripper ${motion[4]}`
-        : "Menunggu telemetry Mission 5";
+      const m5 = d.mission5;
+      this.els.motionContract.textContent = m5 && m5.state
+        ? `Scan/FSM: ${m5.state} · kamera ${m5.active_cam || "—"} · sisa ${Number.isFinite(Number(m5.time_left)) ? `${m5.time_left} s` : "—"}`
+        : "Scan: menunggu telemetry Mission 5";
     }
 
     if (this.els.motionActual) {

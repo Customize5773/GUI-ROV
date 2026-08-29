@@ -565,7 +565,17 @@ def send_telemetry():
     state["mission5_state"] = m5_telem.get("state") if m5_telem else None
     state["mission5"] = m5_telem
     state["mission5_motion"] = (
-        mission5_runner.motion
+        m5_telem.get("motion")
+        if m5_telem
+        else None
+    )
+    state["mission5_motion_config"] = (
+        mission5_runner.motion_config
+        if mission5_runner is not None
+        else None
+    )
+    state["mission5_motion_calibration"] = (
+        m5_telem.get("motion_calibration")
         if mission5_runner is not None
         else None
     )
@@ -706,12 +716,29 @@ def command_listener():
                               "tidak menjalankan FSM (kontrol manual tetap normal)")
                     elif not mission5_runner.start():
                         print("[M5] start GAGAL — tetap di mode manual")
+                        send_to_gui({
+                            "type": "event",
+                            "text": mission5_runner.last_error or "Mission 5 gagal dimulai",
+                            "level": "warn",
+                        })
                         continue
                     current_control_mode = "autonomous"
                 else:
                     current_control_mode = "manual"
                     if mission5_runner is not None:
                         mission5_runner.stop()
+
+            elif name == "mission5_motion":
+                # Tuning hanya boleh dilakukan saat FSM berhenti. Nilai fisik
+                # divalidasi dan dikonversi oleh bridge di Pi.
+                if mission5_runner is None:
+                    raise RuntimeError("Mission 5 tidak tersedia")
+                mission5_runner.set_motion_config(value)
+                send_to_gui({
+                    "type": "event",
+                    "text": "Tuning gerak Mission 5 diterapkan untuk start berikutnya",
+                    "level": "ok",
+                })
 
             elif name == "pilot_mode":
 
@@ -800,6 +827,13 @@ def command_listener():
                 # menggerakkan apa pun, dan memaksa syarat justru membuat
                 # operator kehilangan momen yang benar (payload sudah tergantung,
                 # ROV mungkin sudah dinetralkan).
+                if not state["depth"] > 0:
+                    send_to_gui({
+                        "type": "event",
+                        "text": "MARK ditolak — telemetry depth belum valid",
+                        "level": "warn",
+                    })
+                    continue
                 marked_heading = state["heading"]
                 marked_depth = state["depth"]
                 print(f"[MARK] gantungan ditandai — heading={marked_heading:.0f}° "
@@ -1588,7 +1622,6 @@ def setup_mission5_runner():
         arm=send_arm_disarm,
         emergency_stop=_fsm_emergency_stop,
         set_alt_hold=_fsm_set_alt_hold,
-        set_depth_target=send_native_depth_target,
     )
     
     telem = Mission5TelemetryAdapter(read_state=_fsm_read_state)

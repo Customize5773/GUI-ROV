@@ -1,101 +1,57 @@
-"""
-rov_mission5_bridge.py
+"""Menjalankan Mission5FSM lengkap di dalam rov_agent.py.
 
-Autonomous Mission FSM sederhana untuk ROV.
-
-Format motion:
-    motion = (surge, sway, heading_set, depth_set, gripper)
-
-Setiap CASE memiliki motion sendiri.
-Tidak ada AUTO_SURGE / AUTO_DEPTH global.
-
-ArduSub ALT_HOLD tetap controller depth.
-depth_set dikirim ke native ArduSub melalui callback set_depth_target.
+Bridge ini memakai fungsi command/telemetry langsung dari agent. ArduSub tetap
+menangani ALT_HOLD, stabilisasi, mixing, PWM, dan failsafe; FSM hanya memberi
+command body-axis bounded kepada agent.
 """
 
 import threading
-import time
+
+
+DEFAULT_MOTION_CONFIG = {
+    "dive_mps": 0.12,
+    "ascend_mps": 0.12,
+    "surge_mps": 0.21,
+    "yaw_dps": 22.5,
+}
+
+MOTION_CALIBRATION = {
+    "dive_mps_at_100": 0.20,
+    "ascend_mps_at_100": 0.20,
+    # Uji kolam 25 Agu: command 20% menempuh 4,4 m / 19,86 s = 0,222 m/s.
+    # Ekuivalen linear lokalnya 1,11 m/s @100%; dipakai hanya pada rentang UI
+    # 0..0,30 m/s, bukan klaim kecepatan maksimum ROV.
+    "surge_mps_at_100": 1.11,
+    "yaw_dps_at_100": 45.0,
+}
 
 
 class Mission5CommandAdapter:
-    def __init__(
-        self,
-        set_axis,
-        set_gripper,
-        arm,
-        emergency_stop,
-        set_alt_hold=None,
-        set_depth_target=None,
-    ):
+    def __init__(self, set_axis, set_gripper, arm, emergency_stop,
+                 set_alt_hold=None):
         self._set_axis = set_axis
         self._set_gripper = set_gripper
         self._arm = arm
         self._emergency_stop = emergency_stop
         self._set_alt_hold = set_alt_hold
-        self._set_depth_target = set_depth_target
-
-    def send_motion(self, motion, yaw_command=0):
-        """motion = (surge, sway, heading_set, depth_set, gripper)."""
-
-        if len(motion) != 5:
-            raise ValueError(
-                "motion harus (surge, sway, heading_set, depth_set, gripper)"
-            )
-
-        surge, sway, heading_set, depth_set, gripper = motion
-
-        # Axis autonomous
-        # FSM -100..100 -> rov_agent -1000..1000
-        self._set_axis(
-            surge=int(surge * 10),
-            sway=int(sway * 10),
-            yaw=int(yaw_command * 10),
-            heave=0,
-        )
-
-        # Native ArduSub depth target
-        if depth_set is not None and self._set_depth_target is not None:
-            self._set_depth_target(depth_set)
-
-        # Gripper
-        if gripper == "open":
-            self._set_gripper(False)
-
-        elif gripper == "close":
-            self._set_gripper(True)
-
-        elif gripper == "hold":
-            pass
-
-        else:
-            raise ValueError(
-                f"gripper tidak valid: {gripper}"
-            )    
 
     def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
-        """Kompatibilitas API lama; gunakan send_motion() untuk mission baru."""
-        self._set_axis(
-            surge=int(surge * 10),
-            sway=int(sway * 10),
-            yaw=int(yaw * 10),
-            heave=int(vert * 10),
-        )
+        self._set_axis(surge=int(surge * 10), sway=int(sway * 10),
+                       yaw=int(yaw * 10), heave=int(vert * 10))
         if gripper is not None:
             self._set_gripper(bool(gripper))
 
     def arm(self, on=True):
         self._arm(bool(on))
 
-    def set_alt_hold(self):
-        if self._set_alt_hold is None:
-            return False
-        return bool(self._set_alt_hold())
-
     def stop_all(self):
         self._set_axis(surge=0, sway=0, yaw=0, heave=0)
 
     def emergency_stop(self):
         self._emergency_stop()
+
+    def set_alt_hold(self):
+        return bool(self._set_alt_hold()) if self._set_alt_hold else True
 
     def close(self):
         pass
@@ -116,308 +72,188 @@ class Mission5TelemetryAdapter:
 
 
 class Mission5Runner:
-    """
-    FSM non-blocking.
-
-    CASE_M1:
-        motion = (30, 0, 0, 1.5)
-        selama 3000 ms
-
-    CASE_M2:
-        motion = (-30, 0, 0, 1.5)
-        selama 2000 ms
-
-    CASE_STOP:
-        motion = (0, 0, 0, 1.5)
-        selesai
-
-    counter:
-        0 = start
-        1 = forward selesai
-        2 = reverse selesai
-        3 = complete
-    """
-
-    delay_m1 = 5000
-    delay_m2 = 5000
-    delay_m3 = 5000
-    delay_m4 = 5000
-    delay_m5 = 5000
-
     def __init__(self, cmd_adapter, telem_adapter, config=None, log=print):
         self._cmd = cmd_adapter
         self._telem = telem_adapter
         self._cfg = config or {}
         self._log = log
-
+        self._fsm = None
         self._thread = None
-        self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        self.motion_config = dict(DEFAULT_MOTION_CONFIG)
+        self.last_error = None
 
-        self.state = "IDLE"
-        self.counter = 0
-        self.motion = (0, 0, 0, None, "hold")
-
-        self._case_started = None
-        self._state_elapsed_ms = 0.0
-
-    def _heading_control(self, target_heading, current_heading):
-        error = target_heading - current_heading
-
-        # Normalisasi error ke -180 ... +180
-        if error > 180:
-            error -= 360
-        elif error < -180:
-            error += 360
-
-        # Untuk awal kita gunakan proportional sederhana.
-        yaw = int(error * 3)
-
-        # Limit command yaw
-        yaw = max(-30, min(30, yaw))
-
-        # Deadband
-        if abs(error) < 2:
-            yaw = 0
-
-        return yaw
-
-    def available(self):
-        return True
+    def _import_autonomy(self):
+        from fsm.mission5 import (Mission5FSM, State, QR_SIDE_M,
+                                  HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA,
+                                  HOOK_PIPE_DIAM_M)
+        from vision.qr_detect import VisionPipeline
+        return (Mission5FSM, State, VisionPipeline, QR_SIDE_M,
+                HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA, HOOK_PIPE_DIAM_M)
 
     def is_running(self):
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
-    def _transition(self, new_state):
+    def set_motion_config(self, values):
+        if self.is_running():
+            raise RuntimeError("motion config ditolak saat Mission 5 berjalan")
+        if not isinstance(values, dict):
+            raise ValueError("motion config harus object")
+        limits = {
+            "dive_mps": (0.0, 0.20),
+            "ascend_mps": (0.0, 0.20),
+            "surge_mps": (0.0, 0.30),
+            "yaw_dps": (0.0, 45.0),
+        }
+        next_config = {}
+        for key, (low, high) in limits.items():
+            try:
+                value = float(values[key])
+            except (KeyError, TypeError, ValueError):
+                raise ValueError(f"{key} tidak valid") from None
+            if not low <= value <= high:
+                raise ValueError(f"{key} di luar batas {low}..{high}")
+            next_config[key] = value
         with self._lock:
-            self.state = new_state
-            self._case_started = time.monotonic()
-            self._state_elapsed_ms = 0.0
+            self.motion_config = next_config
+        return dict(next_config)
 
-        self._log(f"[AUTO] STATE -> {new_state}")
+    def _apply_motion_config(self, module):
+        def axis(value, calibration):
+            if value <= 0:
+                return 0
+            return max(1, min(100, round(100 * value / calibration)))
 
-    def _apply_motion(self, motion):
-        surge, sway, heading_set, depth_set, gripper = motion
-
-        state = self._telem.get()
-        current_heading = state.get("heading", 0)
-
-        yaw = self._heading_control(
-            heading_set,
-            current_heading
+        module.DIVE_SPEED = axis(self.motion_config["dive_mps"], MOTION_CALIBRATION["dive_mps_at_100"])
+        module.ASCEND_SPEED = axis(self.motion_config["ascend_mps"], MOTION_CALIBRATION["ascend_mps_at_100"])
+        module.SURGE_SPEED = axis(self.motion_config["surge_mps"], MOTION_CALIBRATION["surge_mps_at_100"])
+        module.YAW_SPEED = axis(self.motion_config["yaw_dps"], MOTION_CALIBRATION["yaw_dps_at_100"])
+        # "Maju" juga mengatur gerak menyusur dinding pada M5_SEARCH. Sebelumnya
+        # SEARCH_SPEED tetap hardcoded sehingga setting GUI tidak memengaruhinya.
+        module.SEARCH_SPEED = module.SURGE_SPEED
+        module.SCAN_CREEP_MAX_SPEED = (
+            0 if module.SURGE_SPEED == 0
+            else max(1, min(module.SURGE_SPEED, round(module.SURGE_SPEED * 0.6)))
         )
-
-        self.motion = motion
-
-        self._log(
-            f"[AUTO] motion={motion} "
-            f"heading={current_heading:.1f} "
-            f"yaw_cmd={yaw}"
-        )
-
-        self._cmd.send_motion(
-            motion,
-            yaw_command=yaw,
-        )
-
-    def _case_m1(self):
-        # CASE sendiri: motion langsung ditulis di sini.
-        motion = (30, 0, 0, 0.4, "hold")
-
-        self._apply_motion(motion)
-
-        elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
-        self._state_elapsed_ms = elapsed_ms
-
-        if elapsed_ms >= self.delay_m1:
-            self._cmd.stop_all()
-            self.counter += 1
-            self._log(
-                f"[AUTO] M1 selesai "
-                f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
-            )
-            self._transition("CASE_M2")
-
-    def _case_m2(self):
-        # Reverse = negatif langsung dari surge forward.    
-        motion = (0, 0, -90, 0.4, "open")
-
-        self._apply_motion(motion)
-
-        elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
-        self._state_elapsed_ms = elapsed_ms
-
-        if elapsed_ms >= self.delay_m2:
-            self._cmd.stop_all()
-            self.counter += 1
-            self._log(
-                f"[AUTO] M2 selesai "
-                f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
-            )
-            self._transition("CASE_M3")
-            
-    def _case_m3(self):
-            # Reverse = negatif langsung dari surge forward.
-            motion = (0, 0, -90, 0.4, "close")
-
-            self._apply_motion(motion)
-
-            elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
-            self._state_elapsed_ms = elapsed_ms
-
-            if elapsed_ms >= self.delay_m3:
-                self._cmd.stop_all()
-                self.counter += 1
-                self._log(
-                    f"[AUTO] M3 selesai "
-                    f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
-                )
-                self._transition("CASE_M4")
-
-    def _case_m4(self):
-            # Reverse = negatif langsung dari surge forward.
-            motion = (0, 0, -90, 0.4, "hold")
-
-            self._apply_motion(motion)
-
-            elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
-            self._state_elapsed_ms = elapsed_ms
-
-            if elapsed_ms >= self.delay_m4:
-                self._cmd.stop_all()
-                self.counter += 1
-                self._log(
-                    f"[AUTO] M4 selesai "
-                    f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
-                )
-                self._transition("CASE_M5")
-
-    def _case_m5(self):
-            # Reverse = negatif langsung dari surge forward.
-            motion = (0, 0, -90, 0.4, "hold")
-
-            self._apply_motion(motion)
-
-            elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
-            self._state_elapsed_ms = elapsed_ms
-
-            if elapsed_ms >= self.delay_m5:
-                self._cmd.stop_all()
-                self.counter += 1
-                self._log(
-                    f"[AUTO] M5 selesai "
-                    f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
-                )
-                self._transition("CASE_STOP")
-
-    def _case_stop(self):
-        # Tetap di depth target, semua gerakan lain netral.
-        motion = (0, 0, 0, 0, "close")
-
-        self._apply_motion(motion)
-
-        self.counter += 1
-        self._log(
-            f"[AUTO] STOP — motion={motion} counter={self.counter}"
-        )
-        self._transition("COMPLETE")
-
-    def _update(self):
-        if self.state == "CASE_M1":
-            self._case_m1()
-
-        elif self.state == "CASE_M2":
-            self._case_m2()
-
-        elif self.state == "CASE_M3":
-            self._case_m3()
-
-        elif self.state == "CASE_M4":
-            self._case_m4()
-
-        elif self.state == "CASE_M5":
-            self._case_m5()
-
-        elif self.state == "CASE_STOP":
-            self._case_stop()
+        self._log("[M5] physical motion mapped: "
+                  f"dive={module.DIVE_SPEED}% ascend={module.ASCEND_SPEED}% "
+                  f"surge={module.SURGE_SPEED}% yaw={module.YAW_SPEED}% "
+                  f"search={module.SEARCH_SPEED}% scan_creep={module.SCAN_CREEP_MAX_SPEED}%")
 
     def start(self):
+        self.last_error = None
         with self._lock:
             if self._thread is not None and self._thread.is_alive():
-                self._log("[AUTO] start diabaikan — mission masih berjalan")
+                self._log("[M5] start dilewati — thread FSM masih hidup")
                 return False
 
-        self._stop_event.clear()
-        self.counter = 0
-        self.motion = (0, 0, 0, None)
-
-        # Pastikan output autonomous lama tidak terbawa.
-        self._cmd.stop_all()
-
-        # ALT_HOLD harus berhasil sebelum case pertama.
-        if not self._cmd.set_alt_hold():
-            self._cmd.stop_all()
-            self.state = "ABORTED"
-            self._log("[AUTO] ABORT — ALT_HOLD gagal")
+        try:
+            (Mission5FSM, State, VisionPipeline, QR_SIDE_M,
+             HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA,
+             HOOK_PIPE_DIAM_M) = self._import_autonomy()
+        except Exception as exc:
+            self.last_error = f"autonomy/vision gagal: {exc}"
+            self._log(f"[M5] TIDAK BISA START — {self.last_error}")
             return False
 
-        # Set depth awal mission melalui motion pertama.
-        self._transition("CASE_M1")
+        cfg = self._cfg
+        read_mark = cfg.get("read_mark", lambda: (None, None))
+        marked_heading, marked_depth = read_mark()
+        start_state = getattr(State, cfg.get("start_state", "M5_REDIVE"))
+        if start_state == State.M5_REDIVE and (
+                marked_heading is None or marked_depth is None or not marked_depth > 0):
+            self.last_error = "MARK gantungan wajib sebelum AUTONOMOUS"
+            self._log(f"[M5] TIDAK BISA START — {self.last_error}")
+            return False
+
+        import fsm.mission5 as mission5_module
+        self._apply_motion_config(mission5_module)
+
+        vision = None
+        try:
+            vision = VisionPipeline(
+                source=cfg.get("vision_source", "usb"),
+                device=cfg.get("vision_device", 0),
+                qr_url=cfg.get("bottom_url"),
+                hook_url=cfg.get("wall_url"),
+                calib_file=cfg.get("calib_file"),
+                calib_file_qr=cfg.get("calib_bottom"),
+                calib_file_hook=cfg.get("calib_wall"),
+                qr_length=cfg.get("qr_size", QR_SIDE_M),
+                hook_hsv_range=HOOK_COLOR_HSV_RANGE,
+                hook_min_area=HOOK_MIN_AREA,
+                hook_pipe_diam=HOOK_PIPE_DIAM_M,
+                wall_cnn=cfg.get("wall_cnn", True),
+            )
+            vision.start()
+            if not self._cmd.set_alt_hold():
+                vision.stop()
+                self.last_error = "ALT_HOLD gagal"
+                self._log(f"[M5] ABORT — {self.last_error}")
+                return False
+        except Exception as exc:
+            self.last_error = f"vision/ALT_HOLD gagal: {exc}"
+            self._log(f"[M5] {self.last_error}")
+            if vision is not None:
+                try:
+                    vision.stop()
+                except Exception:
+                    pass
+            return False
+
+        fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision,
+                          marked_heading=marked_heading,
+                          marked_depth=marked_depth)
+
+        def run():
+            try:
+                fsm.start(start_state=start_state, wait_mode=False)
+            except Exception as exc:
+                self._log(f"[M5] FSM berhenti karena error: {exc}")
+            finally:
+                try:
+                    vision.stop()
+                except Exception:
+                    pass
+                self._log("[M5] thread FSM selesai")
 
         with self._lock:
-            self._thread = threading.Thread(
-                target=self._run,
-                name="AutonomousMission",
-                daemon=True,
-            )
+            self._fsm = fsm
+            self._thread = threading.Thread(target=run, daemon=True, name="Mission5FSM")
             self._thread.start()
-
-        self._log("[AUTO] Mission START")
+        self._log(f"[M5] Mission5 FSM dimulai (start_state={start_state.name})")
         return True
 
-    def _run(self):
-        try:
-            while not self._stop_event.is_set():
-                if self.state == "COMPLETE":
-                    break
-
-                self._update()
-                time.sleep(0.02)  # 50 Hz FSM
-        except Exception as exc:
-            self._log(f"[AUTO] ERROR: {exc}")
-            self._cmd.stop_all()
-            self.state = "ERROR"
-        finally:
-            self._cmd.stop_all()
-            self._log(
-                f"[AUTO] thread selesai state={self.state} "
-                f"counter={self.counter}"
-            )
-
     def stop(self):
-        self._stop_event.set()
-        self._cmd.stop_all()
-
         with self._lock:
-            thread = self._thread
+            fsm, thread = self._fsm, self._thread
+            self._fsm = None
             self._thread = None
+        if fsm is None:
+            return
+        try:
+            fsm.abort()
+        except Exception as exc:
+            self._log(f"[M5] error saat abort: {exc}")
+        if thread:
+            thread.join(timeout=2)
+        self._log("[M5] Mission5 FSM dihentikan")
 
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=1.0)
-
-        self.state = "STOPPED"
-        self.motion = (0, 0, 0, None)
-        self._log("[AUTO] Mission STOPPED")
+    def state_name(self):
+        fsm = self._fsm
+        if fsm is None:
+            return None
+        try:
+            return fsm.telemetry_out.get("state")
+        except Exception:
+            return None
 
     def telemetry(self):
-        with self._lock:
-            running = self._thread is not None and self._thread.is_alive()
-
-        return {
-            "state": self.state,
-            "running": running,
-            "counter": self.counter,
-            "motion": self.motion,
-            "elapsed_ms": self._state_elapsed_ms,
-        }
+        fsm = self._fsm
+        data = dict(getattr(fsm, "telemetry_out", {}) or {}) if fsm else {}
+        data.setdefault("state", self.state_name())
+        data["running"] = self.is_running()
+        data["motion_config"] = dict(self.motion_config)
+        data["motion_calibration"] = dict(MOTION_CALIBRATION)
+        return data

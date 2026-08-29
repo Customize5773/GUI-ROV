@@ -133,32 +133,76 @@ class TestRunnerGagalLunak(unittest.TestCase):
                            log=lambda *_: None)
         self.assertIsNone(r.state_name())
 
+    def test_m5_redive_ditolak_tanpa_mark(self):
+        class State:
+            M5_REDIVE = object()
+
+        pesan = []
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           config={"start_state": "M5_REDIVE"}, log=pesan.append)
+        r._import_autonomy = lambda: (object, State, object, 0.04, (), 0, 0.025)
+        r._apply_motion_config = lambda _module: None
+
+        self.assertFalse(r.start())
+        self.assertIn("MARK gantungan wajib", r.last_error)
+        self.assertTrue(any("TIDAK BISA START" in p for p in pesan), pesan)
+
 
 class TestAutonomousMotionConfig(unittest.TestCase):
+    VALID = {
+        "dive_mps": 0.16,
+        "ascend_mps": 0.12,
+        "surge_mps": 0.21,
+        "yaw_dps": 20,
+    }
+
     def test_tuning_gerak_valid_disimpan(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
                            log=lambda *_: None)
-        ok, cfg = r.update_motion_config({"dive": 0.16, "yaw": 20})
-        self.assertTrue(ok)
-        self.assertEqual(r._cfg["runtime_motion"]["dive"], 0.16)
-        self.assertEqual(r._cfg["runtime_motion"]["yaw"], 20.0)
-        self.assertEqual(cfg["dive"], 0.16)
+        cfg = r.set_motion_config(self.VALID)
+        self.assertEqual(r.motion_config["dive_mps"], 0.16)
+        self.assertEqual(r.motion_config["yaw_dps"], 20.0)
+        self.assertEqual(cfg["dive_mps"], 0.16)
 
     def test_tuning_gerak_di_luar_batas_ditolak(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
                            log=lambda *_: None)
-        ok, reason = r.update_motion_config({"dive": 0.21})
-        self.assertFalse(ok)
-        self.assertIn("di luar batas", reason)
-        self.assertNotIn("runtime_motion", r._cfg)
+        bad = dict(self.VALID, dive_mps=0.21)
+        with self.assertRaisesRegex(ValueError, "di luar batas"):
+            r.set_motion_config(bad)
 
     def test_tuning_gerak_tidak_boleh_diubah_saat_fsm_jalan(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
                            log=lambda *_: None)
         r._thread = threading.current_thread()
-        ok, reason = r.update_motion_config({"surge": 10})
-        self.assertFalse(ok)
-        self.assertIn("sedang berjalan", reason)
+        with self.assertRaisesRegex(RuntimeError, "Mission 5 berjalan"):
+            r.set_motion_config(self.VALID)
+
+    def test_maju_fisik_juga_mengatur_kecepatan_pencarian(self):
+        class Module:
+            pass
+
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           log=lambda *_: None)
+        r.set_motion_config(self.VALID)
+        module = Module()
+        r._apply_motion_config(module)
+
+        self.assertEqual(module.SURGE_SPEED, 19)   # 0,21 / 1,11 × 100
+        self.assertEqual(module.SEARCH_SPEED, 19)  # M5_SEARCH mengikuti input Maju
+
+    def test_maju_nol_menonaktifkan_search_dan_scan_creep(self):
+        class Module:
+            pass
+
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           log=lambda *_: None)
+        r.set_motion_config(dict(self.VALID, surge_mps=0))
+        module = Module()
+        r._apply_motion_config(module)
+
+        self.assertEqual(module.SEARCH_SPEED, 0)
+        self.assertEqual(module.SCAN_CREEP_MAX_SPEED, 0)
 
 
 class TestWiringDiRovAgent(unittest.TestCase):
@@ -212,8 +256,11 @@ class TestWiringDiRovAgent(unittest.TestCase):
 
     def test_tuning_gerak_masuk_ke_runner(self):
         self.assertIn('name == "mission5_motion"', self.src)
-        self.assertIn("update_motion_config", self.src)
-        self.assertIn('"runtime_motion"', self.src)
+        self.assertIn("set_motion_config", self.src)
+        self.assertIn('"mission5_motion_config"', self.src)
+
+    def test_produksi_mulai_dari_m5_redive(self):
+        self.assertIn('os.environ.get("M5_START_STATE", "M5_REDIVE")', self.src)
 
 
 if __name__ == "__main__":

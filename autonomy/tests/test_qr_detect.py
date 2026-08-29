@@ -206,6 +206,42 @@ def test_decode_qr_zxing_rescues_tilted_qr_pyzbar_cv2_miss():
     assert res and res[0]['data'] == text, "jenjang zxing seharusnya membaca QR tilt 30°"
 
 
+def test_zxing_qr_rescales_checksum_verified_position(monkeypatch):
+    """Fallback ZXing 2x/4x harus mengembalikan koordinat frame asli."""
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    class _Corner:
+        def __init__(self, x, y):
+            self.x, self.y = x, y
+
+    class _Position:
+        top_left = _Corner(200, 120)
+        top_right = _Corner(280, 120)
+        bottom_right = _Corner(280, 200)
+        bottom_left = _Corner(200, 200)
+
+    class _Result:
+        text = "B"
+        position = _Position()
+
+    class _Format:
+        QRCode = object()
+
+    class _ZXing:
+        BarcodeFormat = _Format
+
+        @staticmethod
+        def read_barcodes(image, formats):
+            assert formats is _Format.QRCode
+            return [_Result()]
+
+    monkeypatch.setattr(qd, 'zxingcpp', _ZXing)
+    res = qd._zxing_qr(np.zeros((10, 10), np.uint8), scale=2.0)
+    assert res[0]['data'] == 'B'
+    assert np.allclose(res[0]['pts'][0], (100, 60))
+
+
 def test_decode_rectified_reads_perspective_qr():
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")

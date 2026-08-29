@@ -64,6 +64,11 @@ export const CONFIG = {
     KEY_AXIS_STEP: 400,
   },
 
+  AUTONOMY_MOTION: {
+    dive_mps: 0.12, ascend_mps: 0.12, surge_mps: 0.21, yaw_dps: 22.5,
+  },
+  AUTONOMY_MOTION_CONFIGURED: false,
+
   /* gain kontrol hold (PID) — SATUAN ArduSub, bukan skala bebas.
        yaw   -> ATC_RAT_YAW_P / _I / _D   (loop rate yaw)
        depth -> PSC_ACCZ_P / _I / _D      (loop akselerasi/throttle depth hold)

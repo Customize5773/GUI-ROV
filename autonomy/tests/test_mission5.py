@@ -657,14 +657,13 @@ def test_m5_fallback_when_qr_lost_during_dock():
     assert rep['jalur']['used_visual_dock'] is False
 
 
-def test_m5_fallback_when_qr_never_acquired():
-    """QR tak pernah terdeteksi sama sekali → M5_REDIVE timeout → M5_FALLBACK.
-    Payload tetap terlepas dari hook lewat urutan timed buta."""
+def test_m5_aborts_when_qr_never_acquired():
+    """QR tak pernah terdeteksi → berhenti aman, bukan grab/unhook timed buta."""
     rep = run_scenario(start_state=State.M5_REDIVE, provide_pose=True,
                        dropout=lambda c: True)
-    assert rep['state_akhir'] == 'DONE'
-    assert rep['jalur']['used_fallback'] is True
-    assert rep['payload']['unhooked'] is True    # urutan timed benar-benar melepas
+    assert rep['state_akhir'] == 'ABORT'
+    assert rep['jalur']['used_fallback'] is False
+    assert rep['payload']['unhooked'] is False
 
 
 # ── Kontrak gripper: rov_link.py (autonomous) vs gripper_controller.py (manual) ──
@@ -916,24 +915,22 @@ def test_m5_search_creep_gives_up_and_resumes_ladder():
     assert fsm._search_creep_t is None, "harus berhenti merayap setelah batas waktu"
 
 
-def test_m5_search_timeout_degrades_to_fallback():
-    """Gagal total → fallback timed (payload tetap dilepas, dapat nilai), bukan ABORT."""
+def test_m5_search_timeout_aborts():
+    """Gagal total → netral/disarm, bukan grab timed tanpa target."""
     fsm, plant, clock = _search_fsm(lat=99.0)
     fsm._state_t = m5.time.time() - (m5.TIMEOUT_SEARCH + 1)
     fsm._state_m5_search(plant.telemetry())
-    assert fsm._state == m5.State.M5_FALLBACK
+    assert fsm._state == m5.State.ABORT
 
 
 # ── Time-budget dinamis: jam TOTAL heat di ATAS timeout per state ────────────
-def test_m5_search_budget_low_degrades_early_to_fallback():
-    """Waktu heat hampir habis → degradasi SEKARANG, walau _elapsed() masih jauh
-    di bawah TIMEOUT_SEARCH — pagar kedua supaya M5_FALLBACK sempat jalan
-    sebelum peluit, bukan terpotong di tengah rantai."""
+def test_m5_search_budget_low_aborts_early():
+    """Waktu heat hampir habis → berhenti aman sebelum gerak buta."""
     fsm, plant, clock = _search_fsm(lat=99.0)
     min_needed = fsm._min_time_needed_from(m5.State.M5_SEARCH)
     fsm._mission_t0 = m5.time.time() - (m5.TIME_BUDGET_TOTAL - min_needed + 1)
     fsm._state_m5_search(plant.telemetry())
-    assert fsm._state == m5.State.M5_FALLBACK
+    assert fsm._state == m5.State.ABORT
 
 
 def test_m5_search_budget_ample_no_early_degrade():
@@ -951,6 +948,20 @@ def test_m5_redive_hands_over_to_search_not_blind_spin():
     fsm._state_t = m5.time.time()
     fsm._state_m5_redive({'depth': 0.45, 'heading': 90.0})
     assert fsm._state == m5.State.M5_SEARCH
+
+
+def test_m5_redive_tracks_visible_qr_without_approaching_wall():
+    """Saat QR terlihat selama turun, koreksi lateral aktif tetapi surge tetap nol."""
+    fsm, plant, clock = _search_fsm(depth=0.10, lat=0.10)
+    fsm._marked_depth = 0.45
+    fsm._transition(m5.State.M5_REDIVE)
+    fsm._state_t = m5.time.time()
+
+    fsm._state_m5_redive(plant.telemetry())
+
+    assert plant._in['vert'] < 0, "ROV harus tetap menyelam ke kedalaman MARK"
+    assert plant._in['sway'] != 0, "offset QR harus menghasilkan koreksi lateral"
+    assert plant._in['surge'] == 0, "jangan mendekati dinding selama masih turun"
 
 
 def test_m5_search_finds_laterally_offset_payload_end_to_end():
