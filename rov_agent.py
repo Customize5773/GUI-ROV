@@ -258,20 +258,6 @@ depth_hold_enabled = False
 depth_target = None
 depth_target_active = False
 
-# Supervisory bias hanya untuk z; ALT_HOLD ArduSub tetap controller utama.
-DEPTH_TARGET_TRANSITION = 0.7
-DEPTH_TARGET_DEADBAND = 0.01
-DEPTH_TARGET_KP = 270.0
-
-DEPTH_TARGET_SLOW_ZONE = 0.05
-DEPTH_TARGET_SLOW_MIN_BIAS = 30
-DEPTH_TARGET_HOLD_EXIT = 0.04
-
-# Minimum vertical correction saat error masih di luar deadband.
-# Nilai awal tuning untuk mengatasi area dekat-neutral/deadzone.
-DEPTH_TARGET_MIN_BIAS = 120
-DEPTH_TARGET_MAX_BIAS = 390
-
 depth_offset = 0.0
 _raw_depth = 0.0
 
@@ -864,7 +850,12 @@ def command_listener():
 
             elif name == "depth_apply":
 
-                # Terima target absolut dari GUI dan pindahkan vehicle ke ALT_HOLD.
+                # ============================================================
+                # NATIVE ARDUSUB DEPTH TARGET
+                # ============================================================
+                # GUI menentukan angka target.
+                # Raspberry Pi TIDAK menghitung error/PID/bias.
+                # ArduSub ALT_HOLD menjadi satu-satunya controller depth.
                 try:
                     target = float(value)
                 except (TypeError, ValueError):
@@ -879,8 +870,12 @@ def command_listener():
                     })
                     continue
 
+                # Jangan izinkan target melewati dasar kolam.
                 if pool_depth is not None:
-                    target = min(target, max(0.0, pool_depth - 0.05))
+                    target = min(
+                        target,
+                        max(0.0, pool_depth - 0.05)
+                    )
 
                 if not state.get("armed"):
                     print("[DEPTH] APPLY diabaikan — vehicle belum armed")
@@ -892,7 +887,9 @@ def command_listener():
                     continue
 
                 mode_mapping = master.mode_mapping() or {}
+
                 if "ALT_HOLD" not in mode_mapping:
+                    print("[DEPTH] ALT_HOLD tidak tersedia di firmware")
                     send_to_gui({
                         "type": "event",
                         "text": "ALT_HOLD tidak tersedia di firmware",
@@ -900,21 +897,48 @@ def command_listener():
                     })
                     continue
 
+                target = round(target, 2)
+
+                # Masuk ALT_HOLD terlebih dahulu.
                 with master_lock:
                     master.set_mode(mode_mapping["ALT_HOLD"])
 
+                # Kirim SETPOINT absolut ke controller native ArduSub.
+                if not send_native_depth_target(target):
+                    print("[DEPTH] Native depth target gagal dikirim")
+
+                    with depth_lock:
+                        depth_target = None
+                        depth_target_active = False
+                        depth_hold_enabled = False
+
+                    send_to_gui({
+                        "type": "event",
+                        "text": "Native depth target gagal dikirim",
+                        "level": "err",
+                    })
+                    continue
+
+                # Simpan hanya sebagai STATE GUI.
+                # BUKAN sebagai controller.
                 with depth_lock:
-                    depth_target = round(target, 2)
+                    depth_target = target
                     depth_target_active = True
                     depth_hold_enabled = True
 
-                print(f"[DEPTH] APPLY -> {depth_target:.2f} m")
+                print(
+                    f"[DEPTH NATIVE] APPLY -> {target:.2f} m; "
+                    f"ALT_HOLD controller = ArduSub"
+                )
+
                 send_to_gui({
                     "type": "event",
-                    "text": f"Target depth APPLY -> {depth_target:.2f} m; ALT_HOLD",
+                    "text": (
+                        f"Target depth APPLY -> {target:.2f} m; "
+                        f"native ArduSub ALT_HOLD"
+                    ),
                     "level": "ok",
                 })
-
             elif name == "depth_hold":
 
                 # Depth Hold murni menggunakan controller ArduSub.
@@ -1562,170 +1586,89 @@ def setup_mission5_runner():
     }
     mission5_runner = Mission5Runner(cmd, telem, config=cfg, log=print)
     return mission5_runner
-
-def apply_absolute_depth_target(mc, axes):
-    global depth_target_active
-    global depth_target
-
-    with depth_lock:
-        target = depth_target
-        active = depth_target_active
-
-    if not active or target is None:
-        return mc
     
-    # ============================================================
-    # PILOT OVERRIDE
-    # ============================================================
-    # Begitu operator menggerakkan stik HEAVE, target depth langsung
-    # dibatalkan. Kontrol vertical kembali sepenuhnya ke pilot.
-    heave = axes.get("heave", 0)
+def send_native_depth_target(target_depth):
+    """
+    Kirim target depth absolut ke native ArduSub ALT_HOLD.
 
-    if abs(heave) > HEAVE_MANUAL_EPSILON:
-        with depth_lock:
-            depth_target_active = False
+    Konvensi project:
+        depth > 0 = meter di bawah permukaan.
 
-        print(
-            f"[DEPTH TARGET] CANCEL "
-            f"pilot heave={heave}"
-        )
+    Konvensi ArduSub pada SET_POSITION_TARGET_GLOBAL_INT:
+        U > 0 = ke atas.
 
-        return mc
+    Maka:
+        depth 1.50 m -> alt = -1.50 m
+    """
+    global master
+
+    if master is None:
+        return False
 
     try:
-        current = float(state.get("depth", 0.0))
+        target_depth = float(target_depth)
     except (TypeError, ValueError):
-        return mc
+        return False
 
-    error = target - current
-    abs_error = abs(error)
+    if not math.isfinite(target_depth) or target_depth < 0:
+        return False
 
-    # ============================================================
-    # DEPTH TARGET HOLD
-    # ============================================================
-    # Jika sudah berada dalam deadband, jangan matikan target.
-    # ALT_HOLD ArduSub tetap menjadi controller utama.
-    if abs_error <= DEPTH_TARGET_DEADBAND:
-        bias = 0
+    # Hanya Z/altitude yang aktif.
+    #
+    # bit 0,1  = ignore X/Y position
+    # bit 3-5  = ignore velocity
+    # bit 6-8  = ignore acceleration
+    # bit 10   = ignore yaw
+    # bit 11   = ignore yaw rate
+    #
+    # bit 2 TIDAK di-set -> Z/altitude aktif.
+    type_mask = (
+        (1 << 0) |
+        (1 << 1) |
+        (1 << 3) |
+        (1 << 4) |
+        (1 << 5) |
+        (1 << 6) |
+        (1 << 7) |
+        (1 << 8) |
+        (1 << 10) |
+        (1 << 11)
+    )
 
-        out = dict(mc)
-        out["z"] = 500
+    # Depth project positif ke bawah.
+    # ArduSub U positif ke atas.
+    altitude_u = -target_depth
+
+    try:
+        with master_lock:
+            master.mav.set_position_target_global_int_send(
+                int(time.time() * 1000) & 0xFFFFFFFF,
+                master.target_system,
+                master.target_component,
+                mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+                type_mask,
+                0,                  # lat ignored
+                0,                  # lon ignored
+                float(altitude_u),  # Z target, U-positive
+                0,                  # vx ignored
+                0,                  # vy ignored
+                0,                  # vz ignored
+                0,                  # afx ignored
+                0,                  # afy ignored
+                0,                  # afz ignored
+                0,                  # yaw ignored
+                0,                  # yaw-rate ignored
+            )
 
         print(
-            f"[DEPTH TARGET] "
-            f"target={target:.2f} "
-            f"current={current:.2f} "
-            f"error={error:+.3f} "
-            f"bias=0 "
-            f"z=500 HOLD"
+            f"[DEPTH NATIVE] target={target_depth:.2f} m "
+            f"(U={altitude_u:.2f} m)"
         )
+        return True
 
-        return out
-
-    # ============================================================
-    # SLOW APPROACH ZONE
-    # ============================================================
-    # Ketika sudah dekat target, kurangi bias secara bertahap
-    # agar ROV tidak memiliki momentum terlalu besar saat masuk
-    # ke target.
-    if abs_error < DEPTH_TARGET_SLOW_ZONE:
-
-        ratio = (
-            (abs_error - DEPTH_TARGET_DEADBAND)
-            / (
-                DEPTH_TARGET_SLOW_ZONE
-                - DEPTH_TARGET_DEADBAND
-            )
-        )
-
-        ratio = max(0.0, min(1.0, ratio))
-
-        bias_abs = (
-            DEPTH_TARGET_SLOW_MIN_BIAS
-            + (
-                DEPTH_TARGET_MIN_BIAS
-                - DEPTH_TARGET_SLOW_MIN_BIAS
-            ) * ratio
-        )
-
-        bias = int(round(bias_abs))
-
-        if error < 0:
-            bias = -bias
-
-    # # ============================================================
-    # # TRANSITION ZONE
-    # # ============================================================
-    # elif abs_error < DEPTH_TARGET_TRANSITION:
-
-    #     ratio = (
-    #         (abs_error - DEPTH_TARGET_SLOW_ZONE)
-    #         / (
-    #             DEPTH_TARGET_TRANSITION
-    #             - DEPTH_TARGET_SLOW_ZONE
-    #         )
-    #     )
-
-    #     ratio = max(0.0, min(1.0, ratio))
-
-    #     bias_abs = (
-    #         DEPTH_TARGET_MIN_BIAS
-    #         + (
-    #             DEPTH_TARGET_KP * DEPTH_TARGET_TRANSITION
-    #             - DEPTH_TARGET_MIN_BIAS
-    #         ) * ratio
-    #     )
-
-    #     bias = int(round(bias_abs))
-
-    #     if error < 0:
-    #         bias = -bias
-
-    # ============================================================
-    # NORMAL CONTROL
-    # ============================================================
-    else:
-        bias = int(round(DEPTH_TARGET_KP * error))
-
-        # Minimum bias untuk mengatasi deadzone vertical thruster.
-        if 0 < abs(bias) < DEPTH_TARGET_MIN_BIAS:
-            bias = (
-                DEPTH_TARGET_MIN_BIAS
-                if error > 0
-                else -DEPTH_TARGET_MIN_BIAS
-            )
-
-    # ============================================================
-    # MAXIMUM LIMIT
-    # ============================================================
-    bias = max(
-        -DEPTH_TARGET_MAX_BIAS,
-        min(DEPTH_TARGET_MAX_BIAS, bias)
-    )
-
-    # ============================================================
-    # APPLY KE MANUAL_CONTROL.Z
-    # ============================================================
-    out = dict(mc)
-
-    out["z"] = max(
-        0,
-        min(
-            1000,
-            int(mc["z"] - bias)
-        )
-    )
-
-    print(
-        f"[DEPTH TARGET] "
-        f"target={target:.2f} "
-        f"current={current:.2f} "
-        f"error={error:+.3f} "
-        f"bias={bias:+d} "
-        f"z={out['z']}"
-    )
-
-    return out
+    except Exception as e:
+        print(f"[DEPTH NATIVE] gagal kirim target: {e}")
+        return False
 
 def joystick_sender():
     """Kirim MANUAL_CONTROL 20 Hz.
@@ -1806,9 +1749,6 @@ def joystick_sender():
             yaw=scaled_axes["yaw"],
             heave=scaled_axes["heave"],
         )
-
-        # Target depth hanya memodifikasi z; surge/sway/yaw tetap jalur asli.
-        mc = apply_absolute_depth_target(mc, eff_axes)
 
         # Sesudah depth-hold: keduanya menulis field yang berbeda (z vs r), jadi
         # urutannya tidak penting untuk hasil — hanya dijaga konsisten supaya
