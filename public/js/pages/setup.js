@@ -289,8 +289,9 @@ export const setupPage = {
           <div class="card">
             <span class="panel__eyebrow">AUTONOMOUS MOTION</span>
             <h3 class="card__title">Mission 5 Movement</h3>
-            <p class="card__desc">Command axis FSM dalam persen. Apply saat mode MANUAL;
-              berlaku pada start autonomous berikutnya. ArduSub tetap menangani mixer/PWM.</p>
+            <p class="card__desc">Command axis FSM dalam persen. Apply saat FSM belum
+              berjalan; mode pilot ArduSub <b>ALT_HOLD boleh tetap aktif</b>. Berlaku pada
+              start autonomous berikutnya. ArduSub tetap menangani mixer/PWM.</p>
             <div class="card__row card__row--wrap">
               ${MOTION_FIELDS.map((field) => motionField(field, A)).join("")}
             </div>

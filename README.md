@@ -313,8 +313,8 @@ di kolam yang disarankan.
 
 Buka **Setup → Autonomous Motion**, atur speed tiap fase (dive, ascend, surge,
 yaw, search, approach, engage, dan unhook), lalu tekan **Apply Autonomous Motion**
-saat mode masih **MANUAL**. Nilai berlaku pada start autonomous berikutnya; perubahan
-saat FSM sedang berjalan ditolak agar satu trial tetap konsisten. Batas input diterapkan
+saat FSM belum berjalan. Mode pilot ArduSub **ALT_HOLD boleh tetap aktif**. Nilai berlaku
+pada start autonomous berikutnya; perubahan saat FSM sedang berjalan ditolak agar satu trial tetap konsisten. Batas input diterapkan
 lagi di Pi dan hanya mengubah command axis persen—mixer/PWM tetap milik ArduSub.
 
 ### Deteksi QR robust + diagnosa (`decode_qr` & `--csv`)
