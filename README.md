@@ -320,7 +320,8 @@ trial tetap konsisten. Pi menerjemahkan target fisik ke command berdasarkan
 Telemetry `surge_speed`, `vertical_speed`, dan `yaw_rate` dicatat untuk membandingkan
 target dengan gerak aktual. Mixer/PWM tetap milik ArduSub.
 Selama autonomous aktif, server juga menyalin snapshot log terbaru dari Pi ke
-`autonomy/logs/autonomous1.log`; file dapat diunduh dari panel Mission 5.
+`autonomy/logs/autonomous_YYYYMMDD_HHMMSS.log`; satu sesi mendapat satu nama
+file dengan tanggal dan waktu mulai. File terbaru dapat diunduh dari panel Mission 5.
 
 Kalibrasi dilakukan dengan menjalankan beberapa command di kolam, mengukur jarak
 atau perubahan kedalaman terhadap waktu, lalu memperbarui empat nilai

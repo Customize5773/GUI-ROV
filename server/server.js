@@ -33,33 +33,53 @@ const SIM = process.argv.includes("--sim");
 const PUBLIC = path.join(__dirname, "..", "public");
 const SHARED_ROOT = path.join(__dirname, "..", "shared");
 const AUTONOMY = path.join(__dirname, "..", "autonomy");
-const AUTONOMOUS_LOG = path.join(AUTONOMY, "logs", "autonomous1.log");
-fs.mkdirSync(path.dirname(AUTONOMOUS_LOG), { recursive: true });
+const AUTONOMOUS_LOG_DIR = path.join(AUTONOMY, "logs");
+fs.mkdirSync(AUTONOMOUS_LOG_DIR, { recursive: true });
 
 let lastControlMode = null;
 let autonomousLogTimer = null;
 let autonomousLogSyncBusy = false;
+let autonomousLogPath = null;
+
+function newAutonomousLog() {
+  const d = new Date();
+  const stamp = [d.getFullYear(), String(d.getMonth() + 1).padStart(2, "0"),
+    String(d.getDate()).padStart(2, "0")].join("") + "_" +
+    [d.getHours(), d.getMinutes(), d.getSeconds()].map((v) => String(v).padStart(2, "0")).join("");
+  autonomousLogPath = path.join(AUTONOMOUS_LOG_DIR, `autonomous_${stamp}.log`);
+}
+
+function latestAutonomousLog() {
+  if (autonomousLogPath) return autonomousLogPath;
+  try {
+    const names = fs.readdirSync(AUTONOMOUS_LOG_DIR)
+      .filter((name) => /^autonomous_\d{8}_\d{6}\.log$/.test(name)).sort();
+    return names.length ? path.join(AUTONOMOUS_LOG_DIR, names[names.length - 1]) : null;
+  } catch (_) { return null; }
+}
 
 function syncLatestAutonomousLog() {
   if (autonomousLogSyncBusy) return;
   autonomousLogSyncBusy = true;
   // Salin snapshot terbaru selama autonomous berjalan. RunLogger di Pi flush
   // setiap event, jadi file lokal bisa dipakai untuk monitoring sebelum trial
-  // selesai; nama tetap autonomous1.log agar alat evaluasi punya satu target.
+  // selesai; nama file dibuat sekali per sesi agar tanggal trial ikut tersimpan.
   execFile("rsync", [
     "-az",
     "-e", "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new",
     `${RPI_SSH_USER}@${RPI_ADDR}:${RPI_LOG_DIR}/*.jsonl`,
     path.join(AUTONOMY, "logs"),
   ], { timeout: 5000 }, () => {
-    fs.readdir(path.dirname(AUTONOMOUS_LOG), (err, names) => {
+    fs.readdir(AUTONOMOUS_LOG_DIR, (err, names) => {
       const runs = err ? [] : names.filter((name) => /^run_.*\.jsonl$/.test(name)).sort();
       const latest = runs[runs.length - 1];
       if (!latest) {
         autonomousLogSyncBusy = false;
         return;
       }
-      fs.copyFile(path.join(path.dirname(AUTONOMOUS_LOG), latest), AUTONOMOUS_LOG, () => {
+      const destination = autonomousLogPath || path.join(AUTONOMOUS_LOG_DIR, `autonomous_${latest.slice(4, -5)}.log`);
+      if (!autonomousLogPath) autonomousLogPath = destination;
+      fs.copyFile(path.join(AUTONOMOUS_LOG_DIR, latest), destination, () => {
         autonomousLogSyncBusy = false;
       });
     });
@@ -69,6 +89,7 @@ function syncLatestAutonomousLog() {
 function trackAutonomousRun(data) {
   const mode = data && data.control_mode;
   if (mode === "autonomous" && lastControlMode !== "autonomous") {
+    newAutonomousLog();
     syncLatestAutonomousLog();
     clearInterval(autonomousLogTimer);
     autonomousLogTimer = setInterval(syncLatestAutonomousLog, 2000);
@@ -400,16 +421,17 @@ const httpServer = http.createServer((req, res) => {
       () => runAnalyze());
   }
 
-  if (urlPath === "/api/autonomous1.log") {
-    return fs.readFile(AUTONOMOUS_LOG, (err, data) => {
-      if (err) { res.writeHead(404); return res.end("Belum ada autonomous1.log"); }
+  if (urlPath === "/api/autonomous.log") {
+    const current = latestAutonomousLog();
+    return current ? fs.readFile(current, (err, data) => {
+      if (err) { res.writeHead(404); return res.end("Belum ada log autonomous"); }
       res.writeHead(200, {
         "Content-Type": "text/plain; charset=utf-8",
-        "Content-Disposition": "attachment; filename=autonomous1.log",
+        "Content-Disposition": `attachment; filename=${path.basename(current)}`,
         "Cache-Control": "no-store",
       });
       res.end(data);
-    });
+    }) : (res.writeHead(404), res.end("Belum ada log autonomous"));
   }
 
   // Satu frame JPEG dari sesi: /replay/frame?session=<id>&cam=<bottom|wall>&i=<idx>
