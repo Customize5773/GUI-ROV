@@ -67,6 +67,7 @@ function saveSetup() {
       TEAM_NAME: CONFIG.TEAM_NAME, UNIVERSITY: CONFIG.UNIVERSITY,
       CAMERAS: CONFIG.CAMERAS, THRUSTER: CONFIG.THRUSTER,
       POOL_DEPTH: CONFIG.POOL_DEPTH, DANGER_DEPTH: CONFIG.DANGER_DEPTH,
+      AUTONOMY_MOTION_UNITS: "physical-v1",
       AUTONOMY_MOTION: CONFIG.AUTONOMY_MOTION_CONFIGURED ? CONFIG.AUTONOMY_MOTION : null,
     }));
     /* PID SENGAJA TIDAK ikut disimpan: sumber kebenarannya sekarang flight
@@ -91,7 +92,13 @@ export function loadSetup() {
     if (s.AUTONOMY_MOTION && typeof s.AUTONOMY_MOTION === "object") {
       CONFIG.AUTONOMY_MOTION_CONFIGURED = true;
       for (const field of MOTION_FIELDS) {
-        const value = Number(s.AUTONOMY_MOTION[field.key]);
+        const stored = Number(s.AUTONOMY_MOTION[field.key]);
+        // Migrasi nilai versi level/command lama ke target fisik nominal.
+        const value = s.AUTONOMY_MOTION_UNITS === "physical-v1"
+          ? stored
+          : stored >= 0 && stored <= 5
+            ? stored / 5 * field.defaultMax
+            : stored / field.maxCommand * field.defaultMax;
         if (Number.isFinite(value) && value >= field.min && value <= field.max) {
           CONFIG.AUTONOMY_MOTION[field.key] = value;
         }
@@ -108,22 +115,22 @@ const numField = (id, label, val, step = "1", unit = "") => `
     <input id="${id}" type="number" step="${step}" value="${val}" /></label>`;
 
 const MOTION_FIELDS = [
-  { key: "dive", label: "Dive", min: 0, max: 50 },
-  { key: "ascend", label: "Ascend", min: 0, max: 50 },
-  { key: "surge", label: "Surge", min: 0, max: 50 },
-  { key: "yaw", label: "Yaw", min: 0, max: 50 },
-  { key: "scan_creep", label: "Scan creep", min: 0, max: 35 },
-  { key: "search", label: "Search", min: 0, max: 35 },
-  { key: "approach", label: "Approach", min: 0, max: 35 },
-  { key: "engage", label: "Engage", min: 0, max: 30 },
-  { key: "unhook_vert", label: "Unhook vert", min: 0, max: 40 },
-  { key: "unhook_surge", label: "Unhook surge", min: -40, max: 0 },
+  { key: "dive", label: "Selam", unit: "m/s", min: 0, max: 0.20, step: "0.01", defaultMax: 0.20, maxCommand: 50 },
+  { key: "ascend", label: "Naik", unit: "m/s", min: 0, max: 0.20, step: "0.01", defaultMax: 0.20, maxCommand: 50 },
+  { key: "surge", label: "Maju", unit: "m/s", min: 0, max: 0.30, step: "0.01", defaultMax: 0.30, maxCommand: 50 },
+  { key: "yaw", label: "Putar", unit: "°/s", min: 0, max: 45, step: "1", defaultMax: 45, maxCommand: 50 },
 ];
 
+export function autonomyMotionConfig(values) {
+  return Object.fromEntries(MOTION_FIELDS.map((field) => [
+    field.key, Math.max(field.min, Math.min(field.max, Number(values[field.key]) || 0)),
+  ]));
+}
+
 const motionField = (field, values) => `
-  <label class="field field--sm"><span>${field.label} <small>%</small></span>
+  <label class="field field--sm"><span>${field.label} <small>${field.unit}</small></span>
     <input id="suMotion${field.key}" type="number" min="${field.min}" max="${field.max}"
-           step="1" value="${values[field.key]}" inputmode="decimal" /></label>`;
+           step="${field.step}" value="${values[field.key] ?? 0}" inputmode="decimal" /></label>`;
 
 // resolusi umum yang didukung mjpg-streamer via input_uvc.so -r; daftar tidak
 // divalidasi terhadap kemampuan kamera fisik (lihat autonomy/tools/pi_restart_camera.sh)
@@ -289,11 +296,15 @@ export const setupPage = {
           <div class="card">
             <span class="panel__eyebrow">AUTONOMOUS MOTION</span>
             <h3 class="card__title">Mission 5 Movement</h3>
+            <p class="card__desc">Atur target gerak nyata: Selam, Naik, dan Maju dalam m/s;
+              Putar dalam °/s. Nilai ini diterjemahkan ke command ArduSub memakai kalibrasi
+              kolam dan dibatasi ulang di Pi.</p>
             <div class="card__row card__row--wrap">
               ${MOTION_FIELDS.map((field) => motionField(field, A)).join("")}
             </div>
             <button class="btn-wide" id="suApplyMotion">Apply Autonomous Motion</button>
             <span class="card__info" id="suMotionInfo">Batas aman diterapkan di Pi</span>
+            <span class="card__info" id="suMotionActual">Aktual: menunggu telemetry</span>
           </div>
 
           <!-- MISSION SCORING -->
@@ -717,18 +728,20 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m`, "ok");
     };
 
-    /* AUTONOMOUS MOTION — hanya tuning bounded axis, bukan PID FC/mixer. */
+    /* AUTONOMOUS MOTION — target fisik dikirim ke Pi; Pi mengonversinya ke
+       bounded axis memakai kalibrasi, bukan PID FC/mixer. */
     this.els.motionInputs = Object.fromEntries(
       MOTION_FIELDS.map((field) => [field.key, root.querySelector(`#suMotion${field.key}`)])
     );
     this.els.motionInfo = root.querySelector("#suMotionInfo");
+    this.els.motionActual = root.querySelector("#suMotionActual");
     root.querySelector("#suApplyMotion").onclick = () => {
       const next = {};
       const invalid = [];
       for (const field of MOTION_FIELDS) {
         const value = Number(this.els.motionInputs[field.key].value);
         if (!Number.isFinite(value) || value < field.min || value > field.max) {
-          invalid.push(`${field.label} ${field.min}..${field.max}`);
+          invalid.push(`${field.label} ${field.min}..${field.max} ${field.unit}`);
         } else {
           next[field.key] = value;
         }
@@ -740,7 +753,7 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       CONFIG.AUTONOMY_MOTION = next;
       CONFIG.AUTONOMY_MOTION_CONFIGURED = true;
       saveSetup();
-      sendCmd("mission5_motion", next);
+      sendCmd("mission5_motion", autonomyMotionConfig(next));
       if (this.els.motionInfo) this.els.motionInfo.textContent = "Terkirim — berlaku pada start berikutnya";
       log("Tuning gerak autonomous dikirim", "ok");
     };
@@ -807,6 +820,13 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
           input.value = String(value);
         }
       }
+    }
+
+    if (this.els.motionActual) {
+      const fmt = (value, unit) => Number.isFinite(Number(value))
+        ? `${Number(value).toFixed(unit === "°/s" ? 1 : 3)} ${unit}` : "—";
+      this.els.motionActual.textContent = `Aktual: maju ${fmt(d.surge_speed, "m/s")} · `
+        + `vertikal ${fmt(d.vertical_speed, "m/s")} · putar ${fmt(d.yaw_rate, "°/s")}`;
     }
 
     const mc = d.mission_counter;

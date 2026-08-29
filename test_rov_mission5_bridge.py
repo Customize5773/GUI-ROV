@@ -138,16 +138,16 @@ class TestAutonomousMotionConfig(unittest.TestCase):
     def test_tuning_gerak_valid_disimpan(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
                            log=lambda *_: None)
-        ok, cfg = r.update_motion_config({"dive": 40, "unhook_surge": -25})
+        ok, cfg = r.update_motion_config({"dive": 0.16, "yaw": 20})
         self.assertTrue(ok)
-        self.assertEqual(r._cfg["runtime_motion"]["dive"], 40.0)
-        self.assertEqual(r._cfg["runtime_motion"]["unhook_surge"], -25.0)
-        self.assertEqual(cfg["dive"], 40.0)
+        self.assertEqual(r._cfg["runtime_motion"]["dive"], 0.16)
+        self.assertEqual(r._cfg["runtime_motion"]["yaw"], 20.0)
+        self.assertEqual(cfg["dive"], 0.16)
 
     def test_tuning_gerak_di_luar_batas_ditolak(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
                            log=lambda *_: None)
-        ok, reason = r.update_motion_config({"dive": 51})
+        ok, reason = r.update_motion_config({"dive": 0.21})
         self.assertFalse(ok)
         self.assertIn("di luar batas", reason)
         self.assertNotIn("runtime_motion", r._cfg)

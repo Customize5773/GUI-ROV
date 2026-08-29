@@ -45,31 +45,26 @@ import time
 import math
 
 
-# Runtime tuning yang aman untuk gerak autonomous. Ini tetap command axis (%)
-# ke ArduSub, bukan PWM dan bukan mixer baru.
+# Runtime tuning gerak autonomous dari GUI memakai satuan fisik. Nilai ini
+# dikonversi ke command axis oleh Pi memakai kalibrasi command→kecepatan;
+# ArduSub tetap menjadi pemilik mixer/PWM.
 MOTION_LIMITS = {
-    "dive": (0.0, 50.0),
-    "ascend": (0.0, 50.0),
-    "surge": (0.0, 50.0),
-    "yaw": (0.0, 50.0),
-    "scan_creep": (0.0, 35.0),
-    "search": (0.0, 35.0),
-    "approach": (0.0, 35.0),
-    "engage": (0.0, 30.0),
-    "unhook_vert": (0.0, 40.0),
-    "unhook_surge": (-40.0, 0.0),
+    "dive": (0.0, 0.20),       # m/s, arah turun
+    "ascend": (0.0, 0.20),     # m/s, arah naik
+    "surge": (0.0, 0.30),      # m/s, maju
+    "yaw": (0.0, 45.0),        # deg/s
 }
 MOTION_CONSTANTS = {
     "dive": "DIVE_SPEED",
     "ascend": "ASCEND_SPEED",
     "surge": "SURGE_SPEED",
     "yaw": "YAW_SPEED",
-    "scan_creep": "SCAN_CREEP_MAX_SPEED",
-    "search": "SEARCH_SPEED",
-    "approach": "DOCK_APPROACH_SPEED",
-    "engage": "M5_ENGAGE_SURGE",
-    "unhook_vert": "M5_UNHOOK_VERT",
-    "unhook_surge": "M5_UNHOOK_SURGE",
+}
+MOTION_CALIBRATION = {
+    "dive": "DIVE_MPS_AT_50",
+    "ascend": "ASCEND_MPS_AT_50",
+    "surge": "SURGE_MPS_AT_50",
+    "yaw": "YAW_DPS_AT_50",
 }
 
 
@@ -87,7 +82,8 @@ def validate_motion_config(values):
             return {}, f"{key} bukan angka"
         lo, hi = MOTION_LIMITS[key]
         if not math.isfinite(number) or not lo <= number <= hi:
-            return {}, f"{key} di luar batas {lo:g}..{hi:g}%"
+            unit = "°/s" if key == "yaw" else "m/s"
+            return {}, f"{key} di luar batas {lo:g}..{hi:g} {unit}"
         out[key] = number
     return out, None
 
@@ -257,8 +253,10 @@ class Mission5Runner:
         """Konfigurasi gerak efektif, termasuk default/config file terakhir."""
         try:
             import fsm.mission5 as m5
-            result = {key: getattr(m5, attr)
-                      for key, attr in MOTION_CONSTANTS.items()}
+            result = {
+                key: getattr(m5, attr) / 50.0 * getattr(m5, MOTION_CALIBRATION[key])
+                for key, attr in MOTION_CONSTANTS.items()
+            }
         except Exception:
             result = {}
         result.update(self._cfg.get("runtime_motion", {}))
@@ -270,8 +268,16 @@ class Mission5Runner:
             return
         import fsm.mission5 as m5
         for key, value in runtime.items():
-            setattr(m5, MOTION_CONSTANTS[key], value)
-        self._log(f"[M5] tuning gerak runtime diterapkan: {runtime}")
+            calibration = float(getattr(m5, MOTION_CALIBRATION[key]))
+            if not math.isfinite(calibration) or calibration <= 0:
+                raise ValueError(f"kalibrasi {key} tidak valid: {calibration}")
+            # Nilai GUI adalah target gerak; FSM tetap menerima command lama
+            # -100..100 agar visual servo dan safety envelope tidak berubah.
+            command = round(float(value) / calibration * 50.0)
+            command = max(0, min(50, command))
+            setattr(m5, MOTION_CONSTANTS[key], command)
+            self._log(f"[M5] {key}={value:g} -> command={command} "
+                      f"(kalibrasi {calibration:g}/50)")
 
     def start(self):
         """Nyalakan FSM. Aman dipanggil berulang — start kedua diabaikan.
@@ -296,7 +302,11 @@ class Mission5Runner:
             return False
 
         self._apply_configs()
-        self._apply_runtime_motion()
+        try:
+            self._apply_runtime_motion()
+        except (TypeError, ValueError) as e:
+            self._log(f"[M5] TIDAK BISA START — kalibrasi gerak tidak valid: {e}")
+            return False
 
         cfg = self._cfg
 
@@ -320,7 +330,16 @@ class Mission5Runner:
                                      _time.strftime("run_%Y%m%d_%H%M%S.jsonl"))
             runlog = RunLogger(log_path)
             files = [p.strip() for p in (cfg.get("config_files") or "").split(",") if p.strip()]
-            runlog.event("config", files=files, start_state=cfg.get("start_state", "M5_REDIVE"))
+            import fsm.mission5 as _m5
+            runlog.event(
+                "config",
+                files=files,
+                start_state=cfg.get("start_state", "M5_REDIVE"),
+                motion_target=self.motion_config(),
+                motion_calibration={
+                    key: getattr(_m5, attr) for key, attr in MOTION_CALIBRATION.items()
+                },
+            )
         except Exception as e:
             self._log(f"[M5] run_log tidak tersedia: {e} — trial tetap jalan tanpa log")
         self._runlog = runlog
