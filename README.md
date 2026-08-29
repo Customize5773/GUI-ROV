@@ -309,6 +309,14 @@ memakai default di kode. Lihat `config/mission5.example.yaml` untuk daftar lengk
 penjelasan tiap parameter, dan `autonomy/ROADMAP_MISI5.md` Fase 3 untuk urutan tuning
 di kolam yang disarankan.
 
+### Tuning gerak autonomous dari GUI
+
+Buka **Setup → Autonomous Motion**, atur speed tiap fase (dive, ascend, surge,
+yaw, search, approach, engage, dan unhook), lalu tekan **Apply Autonomous Motion**
+saat mode masih **MANUAL**. Nilai berlaku pada start autonomous berikutnya; perubahan
+saat FSM sedang berjalan ditolak agar satu trial tetap konsisten. Batas input diterapkan
+lagi di Pi dan hanya mengubah command axis persen—mixer/PWM tetap milik ArduSub.
+
 ### Deteksi QR robust + diagnosa (`decode_qr` & `--csv`)
 
 Deteksi QR (`vision/qr_detect.py`) memakai **`decode_qr()`** — preprocessing berjenjang

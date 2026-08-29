@@ -67,6 +67,7 @@ function saveSetup() {
       TEAM_NAME: CONFIG.TEAM_NAME, UNIVERSITY: CONFIG.UNIVERSITY,
       CAMERAS: CONFIG.CAMERAS, THRUSTER: CONFIG.THRUSTER,
       POOL_DEPTH: CONFIG.POOL_DEPTH, DANGER_DEPTH: CONFIG.DANGER_DEPTH,
+      AUTONOMY_MOTION: CONFIG.AUTONOMY_MOTION_CONFIGURED ? CONFIG.AUTONOMY_MOTION : null,
     }));
     /* PID SENGAJA TIDAK ikut disimpan: sumber kebenarannya sekarang flight
        controller, dibaca ulang tiap kali halaman ini dibuka. Menyimpannya
@@ -87,6 +88,15 @@ export function loadSetup() {
     // masih ada di localStorage operator lama ikut terbuang di sini.
     if (Number.isFinite(s.POOL_DEPTH)) CONFIG.POOL_DEPTH = s.POOL_DEPTH;
     if (Number.isFinite(s.DANGER_DEPTH)) CONFIG.DANGER_DEPTH = s.DANGER_DEPTH;
+    if (s.AUTONOMY_MOTION && typeof s.AUTONOMY_MOTION === "object") {
+      CONFIG.AUTONOMY_MOTION_CONFIGURED = true;
+      for (const field of MOTION_FIELDS) {
+        const value = Number(s.AUTONOMY_MOTION[field.key]);
+        if (Number.isFinite(value) && value >= field.min && value <= field.max) {
+          CONFIG.AUTONOMY_MOTION[field.key] = value;
+        }
+      }
+    }
     // s.DEPTH_DEFAULT sengaja DIABAIKAN: setpoint depth-set tidak lagi berasal
     // dari angka yang diketik, melainkan dari tombol SET. Entri lama di
     // localStorage operator ikut terbuang di sini.
@@ -96,6 +106,24 @@ export function loadSetup() {
 const numField = (id, label, val, step = "1", unit = "") => `
   <label class="field field--sm"><span>${label}${unit ? ` <small>${unit}</small>` : ""}</span>
     <input id="${id}" type="number" step="${step}" value="${val}" /></label>`;
+
+const MOTION_FIELDS = [
+  { key: "dive", label: "Dive", min: 0, max: 50 },
+  { key: "ascend", label: "Ascend", min: 0, max: 50 },
+  { key: "surge", label: "Surge", min: 0, max: 50 },
+  { key: "yaw", label: "Yaw", min: 0, max: 50 },
+  { key: "scan_creep", label: "Scan creep", min: 0, max: 35 },
+  { key: "search", label: "Search", min: 0, max: 35 },
+  { key: "approach", label: "Approach", min: 0, max: 35 },
+  { key: "engage", label: "Engage", min: 0, max: 30 },
+  { key: "unhook_vert", label: "Unhook vert", min: 0, max: 40 },
+  { key: "unhook_surge", label: "Unhook surge", min: -40, max: 0 },
+];
+
+const motionField = (field, values) => `
+  <label class="field field--sm"><span>${field.label} <small>%</small></span>
+    <input id="suMotion${field.key}" type="number" min="${field.min}" max="${field.max}"
+           step="1" value="${values[field.key]}" inputmode="decimal" /></label>`;
 
 // resolusi umum yang didukung mjpg-streamer via input_uvc.so -r; daftar tidak
 // divalidasi terhadap kemampuan kamera fisik (lihat autonomy/tools/pi_restart_camera.sh)
@@ -111,7 +139,7 @@ export const setupPage = {
   init(root) {
     loadSetup();
     const host = location.hostname || "localhost";
-    const T = CONFIG.THRUSTER, P = CONFIG.PID;
+    const T = CONFIG.THRUSTER, P = CONFIG.PID, A = CONFIG.AUTONOMY_MOTION;
     const lanUrl = `http://${host}:${location.port || 8080}`;
 
     root.innerHTML = `
@@ -255,6 +283,19 @@ export const setupPage = {
             </div>
             <button class="btn-wide" id="suApplyPool">Apply</button>
             <span class="card__info" id="suPoolInfo">Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m · Alarm ≥ ${CONFIG.DANGER_DEPTH.toFixed(2)} m</span>
+          </div>
+
+          <!-- AUTONOMOUS MOTION -->
+          <div class="card">
+            <span class="panel__eyebrow">AUTONOMOUS MOTION</span>
+            <h3 class="card__title">Mission 5 Movement</h3>
+            <p class="card__desc">Command axis FSM dalam persen. Apply saat mode MANUAL;
+              berlaku pada start autonomous berikutnya. ArduSub tetap menangani mixer/PWM.</p>
+            <div class="card__row card__row--wrap">
+              ${MOTION_FIELDS.map((field) => motionField(field, A)).join("")}
+            </div>
+            <button class="btn-wide" id="suApplyMotion">Apply Autonomous Motion</button>
+            <span class="card__info" id="suMotionInfo">Batas aman diterapkan di Pi</span>
           </div>
 
           <!-- MISSION SCORING -->
@@ -678,6 +719,34 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       log(`Pool ${CONFIG.POOL_DEPTH.toFixed(2)} m, danger ${CONFIG.DANGER_DEPTH.toFixed(2)} m`, "ok");
     };
 
+    /* AUTONOMOUS MOTION — hanya tuning bounded axis, bukan PID FC/mixer. */
+    this.els.motionInputs = Object.fromEntries(
+      MOTION_FIELDS.map((field) => [field.key, root.querySelector(`#suMotion${field.key}`)])
+    );
+    this.els.motionInfo = root.querySelector("#suMotionInfo");
+    root.querySelector("#suApplyMotion").onclick = () => {
+      const next = {};
+      const invalid = [];
+      for (const field of MOTION_FIELDS) {
+        const value = Number(this.els.motionInputs[field.key].value);
+        if (!Number.isFinite(value) || value < field.min || value > field.max) {
+          invalid.push(`${field.label} ${field.min}..${field.max}`);
+        } else {
+          next[field.key] = value;
+        }
+      }
+      if (invalid.length) {
+        log(`Tuning autonomous tidak valid: ${invalid.join(", ")}`, "warn");
+        return;
+      }
+      CONFIG.AUTONOMY_MOTION = next;
+      CONFIG.AUTONOMY_MOTION_CONFIGURED = true;
+      saveSetup();
+      sendCmd("mission5_motion", next);
+      if (this.els.motionInfo) this.els.motionInfo.textContent = "Terkirim — berlaku pada start berikutnya";
+      log("Tuning gerak autonomous dikirim", "ok");
+    };
+
     /* MISSION SCORING */
     this.els.suM2Fails = root.querySelector("#suM2Fails");
     this.els.suM2Score = root.querySelector("#suM2Score");
@@ -731,6 +800,17 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
   /* Readout live Counter trial Misi 2/3 (lihat card MISSION SCORING) — app.js
      meneruskan tiap sampel telemetry ke sini lewat m.onTelemetry(d). */
   onTelemetry(d) {
+    const motion = d.mission5_motion;
+    if (motion && this.els.motionInputs) {
+      for (const field of MOTION_FIELDS) {
+        const value = Number(motion[field.key]);
+        const input = this.els.motionInputs[field.key];
+        if (Number.isFinite(value) && input && document.activeElement !== input) {
+          input.value = String(value);
+        }
+      }
+    }
+
     const mc = d.mission_counter;
     if (!mc || !this.els.suM2Fails) return;
     this.els.suM2Fails.textContent = mc.m2_fails + 1;

@@ -835,6 +835,9 @@ function connect() {
        terkirim ulang setelah reconnect — rov_agent.py kehilangan nilainya
        kalau prosesnya sempat restart. */
     if (Number.isFinite(CONFIG.POOL_DEPTH)) sendCmd("pool_depth", CONFIG.POOL_DEPTH, true);
+    if (CONFIG.AUTONOMY_MOTION_CONFIGURED && CONFIG.AUTONOMY_MOTION) {
+      sendCmd("mission5_motion", CONFIG.AUTONOMY_MOTION, true);
+    }
   };
   ws.onclose = () => {
     linkStale = false;

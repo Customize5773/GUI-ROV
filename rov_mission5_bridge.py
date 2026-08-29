@@ -42,6 +42,54 @@ FSM dari perintah operator. Di sini FSM memanggil **fungsi Python langsung**
 
 import threading
 import time
+import math
+
+
+# Runtime tuning yang aman untuk gerak autonomous. Ini tetap command axis (%)
+# ke ArduSub, bukan PWM dan bukan mixer baru.
+MOTION_LIMITS = {
+    "dive": (0.0, 50.0),
+    "ascend": (0.0, 50.0),
+    "surge": (0.0, 50.0),
+    "yaw": (0.0, 50.0),
+    "scan_creep": (0.0, 35.0),
+    "search": (0.0, 35.0),
+    "approach": (0.0, 35.0),
+    "engage": (0.0, 30.0),
+    "unhook_vert": (0.0, 40.0),
+    "unhook_surge": (-40.0, 0.0),
+}
+MOTION_CONSTANTS = {
+    "dive": "DIVE_SPEED",
+    "ascend": "ASCEND_SPEED",
+    "surge": "SURGE_SPEED",
+    "yaw": "YAW_SPEED",
+    "scan_creep": "SCAN_CREEP_MAX_SPEED",
+    "search": "SEARCH_SPEED",
+    "approach": "DOCK_APPROACH_SPEED",
+    "engage": "M5_ENGAGE_SURGE",
+    "unhook_vert": "M5_UNHOOK_VERT",
+    "unhook_surge": "M5_UNHOOK_SURGE",
+}
+
+
+def validate_motion_config(values):
+    """Kembalikan (nilai_normal, error); input asing/tidak aman ditolak."""
+    if not isinstance(values, dict):
+        return {}, "mission5_motion harus object"
+    out = {}
+    for key, value in values.items():
+        if key not in MOTION_LIMITS:
+            return {}, f"parameter tidak dikenal: {key}"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return {}, f"{key} bukan angka"
+        lo, hi = MOTION_LIMITS[key]
+        if not math.isfinite(number) or not lo <= number <= hi:
+            return {}, f"{key} di luar batas {lo:g}..{hi:g}%"
+        out[key] = number
+    return out, None
 
 
 class Mission5CommandAdapter:
@@ -190,6 +238,41 @@ class Mission5Runner:
         with self._lock:
             return self._thread is not None and self._thread.is_alive()
 
+    def update_motion_config(self, values):
+        """Simpan tuning axis untuk start FSM berikutnya.
+
+        Mengubah konfigurasi saat FSM aktif sengaja ditolak: satu trial harus
+        memakai satu konfigurasi yang dapat direproduksi dan tidak boleh
+        berubah di tengah gerak.
+        """
+        if self.is_running():
+            return False, "FSM sedang berjalan; ubah saat mode manual"
+        normalized, error = validate_motion_config(values)
+        if error:
+            return False, error
+        self._cfg.setdefault("runtime_motion", {}).update(normalized)
+        return True, self.motion_config()
+
+    def motion_config(self):
+        """Konfigurasi gerak efektif, termasuk default/config file terakhir."""
+        try:
+            import fsm.mission5 as m5
+            result = {key: getattr(m5, attr)
+                      for key, attr in MOTION_CONSTANTS.items()}
+        except Exception:
+            result = {}
+        result.update(self._cfg.get("runtime_motion", {}))
+        return result
+
+    def _apply_runtime_motion(self):
+        runtime = self._cfg.get("runtime_motion", {})
+        if not runtime:
+            return
+        import fsm.mission5 as m5
+        for key, value in runtime.items():
+            setattr(m5, MOTION_CONSTANTS[key], value)
+        self._log(f"[M5] tuning gerak runtime diterapkan: {runtime}")
+
     def start(self):
         """Nyalakan FSM. Aman dipanggil berulang — start kedua diabaikan.
 
@@ -213,6 +296,7 @@ class Mission5Runner:
             return False
 
         self._apply_configs()
+        self._apply_runtime_motion()
 
         cfg = self._cfg
 
@@ -333,3 +417,7 @@ class Mission5Runner:
             return dict(fsm.telemetry_out)
         except Exception:
             return None
+
+    def state_name(self):
+        telemetry = self.telemetry()
+        return telemetry.get("state") if telemetry else None

@@ -5,6 +5,7 @@
 
 import ast
 import os
+import threading
 import unittest
 
 from rov_mission5_bridge import (
@@ -133,6 +134,33 @@ class TestRunnerGagalLunak(unittest.TestCase):
         self.assertIsNone(r.state_name())
 
 
+class TestAutonomousMotionConfig(unittest.TestCase):
+    def test_tuning_gerak_valid_disimpan(self):
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           log=lambda *_: None)
+        ok, cfg = r.update_motion_config({"dive": 40, "unhook_surge": -25})
+        self.assertTrue(ok)
+        self.assertEqual(r._cfg["runtime_motion"]["dive"], 40.0)
+        self.assertEqual(r._cfg["runtime_motion"]["unhook_surge"], -25.0)
+        self.assertEqual(cfg["dive"], 40.0)
+
+    def test_tuning_gerak_di_luar_batas_ditolak(self):
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           log=lambda *_: None)
+        ok, reason = r.update_motion_config({"dive": 51})
+        self.assertFalse(ok)
+        self.assertIn("di luar batas", reason)
+        self.assertNotIn("runtime_motion", r._cfg)
+
+    def test_tuning_gerak_tidak_boleh_diubah_saat_fsm_jalan(self):
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           log=lambda *_: None)
+        r._thread = threading.current_thread()
+        ok, reason = r.update_motion_config({"surge": 10})
+        self.assertFalse(ok)
+        self.assertIn("sedang berjalan", reason)
+
+
 class TestWiringDiRovAgent(unittest.TestCase):
     """Menyeberangi batas file, seperti TestCallSiteCocokDenganDefinisi.
 
@@ -181,6 +209,11 @@ class TestWiringDiRovAgent(unittest.TestCase):
         # tertimpa fail-safe idle / input operator secara acak.
         self.assertIn("fsm_axes", self.src)
         self.assertIn("fsm_axes_lock", self.src)
+
+    def test_tuning_gerak_masuk_ke_runner(self):
+        self.assertIn('name == "mission5_motion"', self.src)
+        self.assertIn("update_motion_config", self.src)
+        self.assertIn('"runtime_motion"', self.src)
 
 
 if __name__ == "__main__":

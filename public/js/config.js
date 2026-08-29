@@ -64,6 +64,15 @@ export const CONFIG = {
     KEY_AXIS_STEP: 400,
   },
 
+  // Batas awal gerak FSM autonomous dalam persen command axis. Ini bukan
+  // mixer/PWM; ArduSub tetap mengurus stabilisasi dan mixing.
+  AUTONOMY_MOTION: {
+    dive: 30, ascend: 30, surge: 35, yaw: 25,
+    scan_creep: 18, search: 20, approach: 20, engage: 15,
+    unhook_vert: 30, unhook_surge: -20,
+  },
+  AUTONOMY_MOTION_CONFIGURED: false,
+
   /* gain kontrol hold (PID) — SATUAN ArduSub, bukan skala bebas.
        yaw   -> ATC_RAT_YAW_P / _I / _D   (loop rate yaw)
        depth -> PSC_ACCZ_P / _I / _D      (loop akselerasi/throttle depth hold)
