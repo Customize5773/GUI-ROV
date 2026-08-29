@@ -33,6 +33,52 @@ const SIM = process.argv.includes("--sim");
 const PUBLIC = path.join(__dirname, "..", "public");
 const SHARED_ROOT = path.join(__dirname, "..", "shared");
 const AUTONOMY = path.join(__dirname, "..", "autonomy");
+const AUTONOMOUS_LOG = path.join(AUTONOMY, "logs", "autonomous1.log");
+fs.mkdirSync(path.dirname(AUTONOMOUS_LOG), { recursive: true });
+
+let lastControlMode = null;
+let autonomousLogTimer = null;
+let autonomousLogSyncBusy = false;
+
+function syncLatestAutonomousLog() {
+  if (autonomousLogSyncBusy) return;
+  autonomousLogSyncBusy = true;
+  // Salin snapshot terbaru selama autonomous berjalan. RunLogger di Pi flush
+  // setiap event, jadi file lokal bisa dipakai untuk monitoring sebelum trial
+  // selesai; nama tetap autonomous1.log agar alat evaluasi punya satu target.
+  execFile("rsync", [
+    "-az",
+    "-e", "ssh -o BatchMode=yes -o ConnectTimeout=3 -o StrictHostKeyChecking=accept-new",
+    `${RPI_SSH_USER}@${RPI_ADDR}:${RPI_LOG_DIR}/*.jsonl`,
+    path.join(AUTONOMY, "logs"),
+  ], { timeout: 5000 }, () => {
+    fs.readdir(path.dirname(AUTONOMOUS_LOG), (err, names) => {
+      const runs = err ? [] : names.filter((name) => /^run_.*\.jsonl$/.test(name)).sort();
+      const latest = runs[runs.length - 1];
+      if (!latest) {
+        autonomousLogSyncBusy = false;
+        return;
+      }
+      fs.copyFile(path.join(path.dirname(AUTONOMOUS_LOG), latest), AUTONOMOUS_LOG, () => {
+        autonomousLogSyncBusy = false;
+      });
+    });
+  });
+}
+
+function trackAutonomousRun(data) {
+  const mode = data && data.control_mode;
+  if (mode === "autonomous" && lastControlMode !== "autonomous") {
+    syncLatestAutonomousLog();
+    clearInterval(autonomousLogTimer);
+    autonomousLogTimer = setInterval(syncLatestAutonomousLog, 2000);
+  } else if (mode !== "autonomous" && lastControlMode === "autonomous") {
+    clearInterval(autonomousLogTimer);
+    autonomousLogTimer = null;
+    syncLatestAutonomousLog();
+  }
+  if (typeof mode === "string") lastControlMode = mode;
+}
 
 const MOTION_AXES = new Set([
     "surge",
@@ -354,6 +400,18 @@ const httpServer = http.createServer((req, res) => {
       () => runAnalyze());
   }
 
+  if (urlPath === "/api/autonomous1.log") {
+    return fs.readFile(AUTONOMOUS_LOG, (err, data) => {
+      if (err) { res.writeHead(404); return res.end("Belum ada autonomous1.log"); }
+      res.writeHead(200, {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Disposition": "attachment; filename=autonomous1.log",
+        "Cache-Control": "no-store",
+      });
+      res.end(data);
+    });
+  }
+
   // Satu frame JPEG dari sesi: /replay/frame?session=<id>&cam=<bottom|wall>&i=<idx>
   if (urlPath === "/replay/frame") {
     const q = new URL(req.url, `http://localhost:${WS_PORT}`).searchParams;
@@ -420,7 +478,10 @@ const clients = new Set();
 function broadcast(obj) {
   // Tap telemetry untuk rekaman trajectory (bila sesi rekam aktif). Ini hanya
   // "menguping" — tidak mengubah/menghambat aliran telemetry ke dashboard.
-  if (obj && obj.type === "telemetry") recording.onTelemetry(obj.data);
+  if (obj && obj.type === "telemetry") {
+    recording.onTelemetry(obj.data);
+    trackAutonomousRun(obj.data);
+  }
   const s = JSON.stringify(obj);
   for (const c of clients) {
     if (c.readyState === 1) c.send(s);

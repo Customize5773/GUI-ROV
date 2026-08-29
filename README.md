@@ -311,11 +311,22 @@ di kolam yang disarankan.
 
 ### Tuning gerak autonomous dari GUI
 
-Buka **Setup → Autonomous Motion**, atur speed tiap fase (dive, ascend, surge,
-yaw, search, approach, engage, dan unhook), lalu tekan **Apply Autonomous Motion**
+Buka **Setup → Autonomous Motion**, atur target **Selam, Naik, Maju (m/s)** dan
+**Putar (°/s)**, lalu tekan **Apply Autonomous Motion**
 saat FSM belum berjalan. Mode pilot ArduSub **ALT_HOLD boleh tetap aktif**. Nilai berlaku
-pada start autonomous berikutnya; perubahan saat FSM sedang berjalan ditolak agar satu trial tetap konsisten. Batas input diterapkan
-lagi di Pi dan hanya mengubah command axis persen—mixer/PWM tetap milik ArduSub.
+pada start autonomous berikutnya; perubahan saat FSM sedang berjalan ditolak agar satu
+trial tetap konsisten. Pi menerjemahkan target fisik ke command berdasarkan
+`motion_calibration` di `autonomy/config/rov_tuned.yaml`, lalu membatasi command.
+Telemetry `surge_speed`, `vertical_speed`, dan `yaw_rate` dicatat untuk membandingkan
+target dengan gerak aktual. Mixer/PWM tetap milik ArduSub.
+Selama autonomous aktif, server juga menyalin snapshot log terbaru dari Pi ke
+`autonomy/logs/autonomous1.log`; file dapat diunduh dari panel Mission 5.
+
+Kalibrasi dilakukan dengan menjalankan beberapa command di kolam, mengukur jarak
+atau perubahan kedalaman terhadap waktu, lalu memperbarui empat nilai
+`motion_calibration`. Sebelum kalibrasi, angka target adalah estimasi command,
+bukan jaminan kecepatan nyata. Jika `LOCAL_POSITION_NED` tidak valid, `surge_speed`
+akan kosong dan tidak boleh dipakai sebagai bukti kecepatan maju.
 
 ### Deteksi QR robust + diagnosa (`decode_qr` & `--csv`)
 
