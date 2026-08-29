@@ -131,12 +131,6 @@ def qgc_command_receiver():
 # =========================
 state = {
     "heading": 0.0,
-    # Kecepatan dari LOCAL_POSITION_NED (m/s, frame NED) dan ATTITUDE (deg/s).
-    # None berarti FC belum menyediakan estimasi yang bisa dipercaya.
-    "vel_n": None,
-    "vel_e": None,
-    "vel_d": None,
-    "yaw_rate": None,
     "depth": 0.0,       # sementara 0 dulu, nanti kita isi dari sensor depth
     "roll": 0.0,
     "pitch": 0.0,
@@ -547,17 +541,6 @@ def send_telemetry():
         state["heading_target"] = heading_target
 
     state["pool_depth"] = pool_depth
-
-    # Kecepatan body yang bisa dibandingkan langsung dengan target Setup.
-    # Surge dihitung dari velocity NED + heading; bila EKF tidak punya estimasi
-    # horizontal, nilainya None, bukan 0 palsu. NED: down positif.
-    vn, ve = state.get("vel_n"), state.get("vel_e")
-    if all(isinstance(v, (int, float)) and math.isfinite(v) for v in (vn, ve)):
-        hdg = math.radians(float(state.get("heading", 0.0)))
-        state["surge_speed"] = round(vn * math.cos(hdg) + ve * math.sin(hdg), 4)
-    else:
-        state["surge_speed"] = None
-    state["vertical_speed"] = state.get("vel_d")
 
     # Gate otoritas untuk mission5 FSM (toggle autonomous/manual di GUI).
     # HARUS kunci sendiri: dulu ini menulis ke state["mode"] dan menimpa pilot
@@ -1857,21 +1840,6 @@ def connect_pixhawk():
     except Exception as e:
         print("[MAV] request_data_stream_send warning:", e)
 
-    # Minta velocity EKF secara eksplisit. MAV_DATA_STREAM_ALL tidak selalu
-    # dihormati oleh semua firmware/parameter ArduSub.
-    try:
-        link.mav.command_long_send(
-            link.target_system,
-            link.target_component,
-            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
-            0,
-            mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED,
-            100000,      # 10 Hz (100000 µs)
-            0, 0, 0, 0, 0, 0
-        )
-    except Exception as e:
-        print("[MAV] LOCAL_POSITION_NED request warning:", e)
-
     # Request AHRS2 (Depth)
     try:
         link.mav.command_long_send(
@@ -2055,7 +2023,6 @@ def main():
             state["roll"] = roll_f
             state["pitch"] = pitch_f
             state["heading"] = yaw_f
-            state["yaw_rate"] = math.degrees(msg.yawspeed)
             prev_attitude_ts = now_ts
 
         # --------------------------------
@@ -2065,16 +2032,6 @@ def main():
         elif mtype == "LOCAL_POSITION_NED":
             state["pos_n"] = float(msg.x)
             state["pos_e"] = float(msg.y)
-            # MAVLink mengirim posisi dalam meter dan velocity dalam cm/s.
-            # Beberapa FC tidak mengisi velocity; pertahankan None agar GUI
-            # tidak menampilkan angka palsu sebagai kecepatan ROV.
-            for field, source in (("vel_n", "vx"), ("vel_e", "vy"), ("vel_d", "vz")):
-                value = getattr(msg, source, None)
-                try:
-                    value = float(value) / 100.0
-                except (TypeError, ValueError):
-                    value = None
-                state[field] = value if value is not None and math.isfinite(value) else None
 
         # --------------------------------
         # PARAM_VALUE: tabel param (halaman Vehicle) + verifikasi param_set.

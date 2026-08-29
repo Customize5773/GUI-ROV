@@ -50,12 +50,3 @@ speed:
 
 hook_docking:
   approach_speed: 17   # default mission5.py 20
-
-# ── M5_SEARCH — diskala dari kalibrasi kolam latihan (2,2 m) ke arena 10 m ───
-# python autonomy/tools/calc_search_scale.py --width 10.0  (rasio 4,545)
-search:
-  backoff_t: 13.64     # default mission5.py 6.0
-  leg_t0: 9.09         # default mission5.py 3.0
-  leg_t_max: 20.45     # default mission5.py 10.0
-  span_max_t: 20.45    # default mission5.py 12.0
-  creep_max_t: 27.27   # default mission5.py 8.0

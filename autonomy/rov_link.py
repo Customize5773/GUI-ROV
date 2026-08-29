@@ -26,8 +26,7 @@ Jalankan (di Raspberry Pi, Pixhawk via USB):
 
 Kontrak JSON (sesuai server.js + README-WORK §3):
   Command masuk  : {"name": "...", "value": ..., "t": ...}
-  Telemetri keluar: {heading, roll, pitch, depth, surge_speed, vertical_speed,
-                     yaw_rate, temp, voltage, armed, light, mode, ts}
+  Telemetri keluar: {heading, roll, pitch, depth, temp, voltage, armed, light, mode, ts}
 """
 
 import argparse
@@ -157,7 +156,6 @@ class RovLink:
         # telemetri terbaru hasil parsing MAVLink
         self.telem = {
             "heading": None, "roll": None, "pitch": None, "depth": None,
-            "surge_speed": None, "vertical_speed": None, "yaw_rate": None,
             "temp": None, "voltage": None, "armed": False,
             "light": False, "mode": "manual", "poshold": False,
         }
@@ -197,13 +195,6 @@ class RovLink:
         self.master.mav.request_data_stream_send(
             self.master.target_system, self.master.target_component,
             mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1)  # 10 Hz
-        # Be explicit: some ArduSub/SITL configurations ignore the broad
-        # stream request for LOCAL_POSITION_NED.
-        self.master.mav.command_long_send(
-            self.master.target_system, self.master.target_component,
-            mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL, 0,
-            mavutil.mavlink.MAVLINK_MSG_ID_LOCAL_POSITION_NED,
-            100000, 0, 0, 0, 0, 0, 0)
 
     def arm(self, on):
         self.master.mav.command_long_send(
@@ -415,21 +406,6 @@ class RovLink:
                 self.telem["roll"] = round(math.degrees(msg.roll), 1)
                 self.telem["pitch"] = round(math.degrees(msg.pitch), 1)
                 self.telem["heading"] = round((math.degrees(msg.yaw) + 360) % 360, 1)
-                self.telem["yaw_rate"] = round(math.degrees(msg.yawspeed), 3)
-            elif t == "LOCAL_POSITION_NED":
-                # MAVLink LOCAL_POSITION_NED velocity: cm/s, NED frame.
-                try:
-                    vn = float(msg.vx) / 100.0
-                    ve = float(msg.vy) / 100.0
-                    vd = float(msg.vz) / 100.0
-                    if not all(math.isfinite(v) for v in (vn, ve, vd)):
-                        raise ValueError("velocity bukan finite")
-                    hdg = math.radians(float(self.telem["heading"] or 0.0))
-                    self.telem["surge_speed"] = round(vn * math.cos(hdg) + ve * math.sin(hdg), 4)
-                    self.telem["vertical_speed"] = round(vd, 4)
-                except (TypeError, ValueError):
-                    self.telem["surge_speed"] = None
-                    self.telem["vertical_speed"] = None
             elif t == "SCALED_PRESSURE2":
                 self.last_press_abs = msg.press_abs
                 depth = (msg.press_abs - self.surface_hpa) * 100.0 / (WATER_RHO * G)

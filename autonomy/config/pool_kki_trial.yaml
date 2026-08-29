@@ -13,13 +13,8 @@
 #     1. pool.depth            — ukur kedalaman air babak Trial (Guidebook: 0,7–0,9 m)
 #     2. pool.bottom_clearance — SALIN dari hasil trial di kolam latihan
 #     3. wall_heading A/B/C/D  — kalibrasi kompas ROV di tiap dinding arena Trial
-#   search: DITURUNKAN dari kalibrasi nyata kolam latihan (2026-08-25, v≈0,222 m/s
-#   @ lebar 2,2 m) discale linear ke lebar 5 m, via:
-#     python autonomy/tools/calc_search_scale.py --width 5.0
-#   BUKAN lagi "default mission5.py apa adanya" — komentar lama di sini
-#   ("arena 5×5m persis ukuran yg dipakai menurunkan default itu") kontradiksi
-#   dgn komentar mission5.py sendiri (defaultnya asumsi "kolam kecil ~3 m"),
-#   jadi diganti angka hasil turunan kalibrasi yg terukur, bukan asumsi.
+#   Timeout & speed TIDAK diubah dari default mission5.py — arena 5×5 m persis
+#   ukuran yang dipakai menurunkan default itu (Guidebook L43).
 
 # ── Geometri kolam → setpoint kedalaman DITURUNKAN (mission5._derive_depths) ──
 pool:
@@ -41,12 +36,3 @@ wall_heading:
 
 # Timeout & kecepatan TIDAK di-override di sini — default mission5.py (redive 15,
 # m5_dock 25, fallback 30, surge 35, approach_speed 20) sudah pas utk arena 5×5 m.
-
-# ── M5_SEARCH — diskala dari kalibrasi kolam latihan (2,2 m) ke arena 5 m ────
-# python autonomy/tools/calc_search_scale.py --width 5.0  (rasio 2,273)
-search:
-  backoff_t: 6.82      # default mission5.py 6.0
-  leg_t0: 4.55         # default mission5.py 3.0
-  leg_t_max: 10.23     # default mission5.py 10.0
-  span_max_t: 10.23    # default mission5.py 12.0 — sedikit lebih ketat
-  creep_max_t: 13.64   # default mission5.py 8.0

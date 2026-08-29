@@ -4,7 +4,7 @@ rov_mission5_bridge.py
 Autonomous Mission FSM sederhana untuk ROV.
 
 Format motion:
-    motion = (surge, sway, heading_set, depth_set)
+    motion = (surge, sway, heading_set, depth_set, gripper)
 
 Setiap CASE memiliki motion sendiri.
 Tidak ada AUTO_SURGE / AUTO_DEPTH global.
@@ -34,24 +34,43 @@ class Mission5CommandAdapter:
         self._set_alt_hold = set_alt_hold
         self._set_depth_target = set_depth_target
 
-    def send_motion(self, motion):
-        """motion = (surge, sway, heading_set, depth_set)."""
-        if len(motion) != 4:
-            raise ValueError("motion harus (surge, sway, heading_set, depth_set)")
+    def send_motion(self, motion, yaw_command=0):
+        """motion = (surge, sway, heading_set, depth_set, gripper)."""
 
-        surge, sway, yaw, depth_set = motion
+        if len(motion) != 5:
+            raise ValueError(
+                "motion harus (surge, sway, heading_set, depth_set, gripper)"
+            )
 
-        # Axis autonomous: skala FSM -100..100 -> rov_agent -1000..1000.
+        surge, sway, heading_set, depth_set, gripper = motion
+
+        # Axis autonomous
+        # FSM -100..100 -> rov_agent -1000..1000
         self._set_axis(
             surge=int(surge * 10),
             sway=int(sway * 10),
-            yaw=int(yaw * 10),
+            yaw=int(yaw_command * 10),
             heave=0,
         )
 
-        # depth_set adalah TARGET, bukan heave.
+        # Native ArduSub depth target
         if depth_set is not None and self._set_depth_target is not None:
             self._set_depth_target(depth_set)
+
+        # Gripper
+        if gripper == "open":
+            self._set_gripper(False)
+
+        elif gripper == "close":
+            self._set_gripper(True)
+
+        elif gripper == "hold":
+            pass
+
+        else:
+            raise ValueError(
+                f"gripper tidak valid: {gripper}"
+            )    
 
     def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
         """Kompatibilitas API lama; gunakan send_motion() untuk mission baru."""
@@ -100,11 +119,11 @@ class Mission5Runner:
     """
     FSM non-blocking.
 
-    CASE_FORWARD:
+    CASE_M1:
         motion = (30, 0, 0, 1.5)
         selama 3000 ms
 
-    CASE_REVERSE:
+    CASE_M2:
         motion = (-30, 0, 0, 1.5)
         selama 2000 ms
 
@@ -119,6 +138,12 @@ class Mission5Runner:
         3 = complete
     """
 
+    delay_m1 = 5000
+    delay_m2 = 5000
+    delay_m3 = 5000
+    delay_m4 = 5000
+    delay_m5 = 5000
+
     def __init__(self, cmd_adapter, telem_adapter, config=None, log=print):
         self._cmd = cmd_adapter
         self._telem = telem_adapter
@@ -131,7 +156,7 @@ class Mission5Runner:
 
         self.state = "IDLE"
         self.counter = 0
-        self.motion = (0, 0, 0, None)
+        self.motion = (0, 0, 0, None, "hold")
 
         self._case_started = None
         self._state_elapsed_ms = 0.0
@@ -173,64 +198,122 @@ class Mission5Runner:
         self._log(f"[AUTO] STATE -> {new_state}")
 
     def _apply_motion(self, motion):
-        surge, sway, heading_set, depth_set = motion
+        surge, sway, heading_set, depth_set, gripper = motion
 
-        current_heading = self._telem.get().get("heading", 0)
+        state = self._telem.get()
+        current_heading = state.get("heading", 0)
 
         yaw = self._heading_control(
             heading_set,
             current_heading
         )
 
-        command_motion = (
-            surge,
-            sway,
-            yaw,
-            depth_set,
+        self.motion = motion
+
+        self._log(
+            f"[AUTO] motion={motion} "
+            f"heading={current_heading:.1f} "
+            f"yaw_cmd={yaw}"
         )
 
-        self.motion = motion
-        self._cmd.send_motion(command_motion)
+        self._cmd.send_motion(
+            motion,
+            yaw_command=yaw,
+        )
 
-    def _case_forward(self):
+    def _case_m1(self):
         # CASE sendiri: motion langsung ditulis di sini.
-        motion = (0, 0, 90, 0.4)
+        motion = (30, 0, 0, 0.4, "hold")
 
         self._apply_motion(motion)
 
         elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
         self._state_elapsed_ms = elapsed_ms
 
-        if elapsed_ms >= 5000:
+        if elapsed_ms >= self.delay_m1:
             self._cmd.stop_all()
             self.counter += 1
             self._log(
-                f"[AUTO] FORWARD selesai "
+                f"[AUTO] M1 selesai "
                 f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
             )
-            self._transition("CASE_REVERSE")
+            self._transition("CASE_M2")
 
-    def _case_reverse(self):
-        # Reverse = negatif langsung dari surge forward.
-        motion = (0, 0, -90, 0.4)
+    def _case_m2(self):
+        # Reverse = negatif langsung dari surge forward.    
+        motion = (0, 0, -90, 0.4, "open")
 
         self._apply_motion(motion)
 
         elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
         self._state_elapsed_ms = elapsed_ms
 
-        if elapsed_ms >= 5000:
+        if elapsed_ms >= self.delay_m2:
             self._cmd.stop_all()
             self.counter += 1
             self._log(
-                f"[AUTO] REVERSE selesai "
+                f"[AUTO] M2 selesai "
                 f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
             )
-            self._transition("CASE_STOP")
+            self._transition("CASE_M3")
+            
+    def _case_m3(self):
+            # Reverse = negatif langsung dari surge forward.
+            motion = (0, 0, -90, 0.4, "close")
+
+            self._apply_motion(motion)
+
+            elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
+            self._state_elapsed_ms = elapsed_ms
+
+            if elapsed_ms >= self.delay_m3:
+                self._cmd.stop_all()
+                self.counter += 1
+                self._log(
+                    f"[AUTO] M3 selesai "
+                    f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
+                )
+                self._transition("CASE_M4")
+
+    def _case_m4(self):
+            # Reverse = negatif langsung dari surge forward.
+            motion = (0, 0, -90, 0.4, "hold")
+
+            self._apply_motion(motion)
+
+            elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
+            self._state_elapsed_ms = elapsed_ms
+
+            if elapsed_ms >= self.delay_m4:
+                self._cmd.stop_all()
+                self.counter += 1
+                self._log(
+                    f"[AUTO] M4 selesai "
+                    f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
+                )
+                self._transition("CASE_M5")
+
+    def _case_m5(self):
+            # Reverse = negatif langsung dari surge forward.
+            motion = (0, 0, -90, 0.4, "hold")
+
+            self._apply_motion(motion)
+
+            elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
+            self._state_elapsed_ms = elapsed_ms
+
+            if elapsed_ms >= self.delay_m5:
+                self._cmd.stop_all()
+                self.counter += 1
+                self._log(
+                    f"[AUTO] M5 selesai "
+                    f"elapsed={elapsed_ms:.1f} ms counter={self.counter}"
+                )
+                self._transition("CASE_STOP")
 
     def _case_stop(self):
         # Tetap di depth target, semua gerakan lain netral.
-        motion = (0, 0, 0, 0)
+        motion = (0, 0, 0, 0, "close")
 
         self._apply_motion(motion)
 
@@ -241,11 +324,20 @@ class Mission5Runner:
         self._transition("COMPLETE")
 
     def _update(self):
-        if self.state == "CASE_FORWARD":
-            self._case_forward()
+        if self.state == "CASE_M1":
+            self._case_m1()
 
-        elif self.state == "CASE_REVERSE":
-            self._case_reverse()
+        elif self.state == "CASE_M2":
+            self._case_m2()
+
+        elif self.state == "CASE_M3":
+            self._case_m3()
+
+        elif self.state == "CASE_M4":
+            self._case_m4()
+
+        elif self.state == "CASE_M5":
+            self._case_m5()
 
         elif self.state == "CASE_STOP":
             self._case_stop()
@@ -271,7 +363,7 @@ class Mission5Runner:
             return False
 
         # Set depth awal mission melalui motion pertama.
-        self._transition("CASE_FORWARD")
+        self._transition("CASE_M1")
 
         with self._lock:
             self._thread = threading.Thread(

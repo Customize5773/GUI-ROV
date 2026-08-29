@@ -45,12 +45,6 @@ _SCALAR_MAP = {
     ('speed', 'surge'):   'SURGE_SPEED',
     ('speed', 'yaw'):     'YAW_SPEED',
 
-    # Kalibrasi fisik: kecepatan pada command axis 50, diukur di kolam.
-    ('motion_calibration', 'dive_mps_at_50'):  'DIVE_MPS_AT_50',
-    ('motion_calibration', 'ascend_mps_at_50'): 'ASCEND_MPS_AT_50',
-    ('motion_calibration', 'surge_mps_at_50'): 'SURGE_MPS_AT_50',
-    ('motion_calibration', 'yaw_dps_at_50'):   'YAW_DPS_AT_50',
-
     ('timeouts', 'dive'):      'TIMEOUT_DIVE',
     ('timeouts', 'scan'):      'TIMEOUT_SCAN',
     ('timeouts', 'grab'):      'TIMEOUT_GRAB',

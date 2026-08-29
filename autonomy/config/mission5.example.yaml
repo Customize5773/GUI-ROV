@@ -40,9 +40,6 @@ timeouts:
   unhook: 10.0       # misi 5d: lepas dari hook
   m5_ascend: 20.0    # misi 5e: naik bawa payload
   fallback: 30.0     # jalur degraded (tanpa lock visual)
-  budget_total: 600.0  # detik jam TOTAL heat — pagar kedua di ATAS timeout per state,
-                        # picu degradasi dini ke fallback bila waktu tersisa < kebutuhan
-                        # minimum sisa rantai. TUNE ke durasi heat KKI venue.
 
 # ── Heading target tiap sisi kolam (derajat) — kalibrasi di venue ─────────────
 wall_heading:

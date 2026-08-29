@@ -26,15 +26,6 @@ invert:
   surge: false
   yaw: false
 
-# ── Kalibrasi gerak fisik (WAJIB diukur di kolam) ────────────────────────────
-# Kecepatan pada command axis 50. Nilai ini hanya titik awal sampai hasil uji
-# command→kecepatan dimasukkan; jangan menganggapnya sebagai spesifikasi motor.
-motion_calibration:
-  dive_mps_at_50: 0.20
-  ascend_mps_at_50: 0.20
-  surge_mps_at_50: 0.30
-  yaw_dps_at_50: 45.0
-
 # ── Gain PID servo docking — IBVS (piksel, tanpa kalibrasi kamera) ────────────
 pid_ibvs:
   kp_sway: 45.0
@@ -92,13 +83,3 @@ depth:
 payload:
   mission: 5
   type: payload
-
-# ── Timeout per state — sifat decode/servo, bukan kolam ───────────────────────
-# scan: dinaikkan dari default 20.0 (bukan disamakan ke 45.0 sim — itu
-# dikalibrasi utk biaya retry cv2.QRCodeDetector, bukan pyzbar). Titik awal
-# 30.0 dipilih krn decode_qr() kini punya 1 jenjang tambahan (adaptive-
-# threshold, lihat vision/qr_detect.py) sblm upscale — validasi ulang angka
-# ini pakai tools/analyze_detection_log.py stlh trial kolam berikutnya
-# (docs perbandingan: ros2_ws/docs/MISSION-ALIGNMENT.md).
-timeouts:
-  scan: 30.0

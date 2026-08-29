@@ -116,8 +116,6 @@ CLAHE_CLIP   = 2.0     # kekuatan penyetaraan kontras lokal (CLAHE) — lawan gl
 CLAHE_TILE   = 8       # ukuran grid CLAHE (tile CLAHE_TILE×CLAHE_TILE)
 UPSCALE      = 2.0     # faktor perbesaran saat QR terlalu kecil utk pyzbar
 STACK_N      = 3       # jumlah frame utk median-stack jenjang-7 (lawan riak/kaustik transien)
-RECTIFY_SIZE = 500     # ukuran kanvas QR setelah perspective warp
-RECTIFY_MARGIN = 1.5   # sisakan quiet-zone + sedikit konteks di sekitar quad
 # Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
 # + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
 # global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
@@ -201,64 +199,6 @@ def _pyzbar_qr(img, scale=1.0, gray_for_gate=None):
     return out
 
 
-def _order_quad_points(pts):
-    """Urutkan empat sudut menjadi top-left, top-right, bottom-right, bottom-left."""
-    q = np.asarray(pts, dtype=np.float32).reshape(-1, 2)
-    if len(q) != 4:
-        return None
-    sums = q.sum(axis=1)
-    diffs = np.diff(q, axis=1).reshape(-1)
-    return q[[np.argmin(sums), np.argmin(diffs),
-              np.argmax(sums), np.argmax(diffs)]]
-
-
-def _decode_rectified(frame, gray):
-    """Cari quad QR lalu luruskan sebelum decoder mencoba membaca payload.
-
-    Pada video kolam QR tetap terdeteksi walau decode langsung gagal karena
-    perspektif/glare. Warp memberi decoder QR yang lebih besar, persegi, dan punya
-    quiet-zone; koordinat yang dikembalikan tetap quad di frame asli.
-    """
-    if not hasattr(cv2, 'QRCodeDetector'):
-        return []
-    try:
-        detector = cv2.QRCodeDetector()
-        ok, found = detector.detect(gray)
-        if not ok or found is None:
-            return []
-        pts = _order_quad_points(found)
-        if pts is None:
-            return []
-        center = pts.mean(axis=0)
-        src = center + (pts - center) * RECTIFY_MARGIN
-        dst = np.float32([[0, 0], [RECTIFY_SIZE - 1, 0],
-                          [RECTIFY_SIZE - 1, RECTIFY_SIZE - 1],
-                          [0, RECTIFY_SIZE - 1]])
-        matrix = cv2.getPerspectiveTransform(src, dst)
-        warped = cv2.warpPerspective(gray, matrix,
-                                     (RECTIFY_SIZE, RECTIFY_SIZE),
-                                     borderValue=255)
-    except cv2.error:
-        return []
-
-    if PYZBAR_OK:
-        clahe = _to_gray_clahe(warped)
-        candidates = (warped, clahe, _adaptive_thresh(clahe))
-        for candidate in candidates:
-            for obj in pyzbar.decode(candidate):
-                if getattr(obj, 'type', 'QRCODE') != 'QRCODE':
-                    continue
-                data = obj.data.decode('utf-8', 'ignore').strip()
-                if data:
-                    return [{'data': data, 'pts': pts}]
-
-    try:
-        data = detector.detectAndDecode(warped)[0]
-    except cv2.error:
-        data = ''
-    return [{'data': str(data).strip(), 'pts': pts}] if data else []
-
-
 def decode_qr(frame, enhance=True):
     """Deteksi QR robust dari 1 frame. Kembalikan list {'data': str,
     'pts': ndarray(N,2) koordinat frame ASLI}.
@@ -269,9 +209,8 @@ def decode_qr(frame, enhance=True):
       3. pyzbar pada grayscale+CLAHE yang di-adaptive-threshold (pisahkan modul
          QR dari lantai berfaset/riak — beda mekanisme dari CLAHE saja).
       4. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
-      5. cv2 detect() → perspective warp → decode (QR miring/kecil/glare).
-      6. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
-      7. zxing-cpp pada grayscale mentah (decoder terpisah, jauh lebih toleran thd
+      5. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
+      6. zxing-cpp pada grayscale mentah (decoder terpisah, jauh lebih toleran thd
          tilt/perspective — lihat komentar di titik pemanggilannya).
     enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B).
 
@@ -299,13 +238,6 @@ def decode_qr(frame, enhance=True):
         res = _pyzbar_qr(big, UPSCALE, gray_for_gate=big)
         if res:
             return res
-    # Detector-first: OpenCV sering menemukan quad walau decode langsung gagal.
-    # Luruskan quad lalu beri decoder kanvas QR yang lebih besar dan persegi.
-    if enhance:
-        res = _decode_rectified(frame, gray_raw)
-        if res:
-            return res
-
     # Fallback: detektor QR bawaan OpenCV (kadang berhasil di mana pyzbar gagal, & sebaliknya)
     if enhance and hasattr(cv2, 'QRCodeDetector'):
         try:
