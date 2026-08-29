@@ -100,7 +100,6 @@ PILOT_MODE_MAP = {
     "manual": "MANUAL",
     "stabilize": "STABILIZE",
     "depth_hold": "ALT_HOLD",
-    "depth_hold": "STABILIZE",
     "poshold": "ALT_HOLD",  # overlay heading-hold sisi Python, lihat rov_modes.py
 }
 
