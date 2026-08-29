@@ -67,10 +67,18 @@ POOL_DEPTH             = None  # m — kedalaman air kolam (ukur di lokasi)
 HOOK_HEIGHT_FROM_FLOOR = None  # m — tinggi ujung hook dari DASAR (KKI 2026 = 0.45)
 BOTTOM_CLEARANCE       = None  # m — jarak aman titik-tengah ROV di atas dasar (BERPINDAH antar venue)
 
-DIVE_SPEED            = 30     # % thruster vertikal saat menyelam
-ASCEND_SPEED          = 30     # % thruster vertikal saat naik
-SURGE_SPEED           = 35     # % surge saat navigasi horizontal
-YAW_SPEED             = 25     # % yaw saat rotasi
+DIVE_SPEED            = 30     # command axis (0..100) saat menyelam
+ASCEND_SPEED          = 30     # command axis (0..100) saat naik
+SURGE_SPEED           = 35     # command axis (0..100) saat navigasi horizontal
+YAW_SPEED             = 25     # command axis (0..100) saat rotasi
+
+# Kalibrasi fisik: estimasi kecepatan pada command axis 50. Nilai ini WAJIB
+# diganti dengan hasil uji kolam; ia bukan spesifikasi thruster dan tidak
+# membuktikan kecepatan nyata sebelum telemetry kecepatan tersedia.
+DIVE_MPS_AT_50        = 0.20   # m/s turun pada command 50
+ASCEND_MPS_AT_50      = 0.20   # m/s naik pada command 50
+SURGE_MPS_AT_50       = 0.30   # m/s maju pada command 50
+YAW_DPS_AT_50         = 45.0   # deg/s pada command 50
 
 # SCAN_QR dulu cuma yaw di tempat menunggu decode penuh — di air keruh QR baru terbaca
 # dari jarak jauh lebih dekat drpd air jernih (24 Agu: foto lapangan gagal decode walau QR
@@ -668,6 +676,9 @@ class Mission5FSM:
         self.runlog.event('sample',
                           state=t['state'], active_cam=t['active_cam'],
                           depth=telem.get('depth'), heading=telem.get('heading'),
+                          surge_speed=telem.get('surge_speed'),
+                          vertical_speed=telem.get('vertical_speed'),
+                          yaw_rate=telem.get('yaw_rate'),
                           distance_z=t['distance_z'],
                           offset_x=t['offset_x'], offset_y=t['offset_y'],
                           qr_data=t['qr_data'], qr_wall=t['qr_wall'],

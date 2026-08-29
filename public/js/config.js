@@ -64,12 +64,10 @@ export const CONFIG = {
     KEY_AXIS_STEP: 400,
   },
 
-  // Batas awal gerak FSM autonomous dalam persen command axis. Ini bukan
-  // mixer/PWM; ArduSub tetap mengurus stabilisasi dan mixing.
+  // Target gerak FSM autonomous dalam satuan fisik. Pi mengubahnya menjadi
+  // command axis memakai kalibrasi kolam; ini bukan mixer/PWM.
   AUTONOMY_MOTION: {
-    dive: 30, ascend: 30, surge: 35, yaw: 25,
-    scan_creep: 18, search: 20, approach: 20, engage: 15,
-    unhook_vert: 30, unhook_surge: -20,
+    dive: 0.12, ascend: 0.12, surge: 0.21, yaw: 22.5,
   },
   AUTONOMY_MOTION_CONFIGURED: false,
 
