@@ -206,6 +206,21 @@ def test_decode_qr_zxing_rescues_tilted_qr_pyzbar_cv2_miss():
     assert res and res[0]['data'] == text, "jenjang zxing seharusnya membaca QR tilt 30°"
 
 
+def test_decode_rectified_reads_perspective_qr():
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    segno = pytest.importorskip("segno")
+    from vision.qr_detect import _decode_rectified
+
+    text = '{"mission":5,"team":"HYDROSHIP","type":"payload","id":"B"}'
+    qr = _render_qr_bgr(cv2, np, segno, text, module_px=6)
+    frame, (x0, y0, w, h) = _place_on_canvas(cv2, np, qr, canvas_wh=(640, 480))
+    tilted = _warp_tilt(cv2, np, frame, 15.0, x0 + w / 2, y0 + h / 2, w, h)
+    res = _decode_rectified(tilted, cv2.cvtColor(tilted, cv2.COLOR_BGR2GRAY))
+
+    assert res and res[0]['data'] == text
+
+
 # ── Gate quiet-zone (port dari ros2_ws qr_logic.py) ────────────────────────────
 def test_quiet_zone_ok_accepts_real_qr_border():
     cv2 = pytest.importorskip("cv2")

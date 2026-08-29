@@ -2,7 +2,7 @@
 // (CAM 1 = BOTTOM, CAM 2 = WALL) + deteksi QR Code di feed BOTTOM.
 // QR menentukan sisi dinding (A/B/C/D) tempat payload digantung.
 import { CONFIG } from "../config.js";
-import { log, num, snapshotImage, makeFullscreen, camProxy, setClientQr, clearQr, getQrState } from "../core.js";
+import { log, num, snapshotImage, makeFullscreen, camProxy, setClientQr, clearQr, getQrState, decodeClientQr } from "../core.js";
 
 export const cameraPage = {
   streaming: false,
@@ -291,28 +291,11 @@ export const cameraPage = {
   },
 
   _decode(source, w, h) {
-    const sw = w || source.naturalWidth || source.width;
-    const sh = h || source.naturalHeight || source.height;
-    if (!sw || !sh) return null;
-    // Perkecil ke maks 800 px sisi terpanjang: jsQR tetap akurat, tapi getImageData
-    // jauh lebih ringan (penting saat scan feed 1080p ~6x/detik di laptop venue).
-    const scale = Math.min(1, 800 / Math.max(sw, sh));
-    const cw = Math.max(1, Math.round(sw * scale));
-    const ch = Math.max(1, Math.round(sh * scale));
-    const cv = this.scanCanvas;
-    cv.width = cw;
-    cv.height = ch;
-    const ctx = cv.getContext("2d", { willReadFrequently: true });
-    try {
-      ctx.drawImage(source, 0, 0, cw, ch);
-      const data = ctx.getImageData(0, 0, cw, ch);
-      return window.jsQR(data.data, cw, ch);
-    } catch (e) {
-      // Canvas ter-taint → getImageData diblokir. Normalnya tak terjadi karena feed
-      // diambil same-origin lewat proxy /cam; jaring pengaman bila feed dimuat langsung.
-      this.els.qrStatus.textContent = "Feed tidak same-origin: pastikan lewat proxy /cam, atau pakai 'Scan dari gambar'";
-      return null;
+    const code = decodeClientQr(source, this.scanCanvas, 1280);
+    if (!code && this.els.qrStatus) {
+      this.els.qrStatus.textContent = "Memindai…";
     }
+    return code;
   },
 
   _scanFile(file) {

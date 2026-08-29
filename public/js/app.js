@@ -1,7 +1,7 @@
 // app.js — dashboard utama Hydroship ROV
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
-import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, getQrState } from "./core.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, getQrState, decodeClientQr } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
@@ -797,18 +797,12 @@ function scanControlQR() {
   const now = performance.now();
   if (now - _lastQrScan < 200) return;
   _lastQrScan = now;
-  const sw = els.camImg.naturalWidth, sh = els.camImg.naturalHeight;
-  const scale = Math.min(1, 640 / Math.max(sw, sh));
-  const cw = Math.max(1, Math.round(sw * scale)), ch = Math.max(1, Math.round(sh * scale));
-  qrScanCanvas.width = cw; qrScanCanvas.height = ch;
-  const ctx = qrScanCanvas.getContext("2d", { willReadFrequently: true });
   try {
-    ctx.drawImage(els.camImg, 0, 0, cw, ch);
-    const img = ctx.getImageData(0, 0, cw, ch);
-    const code = window.jsQR(img.data, cw, ch);
+    const code = decodeClientQr(els.camImg, qrScanCanvas, 1280);
     setClientQr(code ? code.data : null);
     renderQrReadout();
-    renderFocusReadout(sharpnessScore(img, cw, ch));
+    const ctx = qrScanCanvas.getContext("2d", { willReadFrequently: true });
+    renderFocusReadout(sharpnessScore(ctx.getImageData(0, 0, qrScanCanvas.width, qrScanCanvas.height), qrScanCanvas.width, qrScanCanvas.height));
     renderQrPreviewImage(getQrState().raw);
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }

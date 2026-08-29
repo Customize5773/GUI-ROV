@@ -242,3 +242,73 @@ export function getQrState() {
     changeType,
   };
 }
+
+/* Decoder QR lokal bersama. Pertahankan resolusi kamera agar QR 4×4 cm tidak
+   jatuh menjadi 2–4 piksel per modul, lalu coba threshold lokal hanya bila
+   decode mentah gagal. Ini tetap ringan di frame normal dan menangani glare/
+   caustic yang terlihat pada rekaman kolam. */
+function clientQrAdaptive(imageData, constant) {
+  const w = imageData.width, h = imageData.height;
+  const gray = new Uint8Array(w * h);
+  const stride = w + 1;
+  const integral = new Int32Array((w + 1) * (h + 1));
+  const src = imageData.data;
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    for (let x = 0; x < w; x++) {
+      const si = (y * w + x) * 4;
+      const value = Math.round(0.299 * src[si] + 0.587 * src[si + 1] + 0.114 * src[si + 2]);
+      const gi = y * w + x;
+      gray[gi] = value;
+      row += value;
+      integral[(y + 1) * stride + x + 1] = integral[y * stride + x + 1] + row;
+    }
+  }
+
+  const out = new Uint8ClampedArray(src.length);
+  const radius = 15;
+  for (let y = 0; y < h; y++) {
+    const y0 = Math.max(0, y - radius), y1 = Math.min(h - 1, y + radius);
+    for (let x = 0; x < w; x++) {
+      const x0 = Math.max(0, x - radius), x1 = Math.min(w - 1, x + radius);
+      const area = (x1 - x0 + 1) * (y1 - y0 + 1);
+      const sum = integral[(y1 + 1) * stride + x1 + 1]
+        - integral[y0 * stride + x1 + 1]
+        - integral[(y1 + 1) * stride + x0]
+        + integral[y0 * stride + x0];
+      const black = gray[y * w + x] < sum / area - constant;
+      const value = black ? 0 : 255;
+      const oi = (y * w + x) * 4;
+      out[oi] = value; out[oi + 1] = value; out[oi + 2] = value; out[oi + 3] = 255;
+    }
+  }
+  return out;
+}
+
+/* Satu decoder lokal untuk halaman Camera dan Control. Python tetap menjadi
+   sumber utama saat FSM aktif; fungsi ini hanya fallback operator/manual. */
+export function decodeClientQr(source, canvas, maxSide = 1280) {
+  if (!source || !canvas || !window.jsQR) return null;
+  const sw = source.naturalWidth || source.width;
+  const sh = source.naturalHeight || source.height;
+  if (!sw || !sh) return null;
+  const scale = Math.min(1, maxSide / Math.max(sw, sh));
+  const w = Math.max(1, Math.round(sw * scale));
+  const h = Math.max(1, Math.round(sh * scale));
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  try {
+    canvas.width = w; canvas.height = h;
+    ctx.drawImage(source, 0, 0, w, h);
+    const image = ctx.getImageData(0, 0, w, h);
+    const run = (data) => window.jsQR(data, w, h, { inversionAttempts: "attemptBoth" });
+    let code = run(image.data);
+    if (code) return code;
+    for (const constant of [3, 7]) {
+      code = run(clientQrAdaptive(image, constant));
+      if (code) return code;
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
