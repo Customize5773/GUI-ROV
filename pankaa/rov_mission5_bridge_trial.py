@@ -157,7 +157,7 @@ class Mission5Runner:
 
     def _case_forward(self):
         # CASE sendiri: motion langsung ditulis di sini.
-        motion = (0, 0, 60, 0.4)
+        motion = (30, 0, 0, 1.5)
 
         self._apply_motion(motion)
 
@@ -175,7 +175,7 @@ class Mission5Runner:
 
     def _case_reverse(self):
         # Reverse = negatif langsung dari surge forward.
-        motion = (-50, 0, 0, 0.2)
+        motion = (-30, 0, 0, 1.5)
 
         self._apply_motion(motion)
 
@@ -193,7 +193,7 @@ class Mission5Runner:
 
     def _case_stop(self):
         # Tetap di depth target, semua gerakan lain netral.
-        motion = (0, 0, 0, 0)
+        motion = (0, 0, 0, 1.5)
 
         self._apply_motion(motion)
 

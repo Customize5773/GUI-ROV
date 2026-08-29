@@ -202,6 +202,7 @@ current_control_mode = "manual"
 mission5_runner = None
 # Draft tuning gerak autonomous dari GUI. Diterapkan oleh runner saat start
 # berikutnya; tidak mengubah command yang sedang berjalan.
+mission5_motion = {}
 
 # Axis yang sedang diperintahkan FSM (skala GUI -1000..1000). Terpisah dari
 # `joystick` (axis operator) supaya keduanya tidak pernah saling menimpa: yang
@@ -564,11 +565,8 @@ def send_telemetry():
     m5_telem = mission5_runner.telemetry() if mission5_runner is not None else None
     state["mission5_state"] = m5_telem.get("state") if m5_telem else None
     state["mission5"] = m5_telem
-    state["mission5_motion"] = (
-        mission5_runner.motion
-        if mission5_runner is not None
-        else None
-    )
+    state["mission5_motion"] = (mission5_runner.motion_config()
+                                 if mission5_runner is not None else dict(mission5_motion))
     send_to_gui(state)
 
     now = time.time()
@@ -660,7 +658,34 @@ def command_listener():
         if not quiet:
             print(f"[CMD] {name} = {value} from {addr}")
 
-        
+        # Tuning ini tidak perlu Pixhawk dan harus bisa dikirim sebelum ARM.
+        # Runner menolak perubahan ketika FSM sedang berjalan.
+        if name == "mission5_motion":
+            if mission5_runner is None:
+                print("[M5] tuning ditolak — runner belum siap")
+            else:
+                ok, result = mission5_runner.update_motion_config(value)
+                if ok:
+                    mission5_motion.update(result)
+                    send_to_gui({"type": "event",
+                                 "text": "Tuning gerak autonomous diterima; berlaku pada start berikutnya",
+                                 "level": "ok"})
+                else:
+                    send_to_gui({"type": "event",
+                                 "text": f"Tuning gerak autonomous ditolak — {result}",
+                                 "level": "warn"})
+            continue
+
+        if master is None:
+            print("[CMD] Pixhawk not connected yet")
+            if not quiet:
+                send_to_gui({
+                    "type": "event",
+                    "text": f"Command '{name}' ditolak — Pixhawk belum terhubung",
+                    "level": "err",
+                })
+            continue
+
         try:
             if name == "arm":
                 # ACK TIDAK ditunggu di sini. recv_match(blocking=True) akan
@@ -1603,6 +1628,7 @@ def setup_mission5_runner():
         # (lihat Mission5Runner._apply_configs). Arena lomba:
         #   M5_CONFIG="config/rov_tuned.yaml,config/pool_kki_running.yaml"
         "config_files": os.environ.get("M5_CONFIG", M5_CONFIG_DEFAULT),
+        "runtime_motion": dict(mission5_motion),
         # Dibaca SAAT toggle autonomous, bukan sekarang: operator menekan MARK
         # di tengah misi 3, jauh sesudah runner ini dibuat.
         "read_mark": lambda: (marked_heading, marked_depth),
