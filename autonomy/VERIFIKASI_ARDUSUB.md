@@ -75,5 +75,7 @@ python fsm/mission5.py --server 127.0.0.1 --vision usb --device 0 \
 ## Status
 - [x] Jalur data + rantai state M5 (mock+SITL: M5_REDIVE→…→DONE, m5=40, PBVS & IBVS)
 - [x] Handoff mode=autonomous (uji: FSM menunggu lalu jalan saat toggle)
-- [ ] M1–M9 di atas — **butuh kolam/hardware** (arah sumbu, jarak, geometri unhook,
-      kalibrasi kecepatan & kompas untuk pencarian lateral)
+- [x] M9a/b/d — pencarian lateral (SEARCH_SPEED, deviasi kompas, lebar kolam) —
+      **SELESAI 2026-08-25** di kolam latihan (lihat tabel M9 di atas)
+- [ ] M1–M8 + M9c — **butuh kolam/hardware** (arah sumbu servo, jarak engage,
+      geometri unhook, kedalaman hook, yaw squaring opsional, rasio jarak M9c)

@@ -5,14 +5,16 @@ plus analisis apa yang masih kurang di tiap fase (Fase 0–4, lihat `ROADMAP_MIS
 Dokumen hidup: perbarui status saat item dikerjakan.
 
 > Ringkas status: kode logika (FSM, servo, deteksi QR & hook, docking closed-loop misi
-> 3b/4/5, simulator, evaluasi) **matang & teruji** (146 pytest hijau, 2 skip). **Trial
-> kolam pertama sudah berlangsung 22 Agu 2026** (log `log-m5/journal-22agu.txt`) — Fase
+> 3b/4/5, simulator, evaluasi) **matang & teruji** (271 pytest hijau, 2 skip). **Trial
+> kolam sudah berlangsung 22 Agu & 25 Agu 2026** (log `log-m5/journal-22agu.txt`) — Fase
 > 2/3 bukan lagi "menunggu hardware/kolam", tapi **sedang jalan**: empat bug ditemukan &
-> ditutup di hari yang sama (`BRIDGE-01`, `CALIB-01`, `HOOK-02`, `GRIPPER-01` di bawah),
-> plus dua fitur baru (MARK/M5_REDIVE, depth-pulse ALT_HOLD) yang belum divalidasi ulang
-> di kolam. Sisa backlog mayoritas **butuh trial kolam lagi** — tak bisa diselesaikan dari
-> meja. Item yang bisa dikerjakan tanpa hardware sudah/akan dibuat (config tunable,
-> launch_sitl, CSV logging, preprocessing QR, run-book).
+> ditutup di hari yang sama (22 Agu: `BRIDGE-01`, `CALIB-01`, `HOOK-02`, `GRIPPER-01` di
+> bawah), plus dua fitur baru (MARK/M5_REDIVE, depth-pulse ALT_HOLD) yang belum divalidasi
+> ulang di kolam. **Trial 25 Agu menutup sisa verifikasi nilai-fisik `rov_agent.py` Fase 2
+> #1–7 (minus #4 lampu) dan M9a/b/d** (lihat `VERIFIKASI_ARDUSUB.md`). Sisa backlog
+> mayoritas **butuh trial kolam lagi** — tak bisa diselesaikan dari meja. Item yang bisa
+> dikerjakan tanpa hardware sudah/akan dibuat (config tunable, launch_sitl, CSV logging,
+> preprocessing QR, run-book).
 
 ---
 
@@ -403,9 +405,9 @@ Referensi: `rov_pid.py` (`DEPTH_PULSE_*`), `rov_modes.py`
 | Fase | Status | Sudah ada | Yang kurang / TODO | Blocker |
 |------|--------|-----------|--------------------|---------|
 | **0** Visi di meja | ✅ hampir | servo+pose webcam test jalan; kalibrasi papan catur OK; deteksi QR JSON | Rekam nilai `invert_*` hasil uji ke config; formalkan pass/fail; **QR-01** (ditangani PR ini) | — |
-| **1** SITL | ✅ VERIFIED 2026-08-21 | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE, `verify_handoff.mjs` | 3/3 run `DONE` 100/100; handoff & STOP 3/3 LULUS; 146 test hijau. Sisa: **checklist browser** (gerak 3D, tombol fisik, F12) — butuh mata | — (tak lagi blocker) |
-| **2** Bring-up bench | 🟡 SEDANG JALAN | `VERIFIKASI_ARDUSUB.md` #1–7; `PERSIAPAN_FASE2-4.md` (run-book); Pixhawk tersambung, thruster/gripper direspons MAVLink; PWM gripper terkalibrasi tepi kolam 1580/1350 (**GRIPPER-01**); toggle Autonomous di Pi benar-benar menjalankan FSM (**BRIDGE-01**) | Cek arah 6–8 thruster belum lengkap tercatat; depth plateau 0,37 m belum ter-root-cause (lihat Fase 3); servo lampu (channel/PWM) belum diverifikasi | **Sisa hardware/waktu di kolam** |
-| **3** Uji kolam & tuning | 🟡 SEDANG JALAN (trial 1: 22 Agu 2026) | `VERIFIKASI_ARDUSUB.md` M1–M8; config tunable (`--config`, `pool_kki_running.yaml`); CSV logging; **trial kolam 1** (`log-m5/journal-22agu.txt`) — 4 bug ditemukan & ditutup hari yang sama (**BRIDGE-01, CALIB-01, HOOK-02, GRIPPER-01**); fitur baru MARK/M5_REDIVE + depth-pulse ALT_HOLD | 7 item terbuka: root-cause depth plateau 0,37 m; kalibrasi kamera DI AIR (bukan tambalan `dwe_trial2.npz`); validasi `DEPTH_PULSE_*`; uji MARK→M5_REDIVE di kolam; verifikasi `HOOK_MAX_AREA_FRAC` tak menolak deteksi sah; verif ulang `invert_*`; sisa QR-01 (kurva jarak/exposure/fiducial) | **Trial kolam lanjutan** |
+| **1** SITL | ✅ VERIFIED 2026-08-21 | `launch_sitl.py` (1 perintah), `sitl_mock.py`, `rov_link.py`, GUI LIVE, `verify_handoff.mjs` | 3/3 run `DONE` 100/100; handoff & STOP 3/3 LULUS; 271 test hijau, 2 skip (2026-08-29). Sisa: **checklist browser** (gerak 3D, tombol fisik, F12) — butuh mata | — (tak lagi blocker) |
+| **2** Bring-up bench | 🟡 SEDANG JALAN | `VERIFIKASI_ARDUSUB.md` #1–7; `PERSIAPAN_FASE2-4.md` (run-book); Pixhawk tersambung, thruster/gripper direspons MAVLink; PWM gripper terkalibrasi tepi kolam 1580/1350 (**GRIPPER-01**); toggle Autonomous di Pi benar-benar menjalankan FSM (**BRIDGE-01**); **#1–7 (minus #4) LULUS di kolam 2026-08-25** (arah surge/sway/yaw, z-neutral/vertikal, gripper, ALT_HOLD, depth, arming/failsafe) | Servo lampu (channel/PWM) belum diverifikasi (**#4**) — belum diimplementasikan di `rov_agent.py`; checklist browser (TEST_CHECKLIST) butuh mata | **Sisa hardware/waktu di kolam** |
+| **3** Uji kolam & tuning | 🟡 SEDANG JALAN (trial 1: 22 Agu, trial 2: 25 Agu 2026) | `VERIFIKASI_ARDUSUB.md` M1–M8; config tunable (`--config`, `pool_kki_running.yaml`); CSV logging; **trial kolam 1** (`log-m5/journal-22agu.txt`) — 4 bug ditutup (**BRIDGE-01, CALIB-01, HOOK-02, GRIPPER-01**); **trial 25 Agu**: kalibrasi `SEARCH_SPEED`→0,222 m/s, deviasi kompas ~8°<15°, lebar kolam → `pool_trial.yaml` (M9a/b/d) | 7 item terbuka: root-cause depth plateau 0,37 m; kalibrasi kamera DI AIR (bukan tambalan `dwe_trial2.npz`); validasi `DEPTH_PULSE_*`; uji MARK→M5_REDIVE di kolam; verifikasi `HOOK_MAX_AREA_FRAC` tak menolak deteksi sah; verif ulang `invert_*`; sisa QR-01 (kurva jarak/exposure/fiducial) + M9c (rasio "QR terlihat vs terbaca") | **Trial kolam lanjutan** |
 | **4** Latihan & lomba | 🔒 blocked (sebagian siap) | run-book hari-H + scoresheet; **logika M5_FALLBACK terverifikasi & dikunci 2 pytest**; checklist boot/pra-dive/umbilical sudah tertulis | Rehearsal 3× run; **drill fisik** tutup-lensa di kolam; eksekusi & hafalkan checklist | **Setup penuh + kolam** |
 
 Legenda: ✅ selesai · 🟡 sedang jalan (kolam/hardware sudah mulai dipakai) · ⏳ bisa dikerjakan sekarang (tak butuh hardware) · 🔒 menunggu hardware/kolam.
@@ -424,10 +426,24 @@ Legenda: ✅ selesai · 🟡 sedang jalan (kolam/hardware sudah mulai dipakai) �
 **Fase 2 (butuh hardware kering):**
 - [x] `GRIPPER_SERVO_CH`/PWM — dikalibrasi nyata di tepi kolam (1580/1350),
       disamakan di kedua program (**GRIPPER-01**, 2026-08-22).
-- [ ] Kerjakan sisa `VERIFIKASI_ARDUSUB.md` #1–7; catat konstanta `rov_link.py` yang perlu dibalik/disesuaikan
-      (`Z_NEUTRAL`, tanda sumbu, `LIGHT_SERVO_CH`, `WATER_RHO`, mode `ALT_HOLD`).
+- [x] `VERIFIKASI_ARDUSUB.md` #1–7 (minus #4) — **LULUS di kolam 2026-08-25**:
+      arah surge/sway/yaw (#1), z-neutral & arah vertikal (#2), channel gripper (#3),
+      nama mode `ALT_HOLD` (#5), sumber & skala depth (#6), arming & failsafe (#7).
+      Yang diuji adalah `rov_agent.py` (produksi), bukan `rov_link.py` (SITL) —
+      lihat catatan pemetaan di `VERIFIKASI_ARDUSUB.md`.
+- [ ] #4 Servo lampu (`LIGHT_SERVO_CH`/PWM) — **belum diimplementasikan** di
+      `rov_agent.py` (command `light` cuma menyimpan status); butuh hardware.
 
-**Fase 3 — trial 1 (22 Agu 2026), sisa terbuka:**
+**Fase 3 — trial 1 (22 Agu) & trial 2 (25 Agu 2026), sisa terbuka:**
+- [x] **M9a kalibrasi `SEARCH_SPEED`** (LULUS 2026-08-25): surge rata² ~0,222 m/s
+      (nyaris asumsi desain 0,2 m/s) → `SEARCH_SPEED` default tak diubah.
+- [x] **M9b deviasi kompas** (LULUS 2026-08-25): MARK→naik→turun, deviasi ~8°
+      (< ambang 15°) — kompas stabil dekat dinding kolam.
+- [x] **M9d lebar kolam** (LULUS 2026-08-25): kolam latihan 2,2 m < default
+      `SEARCH_SPAN_MAX_T=12s` → `config/pool_trial.yaml` blok `search` diperketat.
+      **WAJIB `--config config/pool_trial.yaml` di venue sekecil itu.**
+- [ ] **M9c rasio "quad QR terlihat" vs "QR terbaca"** — menentukan
+      `SEARCH_BACKOFF_T`. **Belum diuji** (butuh kolam).
 - [ ] **Root cause depth plateau 0,37 m.** `dive: 30→45` di
       `autonomy/config/pool_kki_running.yaml` sudah terpasang sbg diagnostik —
       jalankan run berikutnya: plateau bergeser lebih dalam → keterbatasan daya
@@ -460,8 +476,11 @@ Legenda: ✅ selesai · 🟡 sedang jalan (kolam/hardware sudah mulai dipakai) �
       Node server hanya forward JSON + clamp axis (−100..100).
 - [x] Gating otoritas: joystick nonaktif saat mode Autonomous & terkunci saat E-Stop.
 - [x] Fail-safe: netral saat disconnect / idle > 0.5 s. Unit test `test_rov_axes.py`.
-- [ ] **Butuh keputusan Rasya / uji hardware:** verifikasi tanda & skala sumbu (surge/sway/yaw/heave)
-      cocok dengan orientasi thruster di kolam; bitmask tombol masih placeholder.
+- [ ] **Butuh keputusan Rasya / uji hardware:** verifikasi tanda & skala sumbu joystick
+      FISIK (surge/sway/yaw/heave) cocok orientasi thruster; bitmask tombol masih placeholder.
+      Catatan: arah sumbu lewat **tombol keyboard** (W/D/E) sudah LULUS di kolam 2026-08-25
+      (VERIFIKASI #1/#2), tapi rangkainan joystick fisik→browser→server→rov_link belum
+      diuji dengan perangkat nyata — butir ini tetap terbuka.
 
 **Perlu 1 trial kolam lagi utk validasi (bukan lagi opsional murni):**
 - [ ] MARK/M5_REDIVE — ditulis 22 Agu 2026, belum pernah dicoba di kolam
