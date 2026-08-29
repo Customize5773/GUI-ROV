@@ -64,13 +64,6 @@ export const CONFIG = {
     KEY_AXIS_STEP: 400,
   },
 
-  // Target gerak FSM autonomous dalam satuan fisik. Pi mengubahnya menjadi
-  // command axis memakai kalibrasi kolam; ini bukan mixer/PWM.
-  AUTONOMY_MOTION: {
-    dive: 0.12, ascend: 0.12, surge: 0.21, yaw: 22.5,
-  },
-  AUTONOMY_MOTION_CONFIGURED: false,
-
   /* gain kontrol hold (PID) — SATUAN ArduSub, bukan skala bebas.
        yaw   -> ATC_RAT_YAW_P / _I / _D   (loop rate yaw)
        depth -> PSC_ACCZ_P / _I / _D      (loop akselerasi/throttle depth hold)

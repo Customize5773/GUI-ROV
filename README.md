@@ -309,25 +309,18 @@ memakai default di kode. Lihat `config/mission5.example.yaml` untuk daftar lengk
 penjelasan tiap parameter, dan `autonomy/ROADMAP_MISI5.md` Fase 3 untuk urutan tuning
 di kolam yang disarankan.
 
-### Tuning gerak autonomous dari GUI
+### Kontrak gerak autonomous Mission 5
 
-Buka **Setup → Autonomous Motion**, atur target **Selam, Naik, Maju (m/s)** dan
-**Putar (°/s)**, lalu tekan **Apply Autonomous Motion**
-saat FSM belum berjalan. Mode pilot ArduSub **ALT_HOLD boleh tetap aktif**. Nilai berlaku
-pada start autonomous berikutnya; perubahan saat FSM sedang berjalan ditolak agar satu
-trial tetap konsisten. Pi menerjemahkan target fisik ke command berdasarkan
-`motion_calibration` di `autonomy/config/rov_tuned.yaml`, lalu membatasi command.
-Telemetry `surge_speed`, `vertical_speed`, dan `yaw_rate` dicatat untuk membandingkan
-target dengan gerak aktual. Mixer/PWM tetap milik ArduSub.
-Selama autonomous aktif, server juga menyalin snapshot log terbaru dari Pi ke
-`autonomy/logs/autonomous_YYYYMMDD_HHMMSS.log`; satu sesi mendapat satu nama
-file dengan tanggal dan waktu mulai. File terbaru dapat diunduh dari panel Mission 5.
+Implementasi Pi teman saat ini memakai motion per CASE dengan format
+`(surge, sway, heading_set, depth_set, gripper)`. `surge` dan `sway` adalah
+command axis internal, `heading_set` dalam derajat, `depth_set` dalam meter,
+dan `gripper` bernilai `open`, `close`, atau `hold`. GUI menampilkan tuple aktif
+dari telemetry sebagai monitor read-only; GUI belum mengirim pengaturan gerak
+karena `rov_agent.py` Pi belum memiliki handler `mission5_motion`.
 
-Kalibrasi dilakukan dengan menjalankan beberapa command di kolam, mengukur jarak
-atau perubahan kedalaman terhadap waktu, lalu memperbarui empat nilai
-`motion_calibration`. Sebelum kalibrasi, angka target adalah estimasi command,
-bukan jaminan kecepatan nyata. Jika `LOCAL_POSITION_NED` tidak valid, `surge_speed`
-akan kosong dan tidak boleh dipakai sebagai bukti kecepatan maju.
+ALT_HOLD tetap menjadi pengendali depth di ArduSub. Jika gerak perlu dibuat
+configurable dari GUI, handler versi baru harus ditambahkan dan diuji di Pi
+terlebih dahulu, tanpa mengambil alih mixer/PWM ArduSub.
 
 ### Deteksi QR robust + diagnosa (`decode_qr` & `--csv`)
 

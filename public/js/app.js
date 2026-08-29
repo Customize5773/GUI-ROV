@@ -6,7 +6,7 @@ import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
 import { replayPage } from "./pages/replay.js";
-import { setupPage, loadSetup, autonomyMotionConfig } from "./pages/setup.js";
+import { setupPage, loadSetup } from "./pages/setup.js";
 import { vehiclePage } from "./pages/vehicle.js";
 import { analyzePage } from "./pages/analyze.js";
 import { joystickPage,handleJoystickConfigMessage} from "./pages/joystick.js";
@@ -829,9 +829,6 @@ function connect() {
        terkirim ulang setelah reconnect — rov_agent.py kehilangan nilainya
        kalau prosesnya sempat restart. */
     if (Number.isFinite(CONFIG.POOL_DEPTH)) sendCmd("pool_depth", CONFIG.POOL_DEPTH, true);
-    if (CONFIG.AUTONOMY_MOTION_CONFIGURED && CONFIG.AUTONOMY_MOTION) {
-      sendCmd("mission5_motion", autonomyMotionConfig(CONFIG.AUTONOMY_MOTION), true);
-    }
   };
   ws.onclose = () => {
     linkStale = false;
