@@ -720,23 +720,29 @@ function renderQrPreviewImage(raw) {
   }
 
   if (qrPreviewSrc(raw)) {
-    // payload = link gambar/halaman → tampilkan gambar hasil decode (via proxy),
-    // hanya saat payload berubah
+    // payload = link gambar/halaman → tampilkan gambar hasil decode (via proxy).
+    // Fetch gambar hanya diulang saat payload berubah; render akhir canvas tetap
+    // selalu terjadi tiap scan supaya tidak pernah menggantung kosong.
     if (_qrPreviewRaw !== raw) {
       loadQrPreviewImage(raw).then((img) => {
         if (!els.qrPreview || getQrState().raw !== raw) return;
         const c2 = els.qrPreview.getContext("2d");
         const w2 = els.qrPreview.width, h2 = els.qrPreview.height;
         c2.clearRect(0, 0, w2, h2);
-        if (img) {
+        // Hindari NaN bila server balas 200 image/* tapi body kosong/0×0:
+        // tanpa guard width/height, drawImage dengan NaN akan diam-diam no-op
+        // dan canvas tampak kosong (transparan mengikuti bg GUI).
+        if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
           const sc = Math.min(w2 / img.width, h2 / img.height);
           const dw = img.width * sc, dh = img.height * sc;
           c2.drawImage(img, (w2 - dw) / 2, (h2 - dh) / 2, dw, dh);
+          _qrPreviewRaw = raw;
         } else {
-          // gagal dimuat (hotlink/CORS/timeout) → tampilkan teks link hasil decode
+          // gagal dimuat / body kosong (hotlink/CORS/timeout) → teks link hasil
+          // decode di atas background putih. _qrPreviewRaw TIDAK diset supaya
+          // scan berikutnya tetap mencoba lagi (bukan terkunci kosong permanen).
           paintQrText(c2, w2, h2, raw);
         }
-        _qrPreviewRaw = raw;
       });
     }
     return;
