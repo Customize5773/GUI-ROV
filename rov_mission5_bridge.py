@@ -4,7 +4,7 @@ rov_mission5_bridge.py
 Autonomous Mission FSM sederhana untuk ROV.
 
 Format motion:
-    motion = (surge, sway, yaw, depth_set)
+    motion = (surge, sway, heading_set, depth_set)
 
 Setiap CASE memiliki motion sendiri.
 Tidak ada AUTO_SURGE / AUTO_DEPTH global.
@@ -35,9 +35,9 @@ class Mission5CommandAdapter:
         self._set_depth_target = set_depth_target
 
     def send_motion(self, motion):
-        """motion = (surge, sway, yaw, depth_set)."""
+        """motion = (surge, sway, heading_set, depth_set)."""
         if len(motion) != 4:
-            raise ValueError("motion harus (surge, sway, yaw, depth_set)")
+            raise ValueError("motion harus (surge, sway, heading_set, depth_set)")
 
         surge, sway, yaw, depth_set = motion
 
@@ -136,6 +136,27 @@ class Mission5Runner:
         self._case_started = None
         self._state_elapsed_ms = 0.0
 
+    def _heading_control(self, target_heading, current_heading):
+        error = target_heading - current_heading
+
+        # Normalisasi error ke -180 ... +180
+        if error > 180:
+            error -= 360
+        elif error < -180:
+            error += 360
+
+        # Untuk awal kita gunakan proportional sederhana.
+        yaw = int(error * 3)
+
+        # Limit command yaw
+        yaw = max(-30, min(30, yaw))
+
+        # Deadband
+        if abs(error) < 2:
+            yaw = 0
+
+        return yaw
+
     def available(self):
         return True
 
@@ -152,19 +173,35 @@ class Mission5Runner:
         self._log(f"[AUTO] STATE -> {new_state}")
 
     def _apply_motion(self, motion):
-        self.motion = tuple(motion)
-        self._cmd.send_motion(self.motion)
+        surge, sway, heading_set, depth_set = motion
+
+        current_heading = self._telem.get().get("heading", 0)
+
+        yaw = self._heading_control(
+            heading_set,
+            current_heading
+        )
+
+        command_motion = (
+            surge,
+            sway,
+            yaw,
+            depth_set,
+        )
+
+        self.motion = motion
+        self._cmd.send_motion(command_motion)
 
     def _case_forward(self):
         # CASE sendiri: motion langsung ditulis di sini.
-        motion = (0, 0, 60, 0.4)
+        motion = (0, 0, 90, 0.4)
 
         self._apply_motion(motion)
 
         elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
         self._state_elapsed_ms = elapsed_ms
 
-        if elapsed_ms >= 3000:
+        if elapsed_ms >= 5000:
             self._cmd.stop_all()
             self.counter += 1
             self._log(
@@ -175,14 +212,14 @@ class Mission5Runner:
 
     def _case_reverse(self):
         # Reverse = negatif langsung dari surge forward.
-        motion = (-50, 0, 0, 0.2)
+        motion = (0, 0, -90, 0.4)
 
         self._apply_motion(motion)
 
         elapsed_ms = (time.monotonic() - self._case_started) * 1000.0
         self._state_elapsed_ms = elapsed_ms
 
-        if elapsed_ms >= 2000:
+        if elapsed_ms >= 5000:
             self._cmd.stop_all()
             self.counter += 1
             self._log(
