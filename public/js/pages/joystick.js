@@ -1043,10 +1043,11 @@ function patchLiveJoystickUI() {
     const subValueEl = tr.querySelector(".joy-axis-sub");
     const barEl = tr.querySelector(".joy-axis-bar");
 
-    if (valueEl) valueEl.textContent = Number(raw).toFixed(2);
+    if (valueEl) setTextIfChanged(valueEl, Number(raw).toFixed(2));
     // `mappedValue` dulu tidak pernah dideklarasikan — ReferenceError tiap frame.
-    if (subValueEl) subValueEl.textContent = mapped.toFixed(0);
-    if (barEl) barEl.style.cssText = barStyle;
+    if (subValueEl) setTextIfChanged(subValueEl, mapped.toFixed(0));
+    // cssText mem-parse ulang CSS tiap kali ditulis; stik diam = tidak perlu.
+    if (barEl && barEl.style.cssText !== barStyle) barEl.style.cssText = barStyle;
   });
 
   // layer state + tester live
@@ -1088,13 +1089,26 @@ function patchLiveJoystickUI() {
 
       const textEl = tr.querySelector(".joy-tester__text");
       if (textEl) {
-        textEl.innerHTML = `
+        /* Dulu innerHTML ditulis ulang TIAP FRAME untuk tiap tombol (~17 x 60/dtk
+           = seribu parse HTML per detik) padahal isinya nyaris tak pernah berubah.
+           Tulis hanya saat berubah — lihat setHtmlIfChanged. */
+        setHtmlIfChanged(textEl, `
           ${isRuntimeActive ? (pressed ? "Pressed" : "Idle") : "Standby"}
           <small>${isRuntimeActive ? val.toFixed(2) : "0.00"}</small>
-        `;
+        `);
       }
     });
   });
+}
+
+/* Panel joystick di-patch 60x/detik. Sebagian besar frame tidak mengubah apa pun,
+   jadi tulis ke DOM hanya kalau nilainya benar-benar beda — menulis nilai yang sama
+   tetap memicu kerja layout/parse di browser. */
+function setTextIfChanged(el, value) {
+  if (el.textContent !== value) el.textContent = value;
+}
+function setHtmlIfChanged(el, html) {
+  if (el._lastHtml !== html) { el._lastHtml = html; el.innerHTML = html; }
 }
 
 /* ========================= RENDER LOOP ========================= */

@@ -226,8 +226,36 @@ export class RovScene {
     this.renderer.setSize(w, h);
   }
 
+  /* Kanvas WebGL ini hidup di halaman Control saja, tapi rAF-nya jalan terus
+     selamanya — 60 fps render penuh walau operator ada di Camera/Setup/Analyze,
+     atau bahkan saat jendela GUI di belakang jendela lain. Itu biaya konstan
+     terbesar di seluruh dashboard. Gate-nya di sini, bukan di pemanggil, supaya
+     berlaku untuk semua penempatan scene. */
+  _isVisible() {
+    if (document.hidden) return false;
+    /* PiP kamera-fullscreen menyalin kanvas ini (renderControlCamPiP di app.js)
+       justru SAAT container-nya tersembunyi — tanpa pengecualian ini PiP beku. */
+    if (this._keepAlive) return true;
+    return this.container.offsetParent !== null;
+  }
+
+  /* dipakai PiP: paksa render walau container tak terlihat */
+  setKeepAlive(on) { this._keepAlive = !!on; }
+
   _animate() {
     requestAnimationFrame(() => this._animate());
+
+    if (!this._isVisible()) {
+      /* Saat tak terlihat, jangan lerp — biar attitude tidak "mengejar" ratusan
+         frame sekaligus begitu halaman dibuka lagi. Snap ke target saat resume. */
+      this._wasHidden = true;
+      return;
+    }
+    if (this._wasHidden) {
+      this._wasHidden = false;
+      Object.assign(this.current, this.target);
+    }
+
     const k = 0.18;
     for (const a of ["roll", "pitch", "yaw"]) {
       let d = this.target[a] - this.current[a];

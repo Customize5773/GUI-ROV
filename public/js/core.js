@@ -285,13 +285,14 @@ function clientQrAdaptive(imageData, constant) {
   return out;
 }
 
-/* Satu decoder lokal untuk halaman Camera dan Control. Python tetap menjadi
-   sumber utama saat FSM aktif; fungsi ini hanya fallback operator/manual. */
-export function decodeClientQr(source, canvas, maxSide = 1280) {
-  if (!source || !canvas || !window.jsQR) return null;
+/* Jalur lama, di main thread. Dipertahankan HANYA sebagai fallback untuk browser
+   tanpa OffscreenCanvas/createImageBitmap. Logikanya tidak diubah. */
+function decodeClientQrSync(source, canvas, maxSide, wantSharpness) {
+  const empty = { qr: null, sharpness: null };
+  if (!source || !canvas || !window.jsQR) return empty;
   const sw = source.naturalWidth || source.width;
   const sh = source.naturalHeight || source.height;
-  if (!sw || !sh) return null;
+  if (!sw || !sh) return empty;
   const scale = Math.min(1, maxSide / Math.max(sw, sh));
   const w = Math.max(1, Math.round(sw * scale));
   const h = Math.max(1, Math.round(sh * scale));
@@ -300,15 +301,132 @@ export function decodeClientQr(source, canvas, maxSide = 1280) {
     canvas.width = w; canvas.height = h;
     ctx.drawImage(source, 0, 0, w, h);
     const image = ctx.getImageData(0, 0, w, h);
+    const sharpness = wantSharpness ? sharpnessScoreLocal(image, w, h) : null;
     const run = (data) => window.jsQR(data, w, h, { inversionAttempts: "attemptBoth" });
     let code = run(image.data);
-    if (code) return code;
-    for (const constant of [3, 7]) {
-      code = run(clientQrAdaptive(image, constant));
-      if (code) return code;
+    if (!code) {
+      for (const constant of [3, 7]) {
+        code = run(clientQrAdaptive(image, constant));
+        if (code) break;
+      }
     }
+    return { qr: code || null, sharpness };
   } catch (_) {
-    return null;
+    return empty;
   }
-  return null;
+}
+
+/* salinan sharpnessScore untuk jalur fallback saja (versi utama ada di qr-worker.js) */
+function sharpnessScoreLocal(imgData, w, h) {
+  const gray = new Float32Array(w * h);
+  const d = imgData.data;
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  let sum = 0, sumSq = 0, n = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const idx = y * w + x;
+      const lap = 4 * gray[idx] - gray[idx - 1] - gray[idx + 1] - gray[idx - w] - gray[idx + w];
+      sum += lap; sumSq += lap * lap; n++;
+    }
+  }
+  const mean = sum / n;
+  return sumSq / n - mean * mean;
+}
+
+/* Satu worker dipakai bersama halaman Control & Camera — hanya satu halaman yang
+   terlihat pada satu waktu, jadi tidak ada kontensi nyata. */
+const qrWorkerSupported =
+  typeof Worker !== "undefined" &&
+  typeof OffscreenCanvas !== "undefined" &&
+  typeof createImageBitmap === "function";
+
+let qrWorker = null;
+let qrBusy = false;
+let qrPending = null;    // newest-wins: hanya frame TERBARU yang menunggu
+const qrQueue = [];      // pekerjaan noDrop (dipicu operator), dilayani lebih dulu
+let qrSeq = 0;
+const qrWaiting = new Map();   // id -> resolve
+
+function getQrWorker() {
+  if (qrWorker) return qrWorker;
+  qrWorker = new Worker("js/qr-worker.js");
+  qrWorker.onmessage = (e) => {
+    const { id, qr, sharpness } = e.data;
+    const resolve = qrWaiting.get(id);
+    qrWaiting.delete(id);
+    qrBusy = false;
+    if (resolve) resolve({ qr, sharpness });
+    const next = qrQueue.shift() || qrPending;
+    if (next) {
+      if (next === qrPending) qrPending = null;
+      postQrJob(next);
+    }
+  };
+  qrWorker.onerror = () => {
+    /* worker mati (mis. jsqr.min.js gagal dimuat): jangan diamkan pemanggil.
+       Lepas semua yang menunggu, matikan worker — pemanggil berikutnya jatuh
+       ke jalur sync di main thread. */
+    for (const resolve of qrWaiting.values()) resolve({ qr: null, sharpness: null });
+    qrWaiting.clear();
+    for (const job of qrQueue.splice(0)) { job.bitmap.close(); job.resolve({ qr: null, sharpness: null }); }
+    if (qrPending) { qrPending.bitmap.close(); qrPending.resolve({ qr: null, sharpness: null }); qrPending = null; }
+    qrBusy = false;
+    qrWorker.terminate();
+    qrWorker = null;
+  };
+  return qrWorker;
+}
+
+function postQrJob(job) {
+  qrBusy = true;
+  const id = ++qrSeq;
+  qrWaiting.set(id, job.resolve);
+  const w = getQrWorker();
+  if (!w) { qrWaiting.delete(id); qrBusy = false; job.bitmap.close(); return job.resolve({ qr: null, sharpness: null }); }
+  w.postMessage(
+    { id, bitmap: job.bitmap, maxSide: job.maxSide, wantSharpness: job.wantSharpness },
+    [job.bitmap],
+  );
+}
+
+/* Satu decoder lokal untuk halaman Camera dan Control. Python tetap menjadi
+   sumber utama saat FSM aktif; fungsi ini hanya fallback operator/manual.
+   Kembalikan Promise<{qr, sharpness}> — seluruh kerja piksel ada di worker,
+   main thread hanya membayar createImageBitmap yang sendirinya off-thread. */
+export async function decodeClientQr(source, canvas, maxSide = 1280, opts = {}) {
+  const wantSharpness = !!opts.sharpness;
+  /* noDrop: pekerjaan yang dipicu operator (scan berkas) tidak boleh ikut dibuang
+     oleh newest-wins — kalau dibuang, hasilnya tampil sebagai "Tidak ada QR" palsu. */
+  const noDrop = !!opts.noDrop;
+  if (!qrWorkerSupported) return decodeClientQrSync(source, canvas, maxSide, wantSharpness);
+  if (!source) return { qr: null, sharpness: null };
+  const sw = source.naturalWidth || source.width;
+  const sh = source.naturalHeight || source.height;
+  if (!sw || !sh) return { qr: null, sharpness: null };
+
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(source);
+  } catch (_) {
+    return { qr: null, sharpness: null };   // frame belum siap / ter-taint
+  }
+
+  return new Promise((resolve) => {
+    const job = { bitmap, maxSide, wantSharpness, resolve };
+    if (qrBusy) {
+      if (noDrop) { qrQueue.push(job); return; }
+      /* Worker masih sibuk. Buang frame yang ANTRE (bukan yang baru) — hasil QR
+         dari frame lama tidak berguna, dan antrean yang menua justru menambah
+         latensi. Bitmap yang tergeser wajib di-close supaya tidak bocor. */
+      if (qrPending) {
+        qrPending.bitmap.close();
+        qrPending.resolve({ qr: null, sharpness: null });
+      }
+      qrPending = job;
+      return;
+    }
+    postQrJob(job);
+  });
 }
