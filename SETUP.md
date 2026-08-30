@@ -89,20 +89,21 @@ Kemudian jalankan `sudo systemctl daemon-reload` dan
 ### YOLOv8 hook di laptop
 
 Bobot YOLO diproses di laptop; Raspberry Pi tetap menjalankan link/failsafe
-tanpa memuat Ultralytics. Untuk kolam latihan yang sudah memiliki map awal:
+tanpa memuat Ultralytics. Instal dependency satu kali, lalu worker YOLO akan
+aktif otomatis ketika backend GUI dijalankan:
 
 ```bash
 cd /home/rasya/GUI-ROV
 python3 -m pip install -r autonomy/requirements-laptop.txt
 PYTHONPATH=autonomy python3 -m vision.hook_localization \
   --map autonomy/config/hook_map.pool.yaml
-python3 rov_link.py \
-  --fsm-hook-model autonomy/vision/best.pt \
-  --fsm-hook-map autonomy/config/hook_map.pool.yaml \
-  --fsm-calib-wall autonomy/vision/calibration/wall.npz \
-  --fsm-vision-source rtsp \
-  --fsm-rtsp-url "<URL_STREAM_KAMERA>"
+cd server
+npm start
 ```
+
+URL CAM 2/WALL diambil dari konfigurasi halaman Control/Setup. Backend otomatis
+menjalankan `autonomy/tools/hook_vision_worker.py`; tidak perlu menjalankan
+command YOLO atau `rov_link.py` khusus.
 
 YOLO memberi pusat/bounding-box untuk bantuan X/Y relatif. Pose X/Y map hanya
 diterbitkan jika kalibrasi `wall.npz`, geometri hook, heading/depth, identitas

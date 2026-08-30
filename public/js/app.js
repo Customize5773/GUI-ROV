@@ -796,6 +796,11 @@ setInterval(scanControlQR, 200);
 
 /*  WebSocket  */
 let ws = null, demo = null, pingT = 0, linkStale = false;
+function sendHookVisionConfig() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const wall = (CONFIG.CAMERAS || []).find((c) => String(c.role || "").toUpperCase() === "WALL");
+  if (wall && wall.url) ws.send(JSON.stringify({ type: "hook_vision_config", url: wall.url }));
+}
 function connect() {
   try {
     ws = new WebSocket(CONFIG.WS_URL);
@@ -809,6 +814,7 @@ function connect() {
     linkStale = false;
     setLink("on"); log("Terhubung ke server", "ok"); stopDemo();
     sendPing();
+    sendHookVisionConfig();
     /* Beri tahu wahana kedalaman kolamnya. Di sisi ROV nilai ini membatasi
        depth_target supaya tombol SET tidak bisa merekam setpoint jauh
        melewati dasar. Dikirim di onopen (bukan sekali saat load) supaya ikut
@@ -1075,6 +1081,7 @@ if (els.btnCamSwitch) {
 
 applyControlCamera();
 window.addEventListener("hydroship:camera-url", applyControlCamera);
+window.addEventListener("hydroship:camera-url", sendHookVisionConfig);
 
 /*  kontrol UI  */
 els.btnLight.onclick = () => { const v = !state.light; reflectLight(v); markPending("light", v); sendCmd("light", v); };
@@ -1161,6 +1168,7 @@ els.btnPilotFull.onclick = () => pilotFs.toggle();
    PiP di pojok menampilkan mirror scene 3D ROV Control (pilot) supaya attitude
    ROV tetap terpantau sambil menonton kamera layar penuh. */
 let controlCamPiPRaf = null;
+let pipLastDraw = 0;
 function renderControlCamPiP(on) {
   const cv = document.getElementById("ctrlCamPipCanvas");
   const no = document.getElementById("ctrlCamPipNo");
@@ -1174,6 +1182,11 @@ function renderControlCamPiP(on) {
     const loop = () => {
       controlCamPiPRaf = requestAnimationFrame(loop);
       if (document.hidden) return;
+      // sumbernya (scene.js) sendiri hanya menggambar 30 fps — menyalin lebih
+      // sering dari itu hanya menduplikasi frame yang sama
+      const tNow = performance.now();
+      if (tNow - pipLastDraw < 1000 / 30) return;
+      pipLastDraw = tNow;
       const w = cv.clientWidth, h = cv.clientHeight;
       if (!w || !h) return;
       if (cv.width !== w) cv.width = w;
@@ -1479,10 +1492,14 @@ const GP_SEND_HZ = 15;
 const GP_SEND_INTERVAL = 1000 / GP_SEND_HZ;
 let gpLastSent = 0;
 
-/* Membaca navigator.getGamepads() mengalokasikan array baru tiap panggilan,
-   jadi tidak perlu dilakukan 60x/detik. 30 Hz sudah 2x laju kirim (15 Hz)
-   sehingga tidak menambah latensi yang terasa. */
-const GP_POLL_HZ = 30;
+/* Latensi stik->WS ditentukan laju POLL ini, bukan GP_SEND_HZ: begitu nilai axis
+   berubah, sendCmd dipanggil saat itu juga (lihat gate `changed ||` di bawah);
+   GP_SEND_HZ hanya laju resend untuk stik yang DITAHAN, supaya Pi tidak masuk
+   fail-safe timeout. 30 Hz berarti input bisa tertahan sampai 33 ms sebelum
+   terlihat. Alasan lama menahan di 30 Hz adalah alokasi array getGamepads() —
+   biaya itu tidak berarti sekarang main thread tidak lagi tersumbat decode QR,
+   dan 60 Hz memotong separuh penundaan deteksi. */
+const GP_POLL_HZ = 60;
 const GP_POLL_INTERVAL = 1000 / GP_POLL_HZ;
 let gpLastPoll = 0;
 

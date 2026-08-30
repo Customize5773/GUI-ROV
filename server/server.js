@@ -16,7 +16,8 @@ const https = require("https");
 const dgram = require("dgram");
 const fs = require("fs");
 const path = require("path");
-const { execFile } = require("child_process");
+const readline = require("readline");
+const { execFile, spawn } = require("child_process");
 const { WebSocketServer } = require("ws");
 const recording = require("./recording");
 const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
@@ -37,8 +38,18 @@ const SIM = process.argv.includes("--sim");
 const PUBLIC = path.join(__dirname, "..", "public");
 const SHARED_ROOT = path.join(__dirname, "..", "shared");
 const AUTONOMY = path.join(__dirname, "..", "autonomy");
+const REPO_ROOT = path.join(__dirname, "..");
+const HOOK_VISION_WORKER = path.join(AUTONOMY, "tools", "hook_vision_worker.py");
+const HOOK_VISION_MODEL = path.resolve(process.env.HOOK_VISION_MODEL || path.join(AUTONOMY, "vision", "best.pt"));
+const HOOK_VISION_MAP = path.resolve(process.env.HOOK_VISION_MAP || path.join(AUTONOMY, "config", "hook_map.pool.yaml"));
+const HOOK_VISION_CALIB = path.resolve(process.env.HOOK_VISION_CALIB || path.join(AUTONOMY, "vision", "calibration", "wall.npz"));
+const HOOK_VISION_DEFAULT_URL = process.env.HOOK_CAMERA_URL || "http://192.168.2.2:8080/stream";
 const AUTONOMOUS_LOG_DIR = path.join(AUTONOMY, "logs");
 fs.mkdirSync(AUTONOMOUS_LOG_DIR, { recursive: true });
+
+let hookVisionProcess = null;
+let hookVisionUrl = null;
+let latestHookVision = null;
 
 let lastControlMode = null;
 let autonomousLogTimer = null;
@@ -168,14 +179,111 @@ function isAllowedCamHost(host) {
   return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
+function stopHookVision() {
+  if (hookVisionProcess) hookVisionProcess.kill("SIGTERM");
+  hookVisionProcess = null;
+  hookVisionUrl = null;
+  latestHookVision = null;
+}
+
+function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
+  if (SIM || !cameraUrl) return;
+  let parsed;
+  try { parsed = new URL(cameraUrl); } catch (err) {
+    console.warn(`[VISION] URL kamera tidak valid: ${err.message}`);
+    return;
+  }
+  if (!isAllowedCamHost(parsed.hostname)) {
+    console.warn(`[VISION] URL kamera ditolak: host ${parsed.hostname} bukan LAN yang diizinkan`);
+    return;
+  }
+  if (hookVisionProcess && hookVisionUrl === cameraUrl) return;
+  stopHookVision();
+
+  const python = process.env.HOOK_VISION_PYTHON || "python3";
+  const envPath = [AUTONOMY, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
+  hookVisionUrl = cameraUrl;
+  const processRef = spawn(python, [HOOK_VISION_WORKER,
+    "--camera", cameraUrl, "--model", HOOK_VISION_MODEL,
+    "--map", HOOK_VISION_MAP, "--calib", HOOK_VISION_CALIB,
+  ], {
+    cwd: REPO_ROOT,
+    env: { ...process.env, PYTHONPATH: envPath },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  hookVisionProcess = processRef;
+  console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl}`);
+
+  const lines = readline.createInterface({ input: processRef.stdout });
+  lines.on("line", (line) => {
+    if (hookVisionProcess !== processRef) return;
+    try {
+      const data = JSON.parse(line);
+      latestHookVision = data;
+      broadcast({ type: "hook_vision", data });
+    } catch (err) {
+      console.warn(`[VISION] output worker bukan JSON: ${err.message}`);
+    }
+  });
+  processRef.stderr.on("data", (buf) => {
+    if (DEBUG) console.warn(`[VISION] ${String(buf).trim()}`);
+  });
+  processRef.on("error", (err) => {
+    console.warn(`[VISION] worker gagal dijalankan: ${err.message}`);
+  });
+  processRef.on("close", (code) => {
+    if (hookVisionProcess !== processRef) return;
+    console.warn(`[VISION] worker berhenti (code=${code})`);
+    hookVisionProcess = null;
+  });
+}
+
+function sendHookTelemetry(data) {
+  if (!hookVisionProcess || !hookVisionProcess.stdin.writable) return;
+  try {
+    hookVisionProcess.stdin.write(JSON.stringify({ type: "telemetry", data }) + "\n");
+  } catch (_) {}
+}
+
+function attachHookVision(data) {
+  return { ...data, hook_xy: latestHookVision || data.hook_xy || null };
+}
+
 // Satu koneksi upstream per URL kamera fisik, di-share ke semua klien yang
 // memintanya (halaman Control, kedua cell Camera, dst) — mencegah N klien =
 // N koneksi ke kamera (kamera murah/mjpg-streamer berat kalau harus
 // re-encode per klien, itu penyebab lag saat Start Stream diklik).
 const camStreams = new Map(); // key -> { clients: Set<res>, statusCode, headers, up }
-// Client yang lambat baca (res.write() balik false) di-skip sampai 'drain',
-// supaya buffer Node untuk dia tidak numpuk tak terbatas dan menyeret klien lain.
-const pausedCamClients = new WeakSet();
+/* Client yang lambat baca di-skip supaya buffer Node untuk dia tidak numpuk dan
+   menyeret klien lain. TAPI skip-nya harus PER-FRAME, bukan per-chunk TCP:
+   membuang chunk di tengah JPEG mengirim frame cacat, dan browser menahan gambar
+   terakhir yang utuh sampai frame berikutnya datang lengkap — itu terlihat persis
+   seperti "video telat/nyangkut". camSplitter() di bawah memotong stream multipart
+   di batas frame supaya yang dibuang selalu frame UTUH (newest-wins). */
+const CAM_BACKLOG_LIMIT = 1 << 20;   // 1 MB antre = klien ini ketinggalan, lewati frame
+
+/* Pemotong multipart/x-mixed-replace. Menahan byte sampai delimiter berikutnya
+   terlihat, lalu menyerahkan satu part utuh (header + JPEG). Sengaja tidak
+   mem-parse JPEG-nya: batas multipart sudah cukup dan jauh lebih murah. */
+function camSplitter(contentType, onPart) {
+  const m = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType || "");
+  if (!m) return null;                       // bukan multipart -> pakai jalur byte biasa
+  const delim = Buffer.from("--" + (m[1] || m[2]));
+  let buf = Buffer.alloc(0);
+  return (chunk) => {
+    buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
+    // mulai cari dari 1 supaya delimiter di posisi 0 (awal part berjalan) tidak
+    // langsung memotong part kosong
+    let idx;
+    while ((idx = buf.indexOf(delim, 1)) !== -1) {
+      onPart(buf.subarray(0, idx));
+      buf = buf.subarray(idx);
+    }
+    /* Jaring pengaman: kamera yang tidak pernah mengirim delimiter lagi (atau
+       content-type bohong) tidak boleh membuat buffer tumbuh tanpa batas. */
+    if (buf.length > 8 << 20) { onPart(buf); buf = Buffer.alloc(0); }
+  };
+}
 
 function camStreamKey(target) {
   const t = new URL(target);
@@ -321,15 +429,16 @@ const httpServer = http.createServer((req, res) => {
         entry.headers = upRes.headers;
         for (const c of entry.clients) if (!c.writableEnded) c.writeHead(entry.statusCode, entry.headers);
 
-        upRes.on("data", (chunk) => {
+        const fanout = (buf) => {
           for (const c of entry.clients) {
-            if (c.writableEnded || pausedCamClients.has(c)) continue;
-            if (!c.write(chunk)) {
-              pausedCamClients.add(c);
-              c.once("drain", () => pausedCamClients.delete(c));
-            }
+            if (c.writableEnded) continue;
+            // klien ketinggalan: lewati frame ini seluruhnya, jangan potong di tengah
+            if (c.writableLength > CAM_BACKLOG_LIMIT) continue;
+            c.write(buf);
           }
-        });
+        };
+        const split = camSplitter(upRes.headers["content-type"], fanout);
+        upRes.on("data", split || fanout);
         upRes.on("end", () => {
           for (const c of entry.clients) if (!c.writableEnded) c.end();
           camStreams.delete(key);
@@ -569,6 +678,12 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    if (msg.type === "hook_vision_config") {
+      startHookVision(msg.url || HOOK_VISION_DEFAULT_URL);
+      ws.send(JSON.stringify({ type: "event", text: "Backend YOLO Hook memakai CAM WALL", level: "ok" }));
+      return;
+    }
+
     // ================= JOYSTICK CONFIG GET =================
     if (msg.type === "joystick_config_get") {
       ws.send(JSON.stringify({
@@ -759,7 +874,8 @@ udp.on("message", (buf, rinfo) => {
     );
   }
 
-  broadcast({ type: "telemetry", data, recv: Date.now() });
+  sendHookTelemetry(data);
+  broadcast({ type: "telemetry", data: attachHookVision(data), recv: Date.now() });
 });
 
 udp.on("error", (e) => console.error("[UDP] error:", e.message));
@@ -1206,7 +1322,10 @@ async function start() {
     console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
     console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
     console.log(`  Joy cfg   : ${joyConfig.configPath()}\n`);
+    if (!SIM) startHookVision();
   });
 }
+
+process.on("exit", stopHookVision);
 
 start();

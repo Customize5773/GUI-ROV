@@ -245,6 +245,15 @@ export class RovScene {
   _animate() {
     requestAnimationFrame(() => this._animate());
 
+    /* Batasi 30 fps. Attitude yang digambar berasal dari telemetri 10 Hz
+       (setAttitude dipanggil dari applyTelemetry), jadi frame ke-2 dari tiap
+       pasangan tidak pernah menampilkan informasi baru — hanya menghabiskan GPU
+       dan CPU untuk model FBX berpoligon tinggi. Lerp k=0.18 tetap mulus di 30 fps.
+       Naikkan ke 60 hanya kalau laju telemetri ikut naik. */
+    const now = performance.now();
+    if (now - (this._lastDraw || 0) < 1000 / 30) return;
+    this._lastDraw = now;
+
     if (!this._isVisible()) {
       /* Saat tak terlihat, jangan lerp — biar attitude tidak "mengejar" ratusan
          frame sekaligus begitu halaman dibuka lagi. Snap ke target saat resume. */

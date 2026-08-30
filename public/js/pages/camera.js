@@ -138,8 +138,12 @@ export const cameraPage = {
     this.scanCanvas = document.createElement("canvas");
   },
 
-  onShow() { this.visible = true; if (!this.scanRaf) this._scanLoop(); },
-  onHide() { this.visible = false; if (this.scanRaf) { cancelAnimationFrame(this.scanRaf); this.scanRaf = null; } },
+  onShow() { this.visible = true; this._applyStreamSrc(); if (!this.scanRaf) this._scanLoop(); },
+  onHide() {
+    this.visible = false;
+    if (this.scanRaf) { cancelAnimationFrame(this.scanRaf); this.scanRaf = null; }
+    this._applyStreamSrc();   // lepas stream supaya tidak didekode di latar
+  },
 
   onTelemetry(d) {
     const alt = Number.isFinite(d.depth) ? Math.max(0, CONFIG.POOL_DEPTH - d.depth) : null;
@@ -230,49 +234,33 @@ export const cameraPage = {
     handle.addEventListener("pointercancel", rend);
   },
 
+  /* Satu tempat yang menentukan apakah tiap cell menempel ke stream atau tidak.
+     Dipakai _toggleStream (tombol Start/Stop) DAN onShow/onHide (pindah halaman)
+     supaya tidak ada dua versi aturan yang bisa berbeda. */
+  _applyStreamSrc() {
+    if (!this.els.cells) return;   // dipanggil sebelum init()
+    // <img> yang masih punya src tetap mendekode MJPEG walau halamannya
+    // tersembunyi — itu dua dekode video sia-sia yang berebut CPU dengan kamera
+    // di halaman Control. Lepas src saat tak terlihat, pasang lagi saat kembali;
+    // status this.streaming (pilihan operator) tidak ikut berubah.
+    const live = this.streaming && this.visible;
+    (CONFIG.CAMERAS || []).forEach((c, i) => {
+      const cell = this.els.cells[i];
+      if (!cell) return;
+      const url = live && c.url ? camProxy(c.url) : "";
+      if (!url) { cell.img.removeAttribute("src"); return; }
+      // set ulang src yang sama akan memutus & menyambung ulang koneksi kamera
+      if (cell.img.getAttribute("src") !== url) cell.img.src = url;
+    });
+  },
+
   _toggleStream() {
-      console.log("Start Stream diklik");
-
-      console.log(CONFIG.CAMERAS);
-
-      (CONFIG.CAMERAS || []).forEach((c, i) => {
-          console.log("Camera", i, c);
-
-          const url = camProxy(c.url);
-
-          console.log("Proxy =", url);
-
-          const cell = this.els.cells[i];
-
-          if (this.streaming && c.url) {
-              cell.img.src = url;
-              console.log("IMG =", cell.img.src);
-          }
-      });
-
-      this.streaming = !this.streaming;
-
-      console.log("CONFIG CAMERAS =", CONFIG.CAMERAS);
-
-      this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";
-
-      (CONFIG.CAMERAS || []).forEach((c, i) => {
-
-          console.log("Camera", i, c);
-
-          const url = camProxy(c.url);
-
-          console.log("URL =", url);
-
-          const cell = this.els.cells[i];
-
-          if (this.streaming && c.url) {
-              cell.img.src = url;
-              console.log("IMG SRC =", cell.img.src);
-          } else {
-              cell.img.removeAttribute("src");
-          }
-      });
+    /* Dulu loop pemasangan src dijalankan DUA KALI mengapit `this.streaming =
+       !this.streaming`, jadi loop pertama memakai nilai sebelum toggle: klik Stop
+       sempat membuka koneksi kamera baru sebelum menutupnya lagi. */
+    this.streaming = !this.streaming;
+    this.els.state.textContent = this.streaming ? "LIVE" : "IDLE";
+    this._applyStreamSrc();
   },
 
   /* loop scan QR dari kamera BOTTOM (indeks 0) */

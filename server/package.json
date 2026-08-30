@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "sim": "node server.js --sim",
-    "test": "node test/recording.test.js && node test/joystick-profile.test.js && node test/mode-gating.test.mjs && node test/heading-error.test.mjs && node test/sim-params.test.js && node test/qr-decode.test.mjs"
+    "test": "node test/recording.test.js && node test/joystick-profile.test.js && node test/mode-gating.test.mjs && node test/heading-error.test.mjs && node test/sim-params.test.js && node test/qr-decode.test.mjs && node test/cam-splitter.test.mjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
