@@ -345,6 +345,7 @@ class RovLink:
             qr_length=getattr(self.args, "fsm_qr_size", QR_SIDE_M),
             hook_hsv_range=HOOK_COLOR_HSV_RANGE,
             hook_min_area=HOOK_MIN_AREA, hook_pipe_diam=HOOK_PIPE_DIAM_M,
+            hook_model=getattr(self.args, "fsm_hook_model", None),
             wall_cnn=True if wall_cnn_on else None,
         )
         telem.start()
@@ -503,6 +504,8 @@ def main():
                      help="kalibrasi .npz kamera WALL (mode dual-camera)")
     ap.add_argument("--fsm-qr-size", type=float, default=QR_SIDE_M,
                      help="sisi fisik QR payload (m) utk solvePnP PBVS")
+    ap.add_argument("--fsm-hook-model", default=None, metavar="BEST.PT",
+                    help="opsional bobot YOLOv8 Hook di laptop, mis. autonomy/vision/best.pt")
     ap.add_argument("--fsm-wall-cnn", type=lambda s: s.lower() not in ("0", "false", "no", "off"),
                      default=True, metavar="BOOL",
                      help="aktifkan fallback wall-CNN saat decode_qr() gagal (default aktif)")

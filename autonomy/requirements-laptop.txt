@@ -1,0 +1,2 @@
+# Vision YOLOv8 dijalankan di laptop, bukan Raspberry Pi.
+ultralytics>=8.0,<9

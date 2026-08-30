@@ -425,6 +425,7 @@ class VisionPipeline:
         hook_hsv_range=None,
         hook_min_area: float = 150.0,
         hook_pipe_diam: float = 0.025,
+        hook_model: Optional[str] = None,
         wall_cnn=None,
         wall_cnn_votes: int = 3,
         wall_cnn_min_conf: float = 0.8,
@@ -453,6 +454,8 @@ class VisionPipeline:
                      (None → jalur non-warna/contour; JANGAN andalkan warna, lihat hook_detect.py)
         hook_min_area  : luas contour minimum (px^2) kandidat hook
         hook_pipe_diam : diameter pipa hook fisik (m) — KKI 2026 ¾" = 0.025 (estimasi jarak)
+        hook_model : path bobot YOLOv8 Hook di laptop. None → detector OpenCV lama.
+                     YOLO hanya memberi bbox/offset X-Y relatif; pose 3D tetap None.
         wall_cnn   : aktifkan fallback tebak sisi kolam saat decode_qr() GAGAL.
                      True → bobot bawaan (vision/wall_cnn.npz); str → path .npz;
                      None/False → nonaktif (default). Hasilnya TIDAK masuk latest_qr()
@@ -534,6 +537,10 @@ class VisionPipeline:
         self.hook_hsv_range = hook_hsv_range
         self.hook_min_area = hook_min_area
         self.hook_pipe_diam = hook_pipe_diam
+        self._hook_yolo = None
+        if hook_model:
+            from vision.yolo_hook import YOLOHookDetector
+            self._hook_yolo = YOLOHookDetector(hook_model)
 
         # Kalibrasi kamera utk PBVS (solvePnP). Bila tak ada → pose=None (fallback IBVS).
         self.qr_length = qr_length
@@ -734,10 +741,7 @@ class VisionPipeline:
                     ordered, self.qr_length, K=self._K, dist=np.zeros_like(self._dist))
             self._dispatch(result)
 
-        focal = float(self._K[0, 0]) if self._K is not None else None
-        hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
-                           min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
-                           focal_px=focal)
+        hook = self._detect_hook(frame, self._K)
         if hook is not None:
             self._last_hook = hook
             log.debug("[vision] Deteksi hook center=%s area=%.0f conf=%.2f method=%s",
@@ -810,10 +814,7 @@ class VisionPipeline:
 
             # Deteksi hook (CAM WALL) — target geometrik non-QR utk HANG (misi 3b) & DOCK (misi 4).
             # focal_px dari kalibrasi (bila ada) → detect_hook mengisi pose (PBVS), else IBVS.
-            focal = float(self._K[0, 0]) if self._K is not None else None
-            hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
-                               min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
-                               focal_px=focal)
+            hook = self._detect_hook(frame, self._K)
             if hook is not None:
                 self._last_hook = hook
                 log.debug("[vision] Deteksi hook center=%s area=%.0f conf=%.2f method=%s",
@@ -907,13 +908,9 @@ class VisionPipeline:
                 time.sleep(0.5)
                 continue
 
-            # detect_hook() cuma pakai focal (skalar), tak ada solvePnP+dist di sini
-            # -- undistort aman tanpa risiko koreksi-2x, tepi pipa hook jadi lebih lurus.
+            # Undistort aman tanpa risiko koreksi-2x, tepi pipa hook jadi lebih lurus.
             frame = self._undistort(frame, K, dist, self._undist_cache_hook)
-            focal = float(K[0, 0]) if K is not None else None
-            hook = detect_hook(frame, hsv_range=self.hook_hsv_range,
-                               min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
-                               focal_px=focal)
+            hook = self._detect_hook(frame, K)
             if hook is not None:
                 self._last_hook = hook
                 log.debug("[vision] Deteksi hook center=%s area=%.0f conf=%.2f method=%s",
@@ -923,6 +920,15 @@ class VisionPipeline:
             time.sleep(max(0, interval - elapsed))
 
     # ── Helper ────────────────────────────────────────────────────────────────
+
+    def _detect_hook(self, frame, K):
+        """Pilih detector hook yang diminta; default tetap detector OpenCV lama."""
+        if self._hook_yolo is not None:
+            return self._hook_yolo.detect(frame)
+        focal = float(K[0, 0]) if K is not None else None
+        return detect_hook(frame, hsv_range=self.hook_hsv_range,
+                           min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,
+                           focal_px=focal)
 
     def _build_result(self, data, center, area, frame) -> dict:
         h, w = (frame.shape[0], frame.shape[1]) if frame is not None else (480, 640)

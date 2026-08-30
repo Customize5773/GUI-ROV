@@ -1677,6 +1677,9 @@ def main():
                     help='kalibrasi .npz kamera BOTTOM (mode dual-camera)')
     ap.add_argument('--calib-wall', default=CALIB_FILE_WALL,
                     help='kalibrasi .npz kamera WALL (mode dual-camera)')
+    ap.add_argument('--hook-model', default=None, metavar='BEST.PT',
+                    help='opsional bobot YOLOv8 Hook di laptop, mis. autonomy/vision/best.pt; '
+                         'menggantikan detector OpenCV dan memberi bbox/offset X-Y relatif')
     ap.add_argument('--hook-map', default=None, metavar='FILE',
                     help='AKTIFKAN lokalisasi hook (OPSIONAL, default MATI): path map arena '
                          '.yaml/.yml/.json — lihat config/hook_map.example.yaml. Hasilnya cuma '
@@ -1738,6 +1741,7 @@ def main():
                            calib_file=args.calib, qr_length=args.qr_size,
                            hook_hsv_range=HOOK_COLOR_HSV_RANGE,
                            hook_min_area=HOOK_MIN_AREA, hook_pipe_diam=HOOK_PIPE_DIAM_M,
+                           hook_model=args.hook_model,
                            qr_url=args.bottom_url, hook_url=args.wall_url,
                            calib_file_qr=args.calib_bottom, calib_file_hook=args.calib_wall,
                            wall_cnn=None if args.no_wall_cnn else True,
