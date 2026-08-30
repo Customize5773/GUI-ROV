@@ -26,6 +26,7 @@ const els = {
   link: $("linkPill"), linkLabel: $("linkLabel"),
   heading: $("vHeading"), depth: $("vDepth"), alt: $("vAlt"), roll: $("vRoll"),
   pitch: $("vPitch"), temp: $("vTemp"), volt: $("vVolt"), lat: $("vLat"),
+  pi: $("vPi"),
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
@@ -41,7 +42,7 @@ const els = {
   hookBboxCanvas: $("hookBboxCanvas"),
   camContrast: $("camContrast"),
   modelTag: $("modelTag"), log: $("log"),
-  btnLight: $("btnLight"), btnArm: $("btnArm"), btnStop: $("btnStop"),
+  btnArm: $("btnArm"), btnStop: $("btnStop"),
   armLabel: $("armLabel"),
   btnMode: $("btnMode"), modeLabel: $("modeLabel"), btnMute: $("btnMute"),
   btnSnap: $("btnSnap"), btnRec: $("btnRec"), btnHud: $("btnHud"),
@@ -286,6 +287,28 @@ function applyTelemetry(d) {
   els.pitch.textContent = num(d.pitch, 1);
   els.temp.textContent = num(d.temp, 1);
   els.volt.textContent = num(d.voltage, 1);
+  // tegangan hanya berguna kalau kelihatan saat turun: kritis diberi kedip
+  // yang sama dengan alarm kedalaman, waspada cukup warna. null -> netral.
+  const v = d.voltage;
+  const vCrit = Number.isFinite(v) && v <= CONFIG.VOLT_CRIT;
+  els.volt.classList.toggle("is-warn", Number.isFinite(v) && v <= CONFIG.VOLT_WARN && !vCrit);
+  els.volt.parentElement.classList.toggle("readout--danger", vCrit);
+
+  /* Status Pi: satu sel berisi dua angka (CPU% dan suhu SoC). Suhu yang bikin
+     Pi menurunkan clock, CPU yang bikin loop kontrol telat — dua-duanya muncul
+     ke pilot sebagai "ROV lag", jadi keduanya perlu terlihat sekaligus.
+     Ambang suhu dari dokumentasi Pi (70 mulai throttle, 80 throttle keras). */
+  const piCpu = d.pi_cpu, piTemp = d.pi_temp;
+  const piKnown = Number.isFinite(piCpu) || Number.isFinite(piTemp);
+  els.pi.textContent = piKnown
+    ? `${Number.isFinite(piCpu) ? piCpu.toFixed(0) + "%" : "—"} · ${Number.isFinite(piTemp) ? piTemp.toFixed(0) + "°C" : "—"}`
+    : "—";
+  const piCrit = Number.isFinite(piTemp) && piTemp >= CONFIG.PI_TEMP_CRIT;
+  const piWarn = !piCrit && (
+    (Number.isFinite(piTemp) && piTemp >= CONFIG.PI_TEMP_WARN) ||
+    (Number.isFinite(piCpu) && piCpu >= CONFIG.PI_CPU_WARN));
+  els.pi.classList.toggle("is-warn", piWarn);
+  els.pi.parentElement.classList.toggle("readout--danger", piCrit);
 
   const heading = Number.isFinite(d.heading) ? ((d.heading % 360) + 360) % 360 : null;
   els.hudHeading.textContent = "HDG " + num(d.heading, 0) + "°";
@@ -567,7 +590,6 @@ function reflectArm(on) {
 }
 function reflectLight(on) {
   state.light = on;
-  els.btnLight.setAttribute("aria-pressed", String(on));
 }
 
 /* ARM/LIGHT: UI dibalik optimistik saat diklik lalu ditandai "pending" sampai
@@ -575,16 +597,16 @@ function reflectLight(on) {
    meng-echo status dalam 2 dtk, operator diberi tahu agar tidak salah baca. */
 const pending = {
   arm:   { active: false, expected: false, since: 0, btn: els.btnArm,   label: "ARM" },
-  light: { active: false, expected: false, since: 0, btn: els.btnLight, label: "LIGHT" },
+  light: { active: false, expected: false, since: 0, btn: null, label: "LIGHT" },
 };
 function markPending(key, expected) {
   const p = pending[key];
   p.active = true; p.expected = expected; p.since = performance.now();
-  p.btn.classList.add("ctrl--pending");
+  p.btn?.classList.add("ctrl--pending");
 }
 function clearPending(key) {
   const p = pending[key];
-  p.active = false; p.btn.classList.remove("ctrl--pending");
+  p.active = false; p.btn?.classList.remove("ctrl--pending");
 }
 function confirmArm(on) {
   if (pending.arm.active) {
@@ -1084,7 +1106,7 @@ window.addEventListener("hydroship:camera-url", applyControlCamera);
 window.addEventListener("hydroship:camera-url", sendHookVisionConfig);
 
 /*  kontrol UI  */
-els.btnLight.onclick = () => { const v = !state.light; reflectLight(v); markPending("light", v); sendCmd("light", v); };
+function toggleLight() { const v = !state.light; reflectLight(v); markPending("light", v); sendCmd("light", v); }
 els.btnArm.onclick = () => {
   const v = !state.armed;
   // arming ulang melepas kunci E-Stop sehingga joystick boleh aktif lagi
@@ -1717,7 +1739,7 @@ function executeJoystickAction(action, mode = "toggle") {
     }
 
     case "toggle_light": {
-      els.btnLight.click();
+      toggleLight();
       return;
     }
 

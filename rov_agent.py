@@ -28,6 +28,7 @@ from rov_params import (
     param_type_name,
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
+from rov_pistat import read_cpu_percent, read_soc_temp
 
 from rov_pid import (
     resolve_pid_writes,
@@ -134,8 +135,18 @@ state = {
     "depth": 0.0,       # sementara 0 dulu, nanti kita isi dari sensor depth
     "roll": 0.0,
     "pitch": 0.0,
-    "temp": 0.0,        # sementara 0 dulu, nanti bisa dari sensor suhu
-    "voltage": 0.0,
+    # None (bukan 0.0) selama SCALED_PRESSURE2 belum datang: GUI menggambar
+    # "—" untuk null, sedangkan 0.0 terbaca sebagai suhu air 0 °C yang sah.
+    "temp": None,
+    # None (bukan 0.0) dengan alasan sama seperti temp: 0.0 V terbaca sebagai
+    # baterai mati total, padahal artinya SYS_STATUS belum pernah datang.
+    "voltage": None,
+    # Status hardware Pi (bukan wahana): beban CPU % dan suhu SoC °C. Pi
+    # menurunkan clock sendiri saat panas, dan tanpa ini throttling terlihat
+    # operator sebagai "ROV mendadak lag" tanpa sebab. None = belum tersampel
+    # / bukan Pi, alasan sama seperti temp & voltage di atas.
+    "pi_cpu": None,
+    "pi_temp": None,
     "armed": False,
     "light": False,
     "mode": "manual",
@@ -495,6 +506,14 @@ _mav_rate = RateLimiter()
 
 _last_telem_log = 0.0
 
+# Status Pi disampel 1 Hz, BUKAN 10 Hz seperti sisa telemetri: membuka dua file
+# sysfs sepuluh kali per detik di dalam loop kontrol justru menambah beban yang
+# sedang diukur. Nilai terakhir tetap tinggal di `state`, jadi tetap ikut
+# terkirim tiap paket seperti field lain. read_cpu_percent() stateless, jadi
+# snapshot /proc/stat sebelumnya disimpan di sini.
+_pistat_rate = RateLimiter(1.0)
+_pistat_prev_cpu = None
+
 def send_to_gui(obj):
     """Kirim satu pesan JSON ke laptop lewat socket telemetry.
 
@@ -526,7 +545,12 @@ def send_telemetry():
     Mencetak tiap paket (10 Hz) plus log joystick 20 Hz membuat stdout yang
     ter-pipe jadi blocking dan menimbulkan jitter pada loop kontrol di Pi.
     """
-    global _last_telem_log
+    global _last_telem_log, _pistat_prev_cpu
+
+    if _pistat_rate.allow("pistat", time.time()):
+        pct, _pistat_prev_cpu = read_cpu_percent(_pistat_prev_cpu)
+        state["pi_cpu"] = pct
+        state["pi_temp"] = read_soc_temp()
 
     with depth_lock:
         state["depth_hold"] = depth_hold_enabled
@@ -2102,8 +2126,18 @@ def main():
         # voltage_battery dalam mV
         # --------------------------------
         elif mtype == "SYS_STATUS":
-            if msg.voltage_battery != 65535:
-                state["voltage"] = msg.voltage_battery / 1000.0
+            # 65535 = "tidak diukur", 0 = monitor baterai belum dikonfigurasi.
+            # Keduanya bukan tegangan; biarkan None supaya GUI tetap "—".
+            if msg.voltage_battery not in (0, 65535):
+                state["voltage"] = round(msg.voltage_battery / 1000.0, 1)
+
+        # --------------------------------
+        # SCALED_PRESSURE2: suhu air dari baro eksternal (Bar30), centi-°C.
+        # Depth TETAP dari AHRS2 di bawah (sudah lewat EKF); di sini hanya
+        # temperature, satu-satunya sumber suhu yang dipunya wahana.
+        # --------------------------------
+        elif mtype == "SCALED_PRESSURE2":
+            state["temp"] = round(msg.temperature / 100.0, 1)
 
         # --------------------------------
         # AHRS2 : Depth dari ArduSub (meter)

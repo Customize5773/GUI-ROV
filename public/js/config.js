@@ -30,6 +30,18 @@ export const CONFIG = {
   // Kolam dangkal 0.9 m: alarm hanya saat sangat dekat dasar (margin ~0.05 m).
   DANGER_DEPTH: 0.85,
 
+  // ambang tegangan baterai (volt). Default LiPo 4S: 3.5 V/sel = mulai
+  // waspada, 3.3 V/sel = segera naik. Ganti kalau jumlah sel berbeda.
+  VOLT_WARN: 14.0,
+  VOLT_CRIT: 13.2,
+
+  // ambang status Raspberry Pi. Suhu dari dokumentasi resmi Pi: 70 °C = SoC
+  // mulai menurunkan clock, 80 °C = throttle keras. CPU 85% = headroom menipis
+  // untuk loop kontrol 10 Hz + worker visi yang jalan berbarengan.
+  PI_TEMP_WARN: 70,
+  PI_TEMP_CRIT: 80,
+  PI_CPU_WARN: 85,
+
   /* konfigurasi thruster (ArduSub mixer) — KKI 2026 maksimal 6 thruster.
      Wahana ini memakai frame BlueROV1 (6 thruster, 6-DoF):
        T1-T4 = vertikal di empat sudut  -> heave, roll, pitch

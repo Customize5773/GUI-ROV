@@ -97,9 +97,6 @@
         <button class="ctrl" id="btnMute" aria-pressed="false" title="Bisukan alarm kedalaman">
           <span class="ctrl__led"></span> ALARM
         </button>
-        <button class="ctrl" id="btnLight" aria-pressed="false">
-          <span class="ctrl__led"></span> LIGHT
-        </button>
         <button class="ctrl ctrl--arm" id="btnArm" aria-pressed="false">
           <span class="ctrl__led"></span> <span id="armLabel">DISARMED</span>
         </button>
@@ -118,7 +115,7 @@
         <div class="readout readout--lat"><span class="readout__k">LATENCY</span><span class="readout__v" id="vLat">—</span><span class="readout__u">ms</span></div>
         <div class="readout readout--target"><span class="readout__k">DEPTH SET</span><span class="readout__v" id="vDepthTarget">—</span><span class="readout__u">m</span></div>
         <div class="readout" id="qrFocusReadout" title="Ketajaman relatif kamera QR — naik saat mendekat ke fokus, bantu approach manual Misi 1"><span class="readout__k">FOKUS</span><span class="readout__v" id="vQRFocus">—</span></div>
-
+        <div class="readout readout--pi" title="Status hardware Raspberry Pi: beban CPU dan suhu SoC. Amber = mulai throttle, merah = throttle keras."><span class="readout__k">PI</span><span class="readout__v" id="vPi">—</span></div>
       </section>
 
       <!-- ========================= PAGES ========================= -->

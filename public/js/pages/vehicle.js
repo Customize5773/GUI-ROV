@@ -85,7 +85,7 @@ export const vehiclePage = {
           </div>
           <div class="veh__plates">
             <figure class="veh__plate">
-              <img src="models/rov2d_3.jpeg" alt="Desain ROV — tampak 1" />
+              <img src="models/rov2d_4.jpeg" alt="Desain ROV — tampak 1" />
               <span class="veh__plate__label">PLAT 01 &middot; TAMPAK 1</span>
               <button class="chip chip--ghost veh__plate__zoom" data-plate-fs="0" title="Perbesar">⛶</button>
             </figure>
@@ -101,10 +101,7 @@ export const vehiclePage = {
         </div>
 
         <p class="card__desc veh__note">
-          Nilai di tabel ini datang langsung dari flight controller. Perubahan baru
-          dianggap berhasil setelah FC mengembalikannya (badge <b>synced</b>).
-          Untuk arah thruster, PID, dan mapping joystick pakai halaman khusus —
-          tautan di bawah.
+          Menampilkan seluruh parameter ArduSub di flight controller. Cari, saring, dan ubah nilai. Parameter sensitif ditandai (!). Perubahan dikirim ke FC dan dikonfirmasi balik.
         </p>
 
         <div class="veh__controls">

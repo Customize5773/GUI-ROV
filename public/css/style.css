@@ -296,6 +296,8 @@ body[data-theme="light"] .theme__icon::after {
 @keyframes danger-blink { 50% { background: rgba(255,90,90,.16); } }
 /* hasil run autonomous terakhir yang ABORT/terpotong — tandai, tanpa kedip */
 .readout__v.is-fault { color: var(--alert); }
+/* peringatan dini (mis. baterai mulai turun) — amber, belum perlu kedip */
+.readout__v.is-warn { color: var(--amber); }
 
 /* identitas tim + jam di header (KKI 2026) */
 .ident {
