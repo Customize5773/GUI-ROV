@@ -86,6 +86,30 @@ Kemudian jalankan `sudo systemctl daemon-reload` dan
 `HOOK MAP`, posisi X/Y arena, dan estimasi ketidakpastiannya. Status selain
 `ok` menahan posisi terakhir dan tidak menerbitkan koordinat baru.
 
+### YOLOv8 hook di laptop
+
+Bobot YOLO diproses di laptop; Raspberry Pi tetap menjalankan link/failsafe
+tanpa memuat Ultralytics. Untuk kolam latihan yang sudah memiliki map awal:
+
+```bash
+cd /home/rasya/GUI-ROV
+python3 -m pip install -r autonomy/requirements-laptop.txt
+PYTHONPATH=autonomy python3 -m vision.hook_localization \
+  --map autonomy/config/hook_map.pool.yaml
+python3 rov_link.py \
+  --fsm-hook-model autonomy/vision/best.pt \
+  --fsm-hook-map autonomy/config/hook_map.pool.yaml \
+  --fsm-calib-wall autonomy/vision/calibration/wall.npz \
+  --fsm-vision-source rtsp \
+  --fsm-rtsp-url "<URL_STREAM_KAMERA>"
+```
+
+YOLO memberi pusat/bounding-box untuk bantuan X/Y relatif. Pose X/Y map hanya
+diterbitkan jika kalibrasi `wall.npz`, geometri hook, heading/depth, identitas
+hook, dan gate PnP/tracker semuanya lolos. `hook_map.pool.yaml` adalah baseline
+kolam latihan; ukur ulang `camera_to_base`, dimensi hook, dan heading sebelum
+dipakai pada pemasangan atau arena berbeda.
+
 ---
 
 ## 2. Sisi Laptop (Server Node.js)

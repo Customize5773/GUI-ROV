@@ -924,7 +924,11 @@ class VisionPipeline:
     def _detect_hook(self, frame, K):
         """Pilih detector hook yang diminta; default tetap detector OpenCV lama."""
         if self._hook_yolo is not None:
-            return self._hook_yolo.detect(frame)
+            hook = self._hook_yolo.detect(frame)
+            if hook is not None:
+                # Internal saja: dipakai hook_localization untuk ekstraksi keypoint.
+                hook['_frame'] = frame
+            return hook
         focal = float(K[0, 0]) if K is not None else None
         return detect_hook(frame, hsv_range=self.hook_hsv_range,
                            min_area=self.hook_min_area, pipe_diam_m=self.hook_pipe_diam,

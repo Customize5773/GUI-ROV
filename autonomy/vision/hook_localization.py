@@ -675,12 +675,6 @@ def localize_hook(detection,
                           f"contour mencakup {100 * frac:.1f}% frame > "
                           f"{100 * float(g['max_area_frac']):.0f}% — bukan hook "
                           "(kelas bug HOOK-02, air keruh)", ts, confidence=conf)
-    width_px = float(detection.get('width_px') or 0.0)
-    if not (float(g['min_width_px']) <= width_px <= float(g['max_width_px'])):
-        return _blank(_STATUS_REJ,
-                      f"lebar pipa {width_px:.1f} px di luar rentang "
-                      f"[{g['min_width_px']}, {g['max_width_px']}]", ts, confidence=conf)
-
     model = _merge(HOOK_MODEL, (hook_map or {}).get('hook_geometry'), hook_model)
     cam2base = _merge(DEFAULT_CAMERA_TO_BASE,
                       (hook_map or {}).get('camera_to_base'), camera_to_base)
@@ -712,6 +706,13 @@ def localize_hook(detection,
         # Constrained 2.5D — bearing dari centroid, jarak proxy dari lebar pipa.
         # Titik referensinya CENTROID deteksi, bukan pusat-U: pergeseran itu masuk
         # ke covariance, tak dipura-purakan nol.
+        width_px = float(detection.get('width_px') or 0.0)
+        if not (float(g['min_width_px']) <= width_px <= float(g['max_width_px'])):
+            return _blank(_STATUS_REJ,
+                          f"lebar pipa {width_px:.1f} px di luar rentang "
+                          f"[{g['min_width_px']}, {g['max_width_px']}] — "
+                          "bbox YOLO saja belum cukup untuk jarak 3D", ts,
+                          confidence=conf)
         z = fx * float(model['pipe_diameter_m']) / width_px
         u, v = detection.get('center') or (fw / 2.0, fh / 2.0)
         p_cam = np.array([(float(u) - cx_k) * z / fx,

@@ -644,7 +644,7 @@ class Mission5FSM:
                          'name': 'VisionPipeline'}
             res = localize_hook(det, calib, hook_map=hl['map'], vehicle_state=telem,
                                 camera_to_base=hl['map']['camera_to_base'],
-                                tracker=hl['tracker'])
+                                tracker=hl['tracker'], frame=det.get('_frame'))
             # Ringkas utk telemetri — covariance 36 elemen tiap paket UDP itu
             # boros dan tak dipakai GUI; ambil sigma diagonal posisi saja.
             cov = res.get('covariance')

@@ -350,7 +350,11 @@ class RovLink:
         )
         telem.start()
         vision.start()
-        fsm = Mission5FSM(cmd=cmd, telem=telem, vision=vision)
+        fsm = Mission5FSM(
+            cmd=cmd, telem=telem, vision=vision,
+            hook_map_file=getattr(self.args, "fsm_hook_map", None),
+            hook_calib_file=getattr(self.args, "fsm_calib_wall", None),
+        )
         self.mission5_fsm = fsm
         dest = ("127.0.0.1", self.fsm_telem_port)
         if dest not in self.extra_dests:
@@ -506,6 +510,8 @@ def main():
                      help="sisi fisik QR payload (m) utk solvePnP PBVS")
     ap.add_argument("--fsm-hook-model", default=None, metavar="BEST.PT",
                     help="opsional bobot YOLOv8 Hook di laptop, mis. autonomy/vision/best.pt")
+    ap.add_argument("--fsm-hook-map", default=None, metavar="MAP.YAML",
+                    help="opsional map hook untuk menerbitkan pose X/Y arena, mis. autonomy/config/hook_map.pool.yaml")
     ap.add_argument("--fsm-wall-cnn", type=lambda s: s.lower() not in ("0", "false", "no", "off"),
                      default=True, metavar="BOOL",
                      help="aktifkan fallback wall-CNN saat decode_qr() gagal (default aktif)")
