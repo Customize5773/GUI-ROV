@@ -113,6 +113,7 @@ _SCALAR_MAP = {
     ('m5_mechanics', 'engage_surge'):  'M5_ENGAGE_SURGE',
     ('m5_mechanics', 'unhook_vert'):   'M5_UNHOOK_VERT',
     ('m5_mechanics', 'unhook_surge'):  'M5_UNHOOK_SURGE',
+    ('m5_mechanics', 'unhook_lift_m'): 'UNHOOK_LIFT_M',
     ('m5_mechanics', 'unhook_lift_t'): 'UNHOOK_LIFT_T',
     ('m5_mechanics', 'unhook_pull_t'): 'UNHOOK_PULL_T',
 

@@ -71,7 +71,8 @@ m5_mechanics:
   engage_surge: 15
   unhook_vert: 30
   unhook_surge: -20
-  unhook_lift_t: 3.0
+  unhook_lift_m: 0.12
+  unhook_lift_t: 3.0     # fallback tanpa feedback
   unhook_pull_t: 2.0
 
 # ── Toleransi kontrol kedalaman — sifat sensor & kontroler ────────────────────

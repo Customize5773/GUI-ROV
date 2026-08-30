@@ -105,7 +105,8 @@ m5_mechanics:
   engage_surge: 15      # % surge merayap seat payload ke gripper
   unhook_vert: 30        # % vert angkat lubang payload lepas dari ujung hook
   unhook_surge: -20      # % surge tarik mundur agar lubang bebas dari candy-cane
-  unhook_lift_t: 3.0     # detik fase angkat
+  unhook_lift_m: 0.12    # m naik: kaki hook 0,09 m + margin 0,03 m
+  unhook_lift_t: 3.0     # detik angkat hanya untuk fallback tanpa feedback
   unhook_pull_t: 2.0     # detik fase tarik mundur
 
 # ── Validasi payload QR JSON — agar FSM tak salah pungut objek lain ───────────

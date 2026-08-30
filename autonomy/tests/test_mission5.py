@@ -243,6 +243,35 @@ def test_mission5_only_autonomous_release():
     assert rep['payload']['grabbed'] is True
 
 
+def test_unhook_mengukur_angkat_dari_depth_sebelum_mundur():
+    fsm = _make_fsm()
+    sent = []
+    fsm.cmd.send = lambda **kw: sent.append(kw)
+    fsm._state = State.M5_UNHOOK
+    fsm._state_t = m5.time.time()
+
+    fsm._state_m5_unhook({'depth': 0.42})
+    assert sent[-1]['vert'] == m5.M5_UNHOOK_VERT
+    assert sent[-1]['gripper'] == 1
+
+    fsm._state_m5_unhook({'depth': 0.42 - m5.UNHOOK_LIFT_M - 0.01})
+    assert sent[-1]['surge'] == m5.M5_UNHOOK_SURGE
+    assert sent[-1]['gripper'] == 1
+
+    fsm._unhook_pull_t = m5.time.time() - m5.UNHOOK_PULL_T - 0.01
+    fsm._state_m5_unhook({'depth': 0.42 - m5.UNHOOK_LIFT_M - 0.01})
+    assert fsm._state == State.M5_ASCEND
+
+
+@pytest.mark.parametrize('depth', [None, float('nan'), 0.0])
+def test_unhook_depth_invalid_abort(depth):
+    fsm = _make_fsm()
+    fsm._state = State.M5_UNHOOK
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_unhook({'depth': depth})
+    assert fsm._state == State.ABORT
+
+
 # ── Integrasi: akurasi docking closed-loop (nembak x & y) ────────────────────
 def test_docking_accuracy_within_tolerance():
     rep = run_scenario(start_state=State.M5_DOCK, provide_pose=True)

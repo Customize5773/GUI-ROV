@@ -33,6 +33,7 @@ Penggunaan:
 import json
 import socket
 import time
+import math
 import logging
 import threading
 import argparse
@@ -129,7 +130,8 @@ SERVO_INVERT = dict(invert_sway=False, invert_vert=False, invert_surge=False, in
 M5_ENGAGE_SURGE    = 15       # % surge merayap seat payload ke gripper
 M5_UNHOOK_VERT     = 30       # % vert angkat lubang payload lepas dari ujung hook
 M5_UNHOOK_SURGE    = -20      # % surge tarik mundur agar lubang bebas dari candy-cane
-UNHOOK_LIFT_T      = 3.0      # detik fase angkat
+UNHOOK_LIFT_M      = 0.12     # m naik: kaki hook 0,09 m + margin 0,03 m
+UNHOOK_LIFT_T      = 3.0      # detik angkat khusus jalur fallback tanpa feedback
 UNHOOK_PULL_T      = 2.0      # detik fase tarik mundur
 
 TIMEOUT_REDIVE     = 15.0     # detik max selam ulang + akuisisi QR
@@ -416,6 +418,8 @@ class Mission5FSM:
         self._dock_fallback_t  = None  # timestamp mulai jalur timed DOCK (degradasi)
         self._hang_used_fallback = False  # instrumentasi: HANG jatuh ke fallback timed?
         self._dock_used_fallback = False  # instrumentasi: DOCK jatuh ke fallback timed?
+        self._unhook_start_depth = None
+        self._unhook_pull_t = None
 
         # Telemetri live untuk GUI (dibaca rov_link.py, diteruskan sbg field "mission5").
         self.telemetry_out = {
@@ -1391,18 +1395,30 @@ class Mission5FSM:
             self._transition(State.M5_UNHOOK)
 
     def _state_m5_unhook(self, telem):
-        """Misi 5d: angkat lubang payload lepas dari ujung hook, lalu tarik bebas candy-cane.
-        ARAH & tinggi angkat WAJIB diverifikasi di kolam (lihat VERIFIKASI_ARDUSUB.md)."""
+        """Angkat berbasis depth sampai lubang bebas, lalu mundur dari hook."""
         elapsed = self._elapsed()
         if elapsed > TIMEOUT_UNHOOK:
-            log.warning("[FSM] M5_UNHOOK timeout — lanjut naik dengan payload")
-            self._transition(State.M5_ASCEND)
+            log.error("[FSM] M5_UNHOOK timeout — ABORT, payload mungkin masih tersangkut")
+            self.abort()
             return
 
-        if elapsed < UNHOOK_LIFT_T:                        # angkat lepas dari hook
+        depth = telem.get('depth')
+        if not isinstance(depth, (int, float)) or not math.isfinite(depth) or depth <= 0:
+            log.error("[FSM] M5_UNHOOK depth invalid (%r) — ABORT", depth)
+            self.abort()
+            return
+        if self._unhook_start_depth is None:
+            self._unhook_start_depth = float(depth)
+
+        lifted = self._unhook_start_depth - float(depth)
+        if lifted < UNHOOK_LIFT_M:
             self.cmd.send(vert=M5_UNHOOK_VERT, gripper=1)
-            log.debug("[FSM] M5_UNHOOK angkat lubang lepas hook")
-        elif elapsed < UNHOOK_LIFT_T + UNHOOK_PULL_T:      # tarik mundur bebas candy-cane
+            log.debug("[FSM] M5_UNHOOK angkat %.3f/%.3f m", lifted, UNHOOK_LIFT_M)
+            return
+
+        if self._unhook_pull_t is None:
+            self._unhook_pull_t = time.time()
+        if time.time() - self._unhook_pull_t < UNHOOK_PULL_T:
             self.cmd.send(surge=M5_UNHOOK_SURGE, gripper=1)
             log.debug("[FSM] M5_UNHOOK tarik mundur")
         else:
@@ -1475,6 +1491,9 @@ class Mission5FSM:
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
         if new_state in (State.M5_DOCK, State.M5_ENGAGE):
             self._m5_last_det_t = self._state_t
+        if new_state == State.M5_UNHOOK:
+            self._unhook_start_depth = None
+            self._unhook_pull_t = None
         # Ladder pencarian selalu mulai dari nol tiap kali masuk M5_SEARCH
         if new_state == State.M5_SEARCH:
             self._search_phase   = 'backoff'
