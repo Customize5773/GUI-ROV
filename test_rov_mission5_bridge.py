@@ -317,6 +317,19 @@ class TestWiringDiRovAgent(unittest.TestCase):
     def test_produksi_mulai_dari_m5_redive(self):
         self.assertIn('os.environ.get("M5_START_STATE", "M5_REDIVE")', self.src)
 
+    def test_hook_map_produksi_opt_in(self):
+        self.assertIn('"hook_map": os.environ.get("M5_HOOK_MAP") or None', self.src)
+        with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
+            bridge = fh.read()
+        self.assertIn('hook_map_file=cfg.get("hook_map")', bridge)
+        self.assertIn('data["hook_map_enabled"] = bool(self._cfg.get("hook_map"))', bridge)
+
+        with open("public/js/pages/mission.js", encoding="utf-8") as fh:
+            mission_ui = fh.read()
+        self.assertIn('loc.status === "ok"', mission_ui)
+        self.assertIn('newX = this.hookPose.x', mission_ui)
+        self.assertIn('else if (this.hookMapEnabled)', mission_ui)
+
 
 if __name__ == "__main__":
     unittest.main()

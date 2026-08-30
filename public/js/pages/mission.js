@@ -20,6 +20,9 @@ export const missionPage = {
   depth: 0,
   posN: null,
   posE: null,
+  hookMapEnabled: false,
+  hookPose: null,
+  hookStatus: null,
   originN: 0,
   originE: 0,
   attitude: { roll: 0, pitch: 0 },
@@ -209,6 +212,15 @@ export const missionPage = {
     this.attitude.pitch = d.pitch || 0;
     this.posN = Number.isFinite(d.pos_n) ? d.pos_n : null;
     this.posE = Number.isFinite(d.pos_e) ? d.pos_e : null;
+    const m5 = d.mission5 || {};
+    const loc = m5.hook_loc;
+    this.hookMapEnabled = m5.hook_map_enabled === true;
+    this.hookStatus = loc && loc.status;
+    const p = loc && loc.pose_map;
+    this.hookPose = loc && loc.status === "ok" && p
+      && Number.isFinite(Number(p.x)) && Number.isFinite(Number(p.y))
+      ? { x: Number(p.x), y: Number(p.y), sigma: Number(loc.sigma_xy_m) }
+      : null;
   },
 
   _loop() {
@@ -220,7 +232,16 @@ export const missionPage = {
 
     if (this.recording) {
       let newX, newZ;
-      if (this.posN != null && this.posE != null) {
+      if (this.hookPose) {
+        // hook-map memakai koordinat arena absolut: x panjang, y lebar.
+        newX = this.hookPose.x;
+        newZ = -this.hookPose.y;
+      } else if (this.hookMapEnabled) {
+        // Map aktif tetapi observasi belum valid/ambigu: tahan posisi terakhir.
+        // Jangan diam-diam mengganti sumber dengan dead-reckoning.
+        newX = this.pos.x;
+        newZ = this.pos.z;
+      } else if (this.posN != null && this.posE != null) {
         // posisi sungguhan dari EKF ArduSub (LOCAL_POSITION_NED), relatif ke titik Start
         newX = this.posE - this.originE;
         newZ = -(this.posN - this.originN);
@@ -269,10 +290,14 @@ export const missionPage = {
 
     // readout
     this.els.x.textContent = num(this.pos.x, 2);
-    this.els.y.textContent = num(this.pos.z, 2);
+    this.els.y.textContent = num(this.hookMapEnabled ? -this.pos.z : this.pos.z, 2);
     this.els.d.textContent = num(this.depth, 2);
     this.els.dist.textContent = num(this.distance, 2);
-    this.els.src.textContent = (this.posN != null && this.posE != null) ? "EKF" : "Estimasi";
+    this.els.src.textContent = this.hookPose
+      ? `HOOK MAP${Number.isFinite(this.hookPose.sigma) ? ` ±${this.hookPose.sigma.toFixed(2)}m` : ""}`
+      : this.hookMapEnabled
+        ? `HOOK ${String(this.hookStatus || "WAIT").toUpperCase()}`
+        : (this.posN != null && this.posE != null) ? "EKF" : "Estimasi";
   },
 
   _maybeAddPoint() {
