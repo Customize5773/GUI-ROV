@@ -451,7 +451,24 @@ class RovLink:
             out = dict(self.telem)
             out["ts"] = time.time()
             if self.mission5_fsm is not None:
-                out["mission5"] = dict(self.mission5_fsm.telemetry_out)
+                m5 = dict(self.mission5_fsm.telemetry_out)
+                out["mission5"] = m5
+                loc = m5.get("hook_loc") or {}
+                pose = loc.get("pose_map") or {}
+                out["hook_xy"] = {
+                    "status": loc.get("status"),
+                    "hook_id": loc.get("hook_id"),
+                    "x": pose.get("x"), "y": pose.get("y"), "z": pose.get("z"),
+                    "sigma_xy_m": loc.get("sigma_xy_m"),
+                    "reproj_px": loc.get("reproj_px"),
+                    "reason": loc.get("reason"),
+                    "confidence": m5.get("confidence"),
+                    "bbox": m5.get("bbox"),
+                    "offset_x": m5.get("offset_x"),
+                    "offset_y": m5.get("offset_y"),
+                }
+            else:
+                out["hook_xy"] = None
             payload = json.dumps(out).encode()
             self.tx.sendto(payload, (self.args.server, self.args.telem_port))
             for host, port in self.extra_dests:

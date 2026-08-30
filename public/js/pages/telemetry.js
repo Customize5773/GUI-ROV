@@ -67,6 +67,7 @@ export const telemetryPage = {
             <button class="chip" id="teleClear">Clear</button>
           </div>
           <span class="badge" id="teleSamples">0 sampel</span>
+          <span class="badge" id="teleHookXY">Hook XY —</span>
         </div>
 
         <div class="thrusters" id="teleThrusters"></div>
@@ -102,6 +103,7 @@ export const telemetryPage = {
 
     this.els.status = root.querySelector("#teleStatus");
     this.els.samplesBadge = root.querySelector("#teleSamples");
+    this.els.hookXY = root.querySelector("#teleHookXY");
     root.querySelector("#teleStart").onclick = () => this._start();
     root.querySelector("#teleStop").onclick = () => this._stop();
     root.querySelector("#teleExcel").onclick = () => this._exportCsv();
@@ -131,7 +133,16 @@ export const telemetryPage = {
       // 0° adalah heading yang sah.
       headingSetpoint: Number.isFinite(d.heading_target) ? d.heading_target : null,
       poshold: d.poshold === true,
+      hook: d.hook_xy || {},
     };
+    if (this.els.hookXY) {
+      const h = real.hook;
+      const valid = h.status === "ok" && Number.isFinite(Number(h.x)) && Number.isFinite(Number(h.y));
+      this.els.hookXY.textContent = valid
+        ? `Hook XY ${Number(h.x).toFixed(2)}, ${Number(h.y).toFixed(2)} m`
+        : `Hook XY ${h.status || "—"}`;
+      this.els.hookXY.className = "badge " + (valid ? "badge--ok" : h.status ? "badge--active" : "");
+    }
     for (const c of CHANNELS) pushRing(this.buf[c.key], real[c.key], WINDOW);
     // PWM thruster nyata bila ROV mengirim (array µs: [T1..T6]); jika tidak, biarkan null
     if (Array.isArray(d.thrusters_pwm)) this.thrusters = d.thrusters_pwm;
@@ -150,6 +161,13 @@ export const telemetryPage = {
         real.headingSetpoint === null ? "" : real.headingSetpoint.toFixed(2),
         real.poshold ? 1 : 0,
         real.depthHold ? 1 : 0,
+        real.hook.status || "",
+        real.hook.hook_id || "",
+        Number.isFinite(Number(real.hook.x)) ? Number(real.hook.x).toFixed(3) : "",
+        Number.isFinite(Number(real.hook.y)) ? Number(real.hook.y).toFixed(3) : "",
+        Number.isFinite(Number(real.hook.z)) ? Number(real.hook.z).toFixed(3) : "",
+        Number.isFinite(Number(real.hook.sigma_xy_m)) ? Number(real.hook.sigma_xy_m).toFixed(3) : "",
+        Number.isFinite(Number(real.hook.confidence)) ? Number(real.hook.confidence).toFixed(3) : "",
       ].join(","));
     }
   },
@@ -209,7 +227,7 @@ export const telemetryPage = {
   },
   _exportCsv() {
     if (!this.csvRows.length) { log("Tidak ada sampel untuk diekspor", "warn"); return; }
-    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,pid_roll_p_out,pid_roll_i_out,pid_roll_d_out,pid_pitch_p_out,pid_pitch_i_out,pid_pitch_d_out,depth_error,heading_setpoint,poshold,depth_hold";
+    const header = "timestamp,yaw_deg,depth_m,pitch_deg,roll_deg,depth_setpoint,mode,thruster_vertical_pwm,pid_p_out,pid_i_out,pid_d_out,pid_roll_p_out,pid_roll_i_out,pid_roll_d_out,pid_pitch_p_out,pid_pitch_i_out,pid_pitch_d_out,depth_error,heading_setpoint,poshold,depth_hold,hook_xy_status,hook_id,hook_x_m,hook_y_m,hook_z_m,hook_sigma_xy_m,hook_confidence";
     const blob = new Blob([header + "\n" + this.csvRows.join("\n")], { type: "text/csv" });
     const trial = parseInt(document.getElementById("teleTrial")?.value, 10) || 1;
     const a = document.createElement("a");

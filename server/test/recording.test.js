@@ -51,7 +51,10 @@ test("tidak bisa mulai dua sesi sekaligus", () => {
 
 test("onTelemetry menulis trajectory.jsonl; field ternormalisasi", () => {
   const meta = recording.startSession([]);
-  recording.onTelemetry({ heading: 90, depth: 0.5, roll: 2, pitch: -1 });
+  recording.onTelemetry({ heading: 90, depth: 0.5, roll: 2, pitch: -1,
+    hook_xy: { status: "ok", hook_id: "A", x: 2.1, y: 0.8, z: 0.4,
+      sigma_xy_m: 0.06, reproj_px: 1.2, confidence: 0.91,
+      offset_x: 4, offset_y: -3, reason: "heading match" } });
   recording.onTelemetry({ heading: "bad", depth: 0.6, roll: null });
   recording.stopSession();
 
@@ -59,6 +62,13 @@ test("onTelemetry menulis trajectory.jsonl; field ternormalisasi", () => {
   assert.strictEqual(rows.length, 2);
   assert.strictEqual(rows[0].heading, 90);
   assert.strictEqual(rows[0].depth, 0.5);
+  assert.strictEqual(rows[0].hook_xy_status, "ok");
+  assert.strictEqual(rows[0].hook_id, "A");
+  assert.strictEqual(rows[0].hook_x, 2.1);
+  assert.strictEqual(rows[0].hook_y, 0.8);
+  assert.strictEqual(rows[0].hook_sigma_xy_m, 0.06);
+  assert.strictEqual(rows[0].hook_confidence, 0.91);
+  assert.strictEqual(rows[1].hook_x, null, "hook tanpa pose → null");
   assert.strictEqual(rows[1].heading, null, "heading non-numerik → null");
   assert.strictEqual(rows[1].roll, null);
   assert.ok(rows.every((r) => Number.isFinite(r.t)), "tiap baris berstempel waktu");

@@ -256,6 +256,7 @@ function stopSession(reason = "manual") {
 
 function onTelemetry(data) {
   if (!active || !data) return;
+  const hook = data.hook_xy || {};
   const line = {
     t: Date.now(),
     heading: numOrNull(data.heading),
@@ -264,6 +265,17 @@ function onTelemetry(data) {
     pitch: numOrNull(data.pitch),
     pos_n: numOrNull(data.pos_n),
     pos_e: numOrNull(data.pos_e),
+    hook_xy_status: hook.status ?? null,
+    hook_id: hook.hook_id ?? null,
+    hook_x: numOrNull(hook.x),
+    hook_y: numOrNull(hook.y),
+    hook_z: numOrNull(hook.z),
+    hook_sigma_xy_m: numOrNull(hook.sigma_xy_m),
+    hook_reproj_px: numOrNull(hook.reproj_px),
+    hook_confidence: numOrNull(hook.confidence),
+    hook_offset_x: numOrNull(hook.offset_x),
+    hook_offset_y: numOrNull(hook.offset_y),
+    hook_reason: hook.reason ?? null,
   };
   try { fs.appendFileSync(active.trajPath, JSON.stringify(line) + "\n"); } catch {}
   active.telemCount += 1;
