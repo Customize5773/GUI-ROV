@@ -13,7 +13,8 @@ log = logging.getLogger(__name__)
 class YOLOHookDetector:
     """Ubah deteksi kelas Hook YOLO menjadi skema deteksi hook yang sudah dipakai FSM."""
 
-    def __init__(self, weights, conf=0.35, imgsz=640, device=None):
+    def __init__(self, weights, conf=0.35, imgsz=640, device=None,
+                 augment=False, enhance_underwater=False):
         try:
             from ultralytics import YOLO
         except ImportError as exc:  # pragma: no cover - depends on laptop install
@@ -24,9 +25,20 @@ class YOLOHookDetector:
         self.conf = float(conf)
         self.imgsz = int(imgsz)
         self.device = device
+        self.augment = bool(augment)
+        self.enhance_underwater = bool(enhance_underwater)
         self.model = YOLO(self.weights)
-        log.info("[vision] YOLO hook aktif: %s (conf>=%.2f, imgsz=%d)",
-                 self.weights, self.conf, self.imgsz)
+        log.info("[vision] YOLO hook aktif: %s (conf>=%.2f, imgsz=%d, tta=%s, underwater=%s)",
+                 self.weights, self.conf, self.imgsz, self.augment,
+                 self.enhance_underwater)
+
+    @staticmethod
+    def _enhance(frame):
+        import cv2
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        light, a, b = cv2.split(lab)
+        light = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(light)
+        return cv2.cvtColor(cv2.merge((light, a, b)), cv2.COLOR_LAB2BGR)
 
     def detect(self, frame):
         """Kembalikan satu deteksi Hook dengan confidence tertinggi, atau None.
@@ -36,8 +48,10 @@ class YOLOHookDetector:
         """
         if frame is None:
             return None
-        result = self.model.predict(source=frame, conf=self.conf, imgsz=self.imgsz,
-                                    device=self.device, verbose=False)[0]
+        source = self._enhance(frame) if self.enhance_underwater else frame
+        result = self.model.predict(source=source, conf=self.conf, imgsz=self.imgsz,
+                                    device=self.device, augment=self.augment,
+                                    verbose=False)[0]
         boxes = result.boxes
         if boxes is None or len(boxes) == 0:
             return None

@@ -36,9 +36,12 @@ def main():
     ap.add_argument('--model', required=True)
     ap.add_argument('--map', required=True)
     ap.add_argument('--calib', required=True)
-    ap.add_argument('--conf', type=float, default=0.35)
+    ap.add_argument('--conf', type=float, default=0.20)
     ap.add_argument('--imgsz', type=int, default=640)
     ap.add_argument('--fps', type=float, default=10.0)
+    ap.add_argument('--no-tta', action='store_true', help='matikan test-time augmentation')
+    ap.add_argument('--no-underwater-enhance', action='store_true',
+                    help='matikan CLAHE untuk haze underwater')
     args = ap.parse_args()
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
@@ -47,7 +50,11 @@ def main():
         import cv2
         from vision.hook_localization import HookTracker, load_calibration, load_hook_map, localize_hook
         from vision.yolo_hook import YOLOHookDetector
-        detector = YOLOHookDetector(args.model, conf=args.conf, imgsz=args.imgsz)
+        detector = YOLOHookDetector(
+            args.model, conf=args.conf, imgsz=args.imgsz,
+            augment=not args.no_tta,
+            enhance_underwater=not args.no_underwater_enhance,
+        )
         calibration = load_calibration(args.calib)
         hook_map = load_hook_map(args.map)
     except Exception as exc:

@@ -10,11 +10,23 @@
 - Python 3 (rov_agent.py di RPI)
 - Ethernet laptop ↔ RPI dalam satu subnet (contoh: laptop `192.168.2.1`, RPI `192.168.2.2`)
 
-### Dependency Python
+### Dependency
+
+**Windows (laptop baru) — satu perintah:**
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install.ps1        # node + python + cek impor
+powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yolo  # + ultralytics/torch (~2,5 GB)
+```
+
+**Linux/manual:**
 
 ```bash
-pip install -r requirements.txt          # rov_agent.py + unit test di root
-pip install -r autonomy/requirements.txt # opsional: stack autonomy/visi
+(cd server && npm install)
+pip install -r requirements.txt                   # rov_agent.py + unit test di root
+pip install -r autonomy/requirements.txt          # stack autonomy/visi
+sudo apt install libzbar0                         # pyzbar
+pip install -r autonomy/requirements-laptop.txt   # opsional: YOLOv8 hook
 ```
 
 ### Konfigurasi environment
@@ -105,7 +117,9 @@ URL CAM 2/WALL diambil dari konfigurasi halaman Control/Setup. Backend otomatis
 menjalankan `autonomy/tools/hook_vision_worker.py`; tidak perlu menjalankan
 command YOLO atau `rov_link.py` khusus.
 
-YOLO memberi pusat/bounding-box untuk bantuan X/Y relatif. Pose X/Y map hanya
+Worker memakai TTA dan CLAHE underwater untuk menaikkan recall deteksi; confidence
+rendah tetap disaring oleh quality gate localization. YOLO memberi pusat/bounding-box
+untuk bantuan X/Y relatif. Pose X/Y map hanya
 diterbitkan jika kalibrasi `wall.npz`, geometri hook, heading/depth, identitas
 hook, dan gate PnP/tracker semuanya lolos. `hook_map.pool.yaml` adalah baseline
 kolam latihan; ukur ulang `camera_to_base`, dimensi hook, dan heading sebelum
