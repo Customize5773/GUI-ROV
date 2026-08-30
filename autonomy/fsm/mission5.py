@@ -1027,7 +1027,7 @@ class Mission5FSM:
         dan M5_ENGAGE (hold x/y)."""
         dt = self._servo_dt()
         pose = det.get('pose')
-        self.telemetry_out['active_cam'] = 'BOTTOM'
+        self.telemetry_out['active_cam'] = 'WALL'
         self.telemetry_out.update(bbox=None, confidence=None)  # bbox hook cuma dari cam WALL
         if pose is not None:                       # PBVS — pose 3D (m) bila terkalibrasi
             out = self.pose_servo.step(pose['x'], pose['y'], pose['z'],

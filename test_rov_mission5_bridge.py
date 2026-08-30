@@ -330,6 +330,14 @@ class TestWiringDiRovAgent(unittest.TestCase):
         self.assertIn('newX = this.hookPose.x', mission_ui)
         self.assertIn('else if (this.hookMapEnabled)', mission_ui)
 
+    def test_qr_docking_memakai_kamera_wall_dekat_gripper(self):
+        with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
+            bridge = fh.read()
+        self.assertIn('CUSTOM_MOTION_ENABLED = False', bridge)
+        self.assertIn('qr_url=cfg.get("wall_url")', bridge)
+        self.assertIn('hook_url=None', bridge)
+        self.assertIn('calib_file=cfg.get("calib_wall")', bridge)
+
 
 if __name__ == "__main__":
     unittest.main()

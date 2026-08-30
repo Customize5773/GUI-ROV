@@ -13,7 +13,7 @@ import time
 # ═══ EDIT MOTION CUSTOM DI SINI ═══
 # False = Mission5FSM lengkap (return, QR docking, unhook) tetap dipakai.
 # True  = jalankan CASE di bawah berurutan.
-CUSTOM_MOTION_ENABLED = True
+CUSTOM_MOTION_ENABLED = False
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
@@ -304,11 +304,11 @@ class Mission5Runner:
             vision = VisionPipeline(
                 source=cfg.get("vision_source", "usb"),
                 device=cfg.get("vision_device", 0),
-                qr_url=cfg.get("bottom_url"),
-                hook_url=cfg.get("wall_url"),
-                calib_file=cfg.get("calib_file"),
-                calib_file_qr=cfg.get("calib_bottom"),
-                calib_file_hook=cfg.get("calib_wall"),
+                # Kamera WALL segaris dengan gripper: satu stream untuk QR
+                # docking sekaligus hook, tanpa membuka URL yang sama dua kali.
+                qr_url=cfg.get("wall_url"),
+                hook_url=None,
+                calib_file=cfg.get("calib_wall"),
                 qr_length=cfg.get("qr_size", QR_SIDE_M),
                 hook_hsv_range=HOOK_COLOR_HSV_RANGE,
                 hook_min_area=HOOK_MIN_AREA,
