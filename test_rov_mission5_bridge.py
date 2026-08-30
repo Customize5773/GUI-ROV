@@ -54,6 +54,21 @@ class TestSkalaDanNamaAxis(unittest.TestCase):
         _adapter(sink).send(surge=100)
         self.assertEqual(sink["surge"], 1000)
 
+    def test_format_motion_lama_tetap_didukung(self):
+        sink, depths = {}, []
+        adapter = Mission5CommandAdapter(
+            set_axis=lambda **kw: sink.update(kw),
+            set_gripper=lambda c: sink.update(grip=c),
+            arm=lambda _o: None,
+            emergency_stop=lambda: None,
+            set_depth_target=lambda d: depths.append(d) or True,
+        )
+        adapter.send_motion((30, -10, 90, 0.4, "close"), yaw_command=20)
+        self.assertEqual((sink["surge"], sink["sway"], sink["yaw"], sink["heave"]),
+                         (300, -100, 200, 0))
+        self.assertEqual(depths, [0.4])
+        self.assertTrue(sink["grip"])
+
 
 class TestGripperDanFailsafe(unittest.TestCase):
     def test_gripper_hanya_dikirim_saat_diminta(self):
@@ -114,6 +129,7 @@ class TestRunnerGagalLunak(unittest.TestCase):
         ikut hilang."""
         pesan = []
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           config={"custom_motion_enabled": False},
                            log=pesan.append)
         r._import_autonomy = lambda: (_ for _ in ()).throw(
             ImportError("No module named 'cv2'"))
@@ -124,12 +140,14 @@ class TestRunnerGagalLunak(unittest.TestCase):
 
     def test_stop_saat_belum_pernah_start_aman(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           config={"custom_motion_enabled": False},
                            log=lambda *_: None)
         r.stop()                              # tidak boleh melempar
         self.assertFalse(r.is_running())
 
     def test_state_name_none_saat_tidak_jalan(self):
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           config={"custom_motion_enabled": False},
                            log=lambda *_: None)
         self.assertIsNone(r.state_name())
 
@@ -139,7 +157,9 @@ class TestRunnerGagalLunak(unittest.TestCase):
 
         pesan = []
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
-                           config={"start_state": "M5_REDIVE"}, log=pesan.append)
+                           config={"custom_motion_enabled": False,
+                                   "start_state": "M5_REDIVE"},
+                           log=pesan.append)
         r._import_autonomy = lambda: (object, State, object, 0.04, (), 0, 0.025)
         r._apply_motion_config = lambda _module: None
 
@@ -203,6 +223,41 @@ class TestAutonomousMotionConfig(unittest.TestCase):
 
         self.assertEqual(module.SEARCH_SPEED, 0)
         self.assertEqual(module.SCAN_CREEP_MAX_SPEED, 0)
+
+
+class TestCustomCaseMotion(unittest.TestCase):
+    def test_custom_case_bisa_diedit_tanpa_import_fsm_besar(self):
+        sink, history = {}, []
+        cases = [{"name": "COBA_MAJU", "duration_ms": 30,
+                  "motion": (12, 0, 90, 0.4, "hold")}]
+        adapter = Mission5CommandAdapter(
+            set_axis=lambda **kw: (sink.update(kw), history.append(dict(kw))),
+            set_gripper=lambda c: sink.update(grip=c),
+            arm=lambda _o: None,
+            emergency_stop=lambda: None,
+            set_alt_hold=lambda: True,
+            set_depth_target=lambda _d: True,
+        )
+        r = Mission5Runner(adapter, Mission5TelemetryAdapter(lambda: {"heading": 90}),
+                           config={"custom_motion_enabled": True,
+                                   "custom_cases": cases}, log=lambda *_: None)
+        r._import_autonomy = lambda: self.fail("custom mode tidak boleh import FSM besar")
+
+        self.assertTrue(r.start())
+        r._thread.join(timeout=1)
+        self.assertEqual(r.state_name(), "COMPLETE")
+        self.assertTrue(any(item["surge"] == 120 for item in history), history)
+        self.assertEqual(sink, {"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
+        self.assertTrue(r.telemetry()["custom_mode"])
+
+    def test_custom_case_tidak_aman_ditolak(self):
+        bad = [{"name": "TERLALU_BESAR", "duration_ms": 100,
+                "motion": (101, 0, 0, 0.4, "hold")}]
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           config={"custom_motion_enabled": True,
+                                   "custom_cases": bad}, log=lambda *_: None)
+        self.assertFalse(r.start())
+        self.assertIn("surge/sway", r.last_error)
 
 
 class TestWiringDiRovAgent(unittest.TestCase):

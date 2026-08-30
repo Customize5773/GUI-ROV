@@ -428,7 +428,9 @@
     </div>
   </div>
 
-  <!-- jsQR (vendored, offline) — expose window.jsQR untuk deteksi QR di Camera -->
+  <!-- jsQR (vendored, offline). Jalur utama memuatnya di dalam js/qr-worker.js;
+       window.jsQR di sini hanya dipakai fallback main-thread di core.js untuk
+       browser tanpa OffscreenCanvas/createImageBitmap. -->
   <script src="vendor/jsqr.min.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>

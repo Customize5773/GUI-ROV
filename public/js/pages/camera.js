@@ -276,34 +276,34 @@ export const cameraPage = {
   },
 
   /* loop scan QR dari kamera BOTTOM (indeks 0) */
-  _scanLoop() {
+  async _scanLoop() {
     this.scanRaf = requestAnimationFrame(() => this._scanLoop());
-    if (!this.visible || !window.jsQR) return;
+    if (!this.visible) return;
     const img = this.els.cells && this.els.cells[0] && this.els.cells[0].img;
     if (!img || !img.naturalWidth) return;
     // throttle: ~6x/detik
     const now = performance.now();
     if (this._lastScan && now - this._lastScan < 160) return;
     this._lastScan = now;
-    const code = this._decode(img);
+    const code = await this._decode(img);
     if (code) setClientQr(code.data);
     this._renderQR();
   },
 
-  _decode(source, w, h) {
-    const code = decodeClientQr(source, this.scanCanvas, 1280);
-    if (!code && this.els.qrStatus) {
+  async _decode(source, opts) {
+    const { qr } = await decodeClientQr(source, this.scanCanvas, 1280, opts);
+    if (!qr && this.els.qrStatus) {
       this.els.qrStatus.textContent = "Memindai…";
     }
-    return code;
+    return qr;
   },
 
   _scanFile(file) {
-    if (!file || !window.jsQR) return;
+    if (!file) return;
     const im = new Image();
     const url = URL.createObjectURL(file);
-    im.onload = () => {
-      const code = this._decode(im, im.naturalWidth, im.naturalHeight);
+    im.onload = async () => {
+      const code = await this._decode(im, { noDrop: true });
       setClientQr(code ? code.data : null);
       this._renderQR(code ? null : "Tidak ada QR pada gambar");
       URL.revokeObjectURL(url); // bebaskan memori setelah decode

@@ -23,6 +23,10 @@ const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
 const UDP_IN   = parseInt(process.env.UDP_IN   || "14551", 10); // telemetry dari ROV
 const UDP_OUT  = parseInt(process.env.UDP_OUT  || "14550", 10); // command ke ROV
 const RPI_ADDR = process.env.RPI_ADDR || "192.168.2.2";
+/* console.log di Node itu SINKRON ke stdout: kalau terminal lambat (atau
+   di-pipe ke file di disk sibuk), event loop ikut tertahan. Jalur telemetry
+   (10/s) dan command (60/s) karena itu bisu kecuali DEBUG=1. */
+const DEBUG = process.env.DEBUG === "1";
 // Dipakai /api/runs utk narik log trial JSONL dari Pi via rsync/ssh — lihat
 // bagian "Ambil Log Trial" di connect_raspi.md utk kenapa ini perlu (log
 // ditulis rov_mission5_bridge.py di FILESYSTEM PI, bukan di laptop).
@@ -493,6 +497,12 @@ const httpServer = http.createServer((req, res) => {
   });
 });
 
+/* Nagle (default aktif di Node) menahan frame kecil sampai ~40 ms menunggu data
+   berikutnya untuk digabung. Semua trafik kita justru frame kecil & sering:
+   ping/pong, perintah axis 15 Hz, telemetry 10 Hz. Matikan — ini langsung
+   terlihat di badge LAT dashboard. */
+httpServer.on("connection", (sock) => sock.setNoDelay(true));
+
 /* ----------------------- WebSocket ----------------------- */
 const wss = new WebSocketServer({ server: httpServer });
 const clients = new Set();
@@ -703,12 +713,13 @@ wss.on("connection", (ws, req) => {
         if (e) console.warn("[UDP] gagal kirim command:", e.message);
       });
 
-      const prettyValue =
-       typeof msg.value === "object"
-       ? JSON.stringify(msg.value)
-      : String(msg.value);
-
-      console.log(`[CMD] ${msg.name} = ${prettyValue} -> ${RPI_ADDR}:${UDP_OUT}`);
+      if (DEBUG) {
+        const prettyValue =
+          typeof msg.value === "object"
+            ? JSON.stringify(msg.value)
+            : String(msg.value);
+        console.log(`[CMD] ${msg.name} = ${prettyValue} -> ${RPI_ADDR}:${UDP_OUT}`);
+      }
     }
   });
 
@@ -740,11 +751,13 @@ udp.on("message", (buf, rinfo) => {
     return;
   }
 
-  console.log(
-    `[TELEM] from ${rinfo.address}:${rinfo.port} | ` +
-    `heading=${data.heading} roll=${data.roll} pitch=${data.pitch} ` +
-    `volt=${data.voltage} armed=${data.armed} mode=${data.mode}`
-  );
+  if (DEBUG) {
+    console.log(
+      `[TELEM] from ${rinfo.address}:${rinfo.port} | ` +
+      `heading=${data.heading} roll=${data.roll} pitch=${data.pitch} ` +
+      `volt=${data.voltage} armed=${data.armed} mode=${data.mode}`
+    );
+  }
 
   broadcast({ type: "telemetry", data, recv: Date.now() });
 });

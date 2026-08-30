@@ -843,22 +843,28 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
   },
 
   /* param_get bersifat fire-and-forget: agent mengirim param_request_read_send
-     tanpa retry, jadi SATU paket hilang di link serial/UDP = tidak ada
-     PARAM_VALUE = badge diam di "Belum dibaca dari FC" selamanya, tanpa
-     operator tahu apakah FC bisu atau dia yang lupa menekan tombol. Satu retry
-     + satu pesan kegagalan menutup lubang itu. */
+     tanpa retry, jadi paket yang hilang di link serial/UDP = tidak ada
+     PARAM_VALUE untuk param itu. Sukses diukur per-NAMA (_pidReadReceived),
+     bukan "ada batch yang datang" — kalau cuma diukur dari ada-tidaknya batch,
+     8 dari 14 param yang nyasar sudah cukup membatalkan retry dan badge
+     tetap hijau "Dari FC" walau 6 field sisanya diam-diam menampilkan nilai
+     basi. Satu retry + badge yang melaporkan jumlah yang hilang menutup
+     lubang itu. */
   readPidFromVehicle(retry = true) {
     for (const name of PID_PARAM_NAMES) sendCmd("param_get", name);
 
     clearTimeout(this._pidReadTimer);
     this._pidReadSeq = (this._pidReadSeq || 0) + 1;
     const seq = this._pidReadSeq;
+    this._pidReadReceived = new Set();
     this._pidReadTimer = setTimeout(() => {
       // Batch yang datang lebih dulu menaikkan _pidReadSeq lewat onParamBatch,
       // jadi timer yang basi tidak boleh berbuat apa-apa.
-      if (seq !== this._pidReadSeq || this._pidReadOk === seq) return;
+      if (seq !== this._pidReadSeq) return;
+      const hilang = PID_PARAM_NAMES.length - this._pidReadReceived.size;
+      if (hilang === 0) return;
       if (retry) { this.readPidFromVehicle(false); return; }
-      this.els.pidSrc.textContent = "FC tidak menjawab";
+      this.els.pidSrc.textContent = `FC tidak menjawab (${this._pidReadReceived.size}/${PID_PARAM_NAMES.length})`;
       this.els.pidSrc.className = "badge badge--warn";
     }, 2000);
   },
@@ -870,14 +876,18 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
      kunci yang konsisten di kedua sisi. */
   onParamBatch(msg) {
     if (!msg || !Array.isArray(msg.params) || !this.els.pidSrc) return;
+    if (!this._pidReadReceived) this._pidReadReceived = new Set();
 
-    let terisi = 0;
     for (const p of msg.params) {
       const field = PID_FIELD_BY_PARAM[p && p.name];
       if (!field) continue;
 
       const input = document.getElementById(field.id);
       if (!input || !Number.isFinite(Number(p.value))) continue;
+
+      // FC sudah menjawab param ini — hitung sebagai "terjawab" terlepas dari
+      // apakah field-nya di-skip di bawah karena sedang diedit operator.
+      this._pidReadReceived.add(p.name);
 
       /* Jangan menimpa yang sedang disiapkan operator. param_batch bisa datang
          kapan saja — terutama saat halaman Vehicle memuat ulang seluruh tabel
@@ -889,11 +899,10 @@ root.querySelector("#suGainDown")?.addEventListener("click", () => {
       input.value = String(Number(Number(p.value).toFixed(6)));
       const [axis, gain] = field.path;
       CONFIG.PID[axis][gain] = Number(p.value);
-      terisi++;
     }
 
-    if (terisi) {
-      this._pidReadOk = this._pidReadSeq;   // matikan timer "FC tidak menjawab"
+    if (this._pidReadReceived.size === PID_PARAM_NAMES.length) {
+      clearTimeout(this._pidReadTimer);
       const jam = new Date().toLocaleTimeString();
       this.els.pidSrc.textContent = `Dari FC · ${jam}`;
       this.els.pidSrc.className = "badge badge--ok";

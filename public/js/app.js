@@ -757,24 +757,9 @@ function renderQrPreviewImage(raw) {
 /* Skor ketajaman ("focus peaking" ala kamera foto) — varians Laplacian 4-neighbor
    di atas grayscale. Proxy standar "seberapa tajam", tanpa training/model apa pun.
    Skala BEDA dari cv2.Laplacian(CV_64F).var() Python (kernel & ukuran gambar beda) —
-   dipakai RELATIF (lihat renderFocusReadout), bukan dibandingkan lintas-bahasa. */
-function sharpnessScore(imgData, w, h) {
-  const gray = new Float32Array(w * h);
-  const d = imgData.data;
-  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
-    gray[p] = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
-  }
-  let sum = 0, sumSq = 0, n = 0;
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const idx = y * w + x;
-      const lap = 4 * gray[idx] - gray[idx - 1] - gray[idx + 1] - gray[idx - w] - gray[idx + w];
-      sum += lap; sumSq += lap * lap; n++;
-    }
-  }
-  const mean = sum / n;
-  return sumSq / n - mean * mean;
-}
+   dipakai RELATIF (lihat renderFocusReadout), bukan dibandingkan lintas-bahasa.
+   Perhitungannya sendiri kini di qr-worker.js, dari pembacaan piksel yang sama
+   dengan decode QR — nilainya identik, hanya tidak lagi memblokir main thread. */
 
 /* Ambang RELATIF thd puncak yang baru terlihat (bukan angka mutlak di-hardcode) --
    pencahayaan/kamera beda bikin skala mentah beda, "mendekati puncak terakhir"
@@ -791,18 +776,19 @@ function renderFocusReadout(score) {
   if (els.qrFocusReadout) els.qrFocusReadout.classList.toggle("is-ok", isSharp);
 }
 
-function scanControlQR() {
+async function scanControlQR() {
   if (currentPageName !== "control") return;
-  if (!window.jsQR || !els.camImg || !els.camImg.naturalWidth) return;
+  if (!els.camImg || !els.camImg.naturalWidth) return;
   const now = performance.now();
   if (now - _lastQrScan < 200) return;
   _lastQrScan = now;
   try {
-    const code = decodeClientQr(els.camImg, qrScanCanvas, 1280);
-    setClientQr(code ? code.data : null);
+    // decode + skor fokus dikerjakan di worker (qr-worker.js) dari SATU pembacaan
+    // piksel; dulu main thread memanggil getImageData dua kali di sini.
+    const { qr, sharpness } = await decodeClientQr(els.camImg, qrScanCanvas, 1280, { sharpness: true });
+    setClientQr(qr ? qr.data : null);
     renderQrReadout();
-    const ctx = qrScanCanvas.getContext("2d", { willReadFrequently: true });
-    renderFocusReadout(sharpnessScore(ctx.getImageData(0, 0, qrScanCanvas.width, qrScanCanvas.height), qrScanCanvas.width, qrScanCanvas.height));
+    if (sharpness !== null) renderFocusReadout(sharpness);
     renderQrPreviewImage(getQrState().raw);
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
@@ -1180,10 +1166,14 @@ function renderControlCamPiP(on) {
   const no = document.getElementById("ctrlCamPipNo");
   if (!cv) return;
 
+  // scene.js berhenti render saat container-nya tak terlihat; PiP butuh tetap jalan
+  if (scene && scene.setKeepAlive) scene.setKeepAlive(!!on);
+
   if (on) {
     const ctx = cv.getContext("2d");
     const loop = () => {
       controlCamPiPRaf = requestAnimationFrame(loop);
+      if (document.hidden) return;
       const w = cv.clientWidth, h = cv.clientHeight;
       if (!w || !h) return;
       if (cv.width !== w) cv.width = w;
@@ -2118,6 +2108,19 @@ function setControlMode(mode) {
 els.btnMode.onclick = () => {
   setControlMode(controlMode === "manual" ? "autonomous" : "manual");
 };
+
+/* Ukur sumbatan main thread: buka GUI dengan ?perf=1 di URL. Setiap tugas yang
+   memblokir >50 ms dilaporkan ke panel log. Badge LAT mengukur RTT ping/pong dari
+   main thread, jadi tugas panjang di sini langsung menaikkan angka LAT — inilah
+   cara membedakan "jaringan lambat" dari "browser sibuk". Mati secara default. */
+if (new URLSearchParams(location.search).has("perf") && window.PerformanceObserver) {
+  try {
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) log(`LONGTASK ${Math.round(e.duration)} ms`, "warn");
+    }).observe({ entryTypes: ["longtask"] });
+    log("Monitor longtask aktif (?perf=1)", "ok");
+  } catch (_) { /* entryType tak didukung browser ini */ }
+}
 
 /*  mulai  */
 log("HYDROSHIP dashboard siap", "ok");
