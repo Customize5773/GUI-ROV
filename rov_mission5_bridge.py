@@ -204,7 +204,10 @@ class Mission5Runner:
 
         fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision,
                           marked_heading=marked_heading,
-                          marked_depth=marked_depth)
+                          marked_depth=marked_depth,
+                          hook_map_file=cfg.get("hook_map"),
+                          hook_calib_file=(cfg.get("calib_wall")
+                                           if cfg.get("hook_map") else None))
 
         def run():
             try:
@@ -254,6 +257,7 @@ class Mission5Runner:
         data = dict(getattr(fsm, "telemetry_out", {}) or {}) if fsm else {}
         data.setdefault("state", self.state_name())
         data["running"] = self.is_running()
+        data["hook_map_enabled"] = bool(self._cfg.get("hook_map"))
         data["motion_config"] = dict(self.motion_config)
         data["motion_calibration"] = dict(MOTION_CALIBRATION)
         return data

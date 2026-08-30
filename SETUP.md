@@ -62,6 +62,30 @@ journalctl -u rov-agent -f
 
 > Jika `status` menunjukkan `active (running)`, RPI siap.
 
+### Opsi lokalisasi X/Y dari hook
+
+Fitur ini mati secara default dan hanya menjadi pengamat; hasilnya tidak dipakai
+untuk mengendalikan thruster atau menggantikan docking QR Mission 5.
+
+```bash
+cd /home/hydroships/rov-agent
+cp config/hook_map.example.yaml config/hook_map.local.yaml
+# Ukur dan isi x_axis_heading_deg, posisi hook, serta camera_to_base.
+python3 -m vision.hook_localization --map config/hook_map.local.yaml
+```
+
+Setelah map lolos validasi, tambahkan ke unit `rov-agent.service`:
+
+```ini
+[Service]
+Environment=M5_HOOK_MAP=config/hook_map.local.yaml
+```
+
+Kemudian jalankan `sudo systemctl daemon-reload` dan
+`sudo systemctl restart rov-agent`. Halaman Mission akan menampilkan sumber
+`HOOK MAP`, posisi X/Y arena, dan estimasi ketidakpastiannya. Status selain
+`ok` menahan posisi terakhir dan tidak menerbitkan koordinat baru.
+
 ---
 
 ## 2. Sisi Laptop (Server Node.js)

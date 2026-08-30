@@ -1631,6 +1631,9 @@ def setup_mission5_runner():
         "wall_url": os.environ.get("M5_WALL_URL", "http://127.0.0.1:8080/stream"),
         "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_BOTTOM_DEFAULT),
         "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_WALL_DEFAULT),
+        # Lokalisasi X/Y berbasis landmark hook. Default MATI; map wajib berisi
+        # koordinat hasil ukur, bukan contoh/null (lihat hook_map.example.yaml).
+        "hook_map": os.environ.get("M5_HOOK_MAP") or None,
         "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
         # (lihat Mission5Runner._apply_configs). Arena lomba:
