@@ -6,6 +6,7 @@ command body-axis bounded kepada agent.
 """
 
 import math
+import os
 import threading
 import time
 
@@ -130,6 +131,30 @@ class Mission5Runner:
         self._custom_elapsed_ms = 0.0
         self.motion_config = dict(DEFAULT_MOTION_CONFIG)
         self.last_error = None
+        self._run_log_path = None
+
+    def _new_runlog(self, start_state, marked_heading=None, marked_depth=None):
+        self._run_log_path = None
+        try:
+            try:
+                from tools.run_log import RunLogger
+            except ImportError:
+                from autonomy.tools.run_log import RunLogger
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            stamp += f"_{int(time.time() * 1000) % 1000:03d}"
+            path = os.path.join(self._cfg.get("run_log_dir", "logs"),
+                                f"run_{stamp}.jsonl")
+            runlog = RunLogger(path)
+            self._run_log_path = path
+            runlog.event("config", start_state=getattr(start_state, "name", str(start_state)),
+                         marked_heading=marked_heading, marked_depth=marked_depth,
+                         motion_config=dict(self.motion_config),
+                         hook_map=self._cfg.get("hook_map"))
+            self._log(f"[M5] Run log: {path}")
+            return runlog
+        except Exception as exc:
+            self._log(f"[M5] WARNING — run log gagal dibuat: {exc}")
+            return None
 
     def _import_autonomy(self):
         from fsm.mission5 import (Mission5FSM, State, QR_SIDE_M,
@@ -208,6 +233,7 @@ class Mission5Runner:
             self.last_error = "ALT_HOLD gagal"
             self._log("[CUSTOM] ABORT — ALT_HOLD gagal")
             return False
+        runlog = self._new_runlog("CUSTOM")
         self._custom_stop.clear()
         self._custom_state = "STARTING"
 
@@ -221,6 +247,9 @@ class Mission5Runner:
                     started = time.monotonic()
                     duration_ms = float(case["duration_ms"])
                     self._log(f"[CUSTOM] {self._custom_state} -> {self._custom_motion}")
+                    if runlog:
+                        runlog.event("custom_case", name=self._custom_state,
+                                     duration_ms=duration_ms, motion=self._custom_motion)
                     while not self._custom_stop.is_set():
                         self._custom_elapsed_ms = (time.monotonic() - started) * 1000.0
                         if self._custom_elapsed_ms >= duration_ms:
@@ -236,6 +265,11 @@ class Mission5Runner:
                 self._log(f"[CUSTOM] ERROR: {exc}")
             finally:
                 self._cmd.stop_all()
+                if runlog:
+                    alasan = ("dibatalkan" if self._custom_stop.is_set() else
+                              "error" if self._custom_state == "ERROR" else "selesai")
+                    runlog.close(alasan=alasan,
+                                 state_akhir=self._custom_state)
                 self._log(f"[CUSTOM] selesai state={self._custom_state}")
 
         with self._lock:
@@ -337,17 +371,28 @@ class Mission5Runner:
                           hook_map_file=cfg.get("hook_map"),
                           hook_calib_file=(cfg.get("calib_wall")
                                            if cfg.get("hook_map") else None))
+        runlog = self._new_runlog(start_state, marked_heading, marked_depth)
+        fsm.runlog = runlog
 
         def run():
+            alasan = "selesai"
             try:
                 fsm.start(start_state=start_state, wait_mode=False)
             except Exception as exc:
+                alasan = f"error: {exc}"
                 self._log(f"[M5] FSM berhenti karena error: {exc}")
             finally:
                 try:
                     vision.stop()
                 except Exception:
                     pass
+                if runlog:
+                    state_akhir = getattr(fsm._state, "name", str(fsm._state))
+                    runlog.close(alasan=("dibatalkan" if state_akhir == "ABORT" else alasan),
+                                 state_akhir=state_akhir, skor=fsm.score(),
+                                 target_wall=fsm._target_wall,
+                                 hang_used_fallback=fsm._hang_used_fallback,
+                                 dock_used_fallback=fsm._dock_used_fallback)
                 self._log("[M5] thread FSM selesai")
 
         with self._lock:
@@ -396,4 +441,5 @@ class Mission5Runner:
             data["elapsed_ms"] = round(self._custom_elapsed_ms, 1)
         data["motion_config"] = dict(self.motion_config)
         data["motion_calibration"] = dict(MOTION_CALIBRATION)
+        data["run_log"] = self._run_log_path
         return data

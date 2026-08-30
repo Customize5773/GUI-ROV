@@ -4,7 +4,9 @@
 """
 
 import ast
+import json
 import os
+import tempfile
 import threading
 import unittest
 
@@ -123,6 +125,22 @@ class TestTelemetryAdapter(unittest.TestCase):
 
 
 class TestRunnerGagalLunak(unittest.TestCase):
+    def test_run_log_otomatis_bernama_tanggal_dan_mencatat_config(self):
+        with tempfile.TemporaryDirectory() as log_dir:
+            r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                               config={"run_log_dir": log_dir}, log=lambda *_: None)
+            runlog = r._new_runlog("M5_REDIVE", 90.0, 0.385)
+            self.assertIsNotNone(runlog)
+            runlog.close(state_akhir="ABORT")
+            self.assertRegex(os.path.basename(runlog.path),
+                             r"^run_\d{8}_\d{6}_\d{3}\.jsonl$")
+            with open(runlog.path, encoding="utf-8") as f:
+                events = [json.loads(line) for line in f]
+            self.assertEqual(events[0]["kind"], "config")
+            self.assertEqual(events[0]["marked_depth"], 0.385)
+            self.assertEqual(events[-1]["kind"], "end")
+            self.assertEqual(r.telemetry()["run_log"], runlog.path)
+
     def test_start_tanpa_paket_autonomy_tidak_melempar(self):
         """Pi produksi belum tentu punya autonomy/+opencv. Import gagal harus
         berarti 'misi 5 tak tersedia', BUKAN agent mati dan kontrol manual
@@ -240,7 +258,9 @@ class TestCustomCaseMotion(unittest.TestCase):
         )
         r = Mission5Runner(adapter, Mission5TelemetryAdapter(lambda: {"heading": 90}),
                            config={"custom_motion_enabled": True,
-                                   "custom_cases": cases}, log=lambda *_: None)
+                                   "custom_cases": cases,
+                                   "run_log_dir": tempfile.gettempdir()},
+                           log=lambda *_: None)
         r._import_autonomy = lambda: self.fail("custom mode tidak boleh import FSM besar")
 
         self.assertTrue(r.start())
