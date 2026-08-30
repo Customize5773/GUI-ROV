@@ -130,7 +130,7 @@ SERVO_INVERT = dict(invert_sway=False, invert_vert=False, invert_surge=False, in
 M5_ENGAGE_SURGE    = 15       # % surge merayap seat payload ke gripper
 M5_UNHOOK_VERT     = 30       # % vert angkat lubang payload lepas dari ujung hook
 M5_UNHOOK_SURGE    = -20      # % surge tarik mundur agar lubang bebas dari candy-cane
-UNHOOK_LIFT_M      = 0.12     # m naik: kaki hook 0,09 m + margin 0,03 m
+UNHOOK_LIFT_M      = 0.12     # m naik sementara; tinggi bukaan U tidak diberi di guidebook
 UNHOOK_LIFT_T      = 3.0      # detik angkat khusus jalur fallback tanpa feedback
 UNHOOK_PULL_T      = 2.0      # detik fase tarik mundur
 
