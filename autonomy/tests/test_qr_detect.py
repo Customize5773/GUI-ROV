@@ -164,6 +164,27 @@ def test_decode_qr_pts_map_to_original_frame_coords():
     assert abs(cx - exp_cx) < w * 0.5 and abs(cy - exp_cy) < h * 0.5
 
 
+def test_decode_tracked_roi_maps_points_back_to_frame(monkeypatch):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    frame = np.zeros((200, 300, 3), np.uint8)
+    seen = {}
+
+    def fake_decode(crop, enhance=True):
+        seen["shape"] = crop.shape[:2]
+        return [{"data": "B", "pts": np.float32([[5, 6], [15, 6], [15, 16], [5, 16]])}]
+
+    monkeypatch.setattr(qd, "decode_qr", fake_decode)
+    out = qd._decode_tracked_roi(frame, np.float32([[100, 80], [120, 80],
+                                                       [120, 100], [100, 100]]))
+    assert out[0]["data"] == "B"
+    assert seen["shape"] == (56, 56)
+    np.testing.assert_allclose(out[0]["pts"],
+                               np.float32([[87, 68], [97, 68], [97, 78], [87, 78]]))
+
+
 def test_decode_qr_no_qr_returns_empty():
     cv2 = pytest.importorskip("cv2")
     np = pytest.importorskip("numpy")

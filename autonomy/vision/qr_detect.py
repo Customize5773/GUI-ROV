@@ -119,6 +119,7 @@ STACK_N      = 3       # jumlah frame utk median-stack jenjang-7 (lawan riak/kau
 RECTIFY_SIZE = 500     # ukuran kanvas QR setelah diluruskan
 RECTIFY_MARGIN = 1.5   # margin quiet-zone saat perspective warp
 ZXING_SCALES = (2.0, 4.0)  # dibuktikan pada rekaman payload tidur: modul kecil perlu diperbesar
+TRACK_MAX_AGE = 2.0       # deteksi valid boleh membuka ROI lokal selama 2 detik
 # Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
 # + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
 # global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
@@ -370,6 +371,31 @@ def decode_qr(frame, enhance=True):
     return []
 
 
+def _decode_tracked_roi(frame, pts):
+    """Decode ulang area QR terakhir setelah decode penuh gagal.
+
+    Payload yang diam sering tetap berada di area yang sama, sementara caustics
+    membuat decoder global gagal secara selang-seling. Crop lokal memperbesar QR
+    relatif terhadap background tanpa mengubah payload; titik dikembalikan ke
+    koordinat frame asli.
+    """
+    q = np.asarray(pts, dtype=np.float32).reshape(-1, 2) if pts is not None else None
+    if q is None or len(q) < 4:
+        return []
+    h, w = frame.shape[:2]
+    x0, y0 = q.min(axis=0)
+    x1, y1 = q.max(axis=0)
+    pad = 0.9 * max(x1 - x0, y1 - y0)
+    xa, ya = max(0, int(x0 - pad)), max(0, int(y0 - pad))
+    xb, yb = min(w, int(x1 + pad)), min(h, int(y1 + pad))
+    if xb - xa < 24 or yb - ya < 24:
+        return []
+    out = decode_qr(frame[ya:yb, xa:xb], enhance=True)
+    for det in out:
+        det['pts'] = np.asarray(det['pts'], dtype=np.float32) + (xa, ya)
+    return out
+
+
 class VisionPipeline:
     """
     Pipeline deteksi QR payload untuk misi ROV KKI 2026.
@@ -465,6 +491,8 @@ class VisionPipeline:
         self._cap_hook = None
         self._last_result: Optional[dict] = None
         self._last_qr: Optional[dict] = None      # deteksi QR terakhir (scan wall + docking)
+        self._last_qr_pts = None                  # ROI tracking setelah decode valid
+        self._last_qr_pts_time = 0.0
         self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
         self._last_wall_hint: Optional[dict] = None   # tebakan CNN saat decode GAGAL (opt-in)
         self._frame_buf = deque(maxlen=STACK_N)   # buffer utk jenjang-7 median-stack (lawan riak)
@@ -746,7 +774,14 @@ class VisionPipeline:
             frame = self._undistort(frame, self._K, self._dist, self._undist_cache)
 
             # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
-            dets = decode_qr(frame)
+            dets = []
+            if self._last_qr_pts is not None:
+                if time.time() - self._last_qr_pts_time <= TRACK_MAX_AGE:
+                    dets = _decode_tracked_roi(frame, self._last_qr_pts)
+                else:
+                    self._last_qr_pts = None
+            if not dets:
+                dets = decode_qr(frame)
             if not dets:
                 dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
             if not dets:
@@ -769,6 +804,9 @@ class VisionPipeline:
                     result['pose'] = self._estimate_pose_pts(
                         ordered, self.qr_length, K=self._K, dist=np.zeros_like(self._dist))
                 self._dispatch(result)
+            if dets:
+                self._last_qr_pts = np.asarray(dets[0]['pts'], dtype=np.float32)
+                self._last_qr_pts_time = time.time()
 
             # Deteksi hook (CAM WALL) — target geometrik non-QR utk HANG (misi 3b) & DOCK (misi 4).
             # focal_px dari kalibrasi (bila ada) → detect_hook mengisi pose (PBVS), else IBVS.
@@ -817,7 +855,14 @@ class VisionPipeline:
                 continue
 
             frame = self._undistort(frame, K, dist, self._undist_cache_qr)
-            dets = decode_qr(frame)
+            dets = []
+            if self._last_qr_pts is not None:
+                if time.time() - self._last_qr_pts_time <= TRACK_MAX_AGE:
+                    dets = _decode_tracked_roi(frame, self._last_qr_pts)
+                else:
+                    self._last_qr_pts = None
+            if not dets:
+                dets = decode_qr(frame)
             if not dets:
                 dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
             if not dets:
@@ -838,6 +883,9 @@ class VisionPipeline:
                     result['pose'] = self._estimate_pose_pts(
                         ordered, self.qr_length, K=K, dist=np.zeros_like(dist))
                 self._dispatch(result)
+            if dets:
+                self._last_qr_pts = np.asarray(dets[0]['pts'], dtype=np.float32)
+                self._last_qr_pts_time = time.time()
 
             elapsed = time.time() - t_start
             time.sleep(max(0, interval - elapsed))
