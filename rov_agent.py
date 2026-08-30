@@ -1602,7 +1602,7 @@ M5_CALIB_WALL_DEFAULT = "vision/calibration/wall.npz"
 # kosong: default kosong berarti konstanta modul fsm/mission5.py, yang HANYA
 # benar bila kolam persis 0,9 m (Guidebook mengukur hook 0,45 m dari DASAR,
 # sedangkan HOOK_DEPTH default 0,45 m dari PERMUKAAN).
-M5_CONFIG_DEFAULT = "config/rov_tuned.yaml,config/pool_kki_running.yaml"
+M5_CONFIG_DEFAULT = "config/rov_tuned.yaml,config/pool_trial.yaml"
 
 
 def setup_mission5_runner():
