@@ -8,12 +8,19 @@ const SONAR = 0x14d8ff;
 const MAX_POINTS = 3000;
 const VEL_SCALE = 0.02;     // unit dunia per (satuan-thrust · detik)
 const DEPTH_SCALE = 0.5;    // unit dunia per meter kedalaman
-const CRUISE_SURGE = 25;    // dorongan maju otomatis saat auto-cruise
+const TICK_MS = 200;        // integrasi posisi @5Hz, lepas dari rAF render (hemat CPU saat halaman lain aktif)
+const TICK_DT = TICK_MS / 1000;
+
+// warna & gaya garis per keandalan sumber posisi X/Z: HOOK MAP (vision, akurat) >
+// EKF (estimasi ArduSub, tanpa GPS/DVL) > Estimasi (dead-reckoning dari stick, fiksi)
+const SRC_STYLE = {
+  hook: { color: 0x37d392, label: "hook", dashed: false },
+  ekf:  { color: 0xf5a524, label: "ekf", dashed: false },
+  est:  { color: 0x8a94a6, label: "est", dashed: true },
+};
 
 export const missionPage = {
   three: null,
-  recording: false,
-  autoCruise: true,
   follow: false,
   pos: new THREE.Vector3(0, 0, 0),
   heading: 0,
@@ -30,8 +37,9 @@ export const missionPage = {
   count: 0,
   distance: 0,
   visible: false,
+  armed: false,
   raf: null,
-  clock: null,
+  tickTimer: null,
   els: {},
 
   init(root) {
@@ -52,14 +60,10 @@ export const missionPage = {
         </div>
         <div class="mission__stage" id="missionStage">
           <div class="mission__btns">
-            <button class="chip chip--go" id="msStart">Start</button>
-            <button class="chip" id="msPause">Pause</button>
             <button class="chip" id="msReset">Reset</button>
-            <button class="chip" id="msCruise" aria-pressed="true">Auto-cruise</button>
             <button class="chip" id="msFollow" aria-pressed="false">Follow</button>
             <button class="chip" id="msSave">Save PNG</button>
           </div>
-          <div class="mission__hint" id="msHint">Tekan <b>Start</b> untuk mulai merekam lintasan</div>
         </div>
       </div>`;
 
@@ -68,16 +72,8 @@ export const missionPage = {
     this.els.d = root.querySelector("#msD");
     this.els.dist = root.querySelector("#msDist");
     this.els.src = root.querySelector("#msSrc");
-    this.els.hint = root.querySelector("#msHint");
 
-    root.querySelector("#msStart").onclick = () => this._start();
-    root.querySelector("#msPause").onclick = () => this._pause();
     root.querySelector("#msReset").onclick = () => this._reset();
-    const cruiseBtn = root.querySelector("#msCruise");
-    cruiseBtn.onclick = () => {
-      this.autoCruise = !this.autoCruise;
-      cruiseBtn.setAttribute("aria-pressed", String(this.autoCruise));
-    };
     const followBtn = root.querySelector("#msFollow");
     followBtn.onclick = () => {
       this.follow = !this.follow;
@@ -86,7 +82,8 @@ export const missionPage = {
     root.querySelector("#msSave").onclick = () => this._savePng();
 
     this._buildScene(root.querySelector("#missionStage"));
-    this.clock = new THREE.Clock();
+    // rekam otomatis begitu halaman dibuka, terus berjalan (lepas dari rAF) sampai server berhenti
+    if (!this.tickTimer) this.tickTimer = setInterval(() => this._tick(), TICK_MS);
   },
 
   _buildScene(container) {
@@ -123,7 +120,9 @@ export const missionPage = {
     const pathGeo = new THREE.BufferGeometry();
     pathGeo.setAttribute("position", new THREE.BufferAttribute(this.points, 3));
     pathGeo.setDrawRange(0, 0);
-    const path = new THREE.Line(pathGeo, new THREE.LineBasicMaterial({ color: SONAR, transparent: true, opacity: 0.9 }));
+    const pathMatSolid = new THREE.LineBasicMaterial({ color: SRC_STYLE.hook.color, transparent: true, opacity: 0.9 });
+    const pathMatDashed = new THREE.LineDashedMaterial({ color: SRC_STYLE.est.color, dashSize: 0.3, gapSize: 0.2, transparent: true, opacity: 0.9 });
+    const path = new THREE.Line(pathGeo, pathMatSolid);
     scene.add(path);
 
     // marker ROV
@@ -133,10 +132,8 @@ export const missionPage = {
       new THREE.MeshStandardMaterial({ color: 0xcfd9e0, roughness: 0.5 })
     );
     rov.add(body);
-    const bow = new THREE.Mesh(
-      new THREE.ConeGeometry(0.16, 0.4, 16),
-      new THREE.MeshStandardMaterial({ color: SONAR, emissive: SONAR, emissiveIntensity: 0.7 })
-    );
+    const bowMat = new THREE.MeshStandardMaterial({ color: SONAR, emissive: SONAR, emissiveIntensity: 0.7 });
+    const bow = new THREE.Mesh(new THREE.ConeGeometry(0.16, 0.4, 16), bowMat);
     bow.rotation.x = Math.PI / 2;
     bow.position.z = 0.5;
     rov.add(bow);
@@ -154,7 +151,8 @@ export const missionPage = {
     sMark.visible = false; eMark.visible = false;
     scene.add(sMark); scene.add(eMark);
 
-    this.three = { scene, camera, renderer, controls, container, path, pathGeo, rov, drop, dropGeo, sMark, eMark };
+    this.three = { scene, camera, renderer, controls, container, path, pathGeo, pathMatSolid, pathMatDashed, rov, bowMat, drop, dropGeo, sMark, eMark };
+    this._srcKey = null;
     this._loadRovModel(rov);
     this._resize = () => {
       const w2 = container.clientWidth, h2 = container.clientHeight;
@@ -197,7 +195,6 @@ export const missionPage = {
   onShow() {
     this.visible = true;
     if (this._resize) this._resize();
-    if (this.clock) this.clock.getDelta(); // buang delta menumpuk saat tersembunyi
     if (!this.raf) this._loop();
   },
   onHide() {
@@ -206,6 +203,7 @@ export const missionPage = {
   },
 
   onTelemetry(d) {
+    this.armed = d.armed === true;
     if (Number.isFinite(d.heading)) this.heading = ((d.heading % 360) + 360) % 360;
     if (Number.isFinite(d.depth)) this.depth = d.depth;
     this.attitude.roll = d.roll || 0;
@@ -223,45 +221,58 @@ export const missionPage = {
       : null;
   },
 
-  _loop() {
-    this.raf = requestAnimationFrame(() => this._loop());
-    if (!this.visible || !this.three) return;
-    const dt = Math.min(this.clock.getDelta(), 0.1);
+  // integrasi posisi + rekam titik: jalan terus @5Hz lewat setInterval, lepas dari
+  // rAF/visibility halaman, jadi trajectory tak berhenti saat pilot pindah tab lain.
+  _tick() {
+    if (!this.three) return;
+    if (!this.armed) return; // disarm = misi berhenti, jangan lanjut rekam lintasan
     const hr = THREE.MathUtils.degToRad(this.heading);
     // heading 0 = utara (-Z); timur = +X
 
-    if (this.recording) {
-      let newX, newZ;
-      if (this.hookPose) {
-        // hook-map memakai koordinat arena absolut: x panjang, y lebar.
-        newX = this.hookPose.x;
-        newZ = -this.hookPose.y;
-      } else if (this.hookMapEnabled) {
-        // Map aktif tetapi observasi belum valid/ambigu: tahan posisi terakhir.
-        // Jangan diam-diam mengganti sumber dengan dead-reckoning.
-        newX = this.pos.x;
-        newZ = this.pos.z;
-      } else if (this.posN != null && this.posE != null) {
-        // posisi sungguhan dari EKF ArduSub (LOCAL_POSITION_NED), relatif ke titik Start
-        newX = this.posE - this.originE;
-        newZ = -(this.posN - this.originN);
-      } else {
-        // EKF belum mengirim data: fallback dead-reckoning dari command
-        let surge = pilotAxes.surge, sway = pilotAxes.sway;
-        if (this.autoCruise && Math.abs(surge) < 1) surge = CRUISE_SURGE;
-        const fwd = new THREE.Vector3(Math.sin(hr), 0, -Math.cos(hr));
-        const right = new THREE.Vector3(Math.cos(hr), 0, Math.sin(hr));
-        const step = fwd.multiplyScalar(surge * VEL_SCALE).add(right.multiplyScalar(sway * VEL_SCALE)).multiplyScalar(dt);
-        newX = this.pos.x + step.x;
-        newZ = this.pos.z + step.z;
-      }
-      this.distance += Math.hypot(newX - this.pos.x, newZ - this.pos.z);
-      this.pos.x = newX;
-      this.pos.z = newZ;
+    if (this.count === 0) this._markStart();
+
+    let newX, newZ;
+    if (this.hookPose) {
+      // hook-map memakai koordinat arena absolut: x panjang, y lebar.
+      newX = this.hookPose.x;
+      newZ = -this.hookPose.y;
+    } else if (this.hookMapEnabled) {
+      // Map aktif tetapi observasi belum valid/ambigu: tahan posisi terakhir.
+      // Jangan diam-diam mengganti sumber dengan dead-reckoning.
+      newX = this.pos.x;
+      newZ = this.pos.z;
+    } else if (this.posN != null && this.posE != null) {
+      // posisi sungguhan dari EKF ArduSub (LOCAL_POSITION_NED), relatif ke titik Start
+      newX = this.posE - this.originE;
+      newZ = -(this.posN - this.originN);
+    } else {
+      // EKF belum mengirim data: fallback dead-reckoning dari command
+      const surge = pilotAxes.surge, sway = pilotAxes.sway;
+      const fwd = new THREE.Vector3(Math.sin(hr), 0, -Math.cos(hr));
+      const right = new THREE.Vector3(Math.cos(hr), 0, Math.sin(hr));
+      const step = fwd.multiplyScalar(surge * VEL_SCALE).add(right.multiplyScalar(sway * VEL_SCALE)).multiplyScalar(TICK_DT);
+      newX = this.pos.x + step.x;
+      newZ = this.pos.z + step.z;
     }
+    this.distance += Math.hypot(newX - this.pos.x, newZ - this.pos.z);
+    this.pos.x = newX;
+    this.pos.z = newZ;
     this.pos.y = -this.depth * DEPTH_SCALE;
 
     const t = this.three;
+
+    // pilih gaya visual sesuai keandalan sumber X/Z (hook-vision > EKF > dead-reckoning)
+    const srcKey = this.hookPose ? "hook" : (this.hookMapEnabled || (this.posN != null && this.posE != null)) ? "ekf" : "est";
+    if (srcKey !== this._srcKey) {
+      this._srcKey = srcKey;
+      const style = SRC_STYLE[srcKey];
+      t.path.material = style.dashed ? t.pathMatDashed : t.pathMatSolid;
+      t.path.material.color.setHex(style.color);
+      t.bowMat.color.setHex(style.color);
+      t.bowMat.emissive.setHex(style.color);
+      this.els.src.parentElement.dataset.src = style.label;
+    }
+
     // ROV marker
     t.rov.position.copy(this.pos);
     t.rov.rotation.y = -hr;
@@ -272,21 +283,10 @@ export const missionPage = {
     t.dropGeo.setFromPoints([new THREE.Vector3(this.pos.x, 0, this.pos.z), this.pos.clone()]);
     t.drop.computeLineDistances();
 
-    // rekam titik lintasan
-    if (this.recording) this._maybeAddPoint();
+    this._maybeAddPoint();
 
     // marker E mengikuti posisi terakhir
     if (this.count > 0) { t.eMark.visible = true; t.eMark.position.copy(this.pos).setY(this.pos.y + 0.6); }
-
-    // follow cam
-    if (this.follow) {
-      const desired = this.pos.clone().add(new THREE.Vector3(6, 7, 9));
-      t.camera.position.lerp(desired, 0.05);
-      t.controls.target.lerp(this.pos, 0.1);
-    }
-
-    t.controls.update();
-    t.renderer.render(t.scene, t.camera);
 
     // readout
     this.els.x.textContent = num(this.pos.x, 2);
@@ -298,6 +298,32 @@ export const missionPage = {
       : this.hookMapEnabled
         ? `HOOK ${String(this.hookStatus || "WAIT").toUpperCase()}`
         : (this.posN != null && this.posE != null) ? "EKF" : "Estimasi";
+  },
+
+  // render-only, rAF: hanya jalan saat halaman Mission terlihat (hemat GPU/latency saat pindah halaman)
+  _loop() {
+    this.raf = requestAnimationFrame(() => this._loop());
+    if (!this.visible || !this.three) return;
+    const t = this.three;
+
+    if (this.follow) {
+      const desired = this.pos.clone().add(new THREE.Vector3(6, 7, 9));
+      t.camera.position.lerp(desired, 0.05);
+      t.controls.target.lerp(this.pos, 0.1);
+    }
+    t.controls.update();
+    t.renderer.render(t.scene, t.camera);
+  },
+
+  _markStart() {
+    // titik nol sesi: posisi EKF saat ini jadi origin agar lintasan mulai
+    // dari sekitar (0,0), bukan meloncat ke koordinat NED absolut
+    if (this.posN != null && this.posE != null) {
+      this.originN = this.posN;
+      this.originE = this.posE;
+    }
+    this.three.sMark.visible = true;
+    this.three.sMark.position.copy(this.pos).setY(this.pos.y + 0.6);
   },
 
   _maybeAddPoint() {
@@ -315,30 +341,10 @@ export const missionPage = {
     this.count++;
     this.three.pathGeo.setDrawRange(0, this.count);
     this.three.pathGeo.attributes.position.needsUpdate = true;
+    if (this.three.path.material === this.three.pathMatDashed) this.three.path.computeLineDistances();
     this.three.pathGeo.computeBoundingSphere();
   },
 
-  _start() {
-    if (!this.recording && this.count === 0) {
-      // titik nol sesi: posisi EKF saat ini jadi origin agar lintasan mulai
-      // dari sekitar (0,0), bukan meloncat ke koordinat NED absolut
-      if (this.posN != null && this.posE != null) {
-        this.originN = this.posN;
-        this.originE = this.posE;
-      }
-      // tandai titik Start di posisi saat ini
-      this.three.sMark.visible = true;
-      this.three.sMark.position.copy(this.pos).setY(this.pos.y + 0.6);
-      this._maybeAddPoint();
-    }
-    this.recording = true;
-    this.els.hint.style.display = "none";
-    log("Mission: rekam lintasan dimulai", "ok");
-  },
-  _pause() {
-    this.recording = false;
-    log("Mission: lintasan dijeda", "warn");
-  },
   /* ekspor peta trajectory ke PNG (dokumentasi lintasan awal→akhir untuk KKI) */
   _savePng() {
     if (!this.three) return;
@@ -351,7 +357,6 @@ export const missionPage = {
     log("Mission: trajectory disimpan (PNG)", "ok");
   },
   _reset() {
-    this.recording = false;
     this.count = 0;
     this.distance = 0;
     this.pos.set(0, 0, 0);
@@ -359,7 +364,6 @@ export const missionPage = {
     this.three.pathGeo.attributes.position.needsUpdate = true;
     this.three.sMark.visible = false;
     this.three.eMark.visible = false;
-    this.els.hint.style.display = "";
     log("Mission: lintasan direset", "");
   },
 };

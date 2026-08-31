@@ -1437,6 +1437,10 @@ body.pseudo-fs-lock { overflow: hidden; }
 .mission__head { display: flex; align-items: center; justify-content: space-between; }
 .mission__readout { display: flex; gap: 16px; font-family: "JetBrains Mono", monospace; font-size: 12px; color: var(--ink-dim); }
 .mission__readout b { color: var(--sonar); font-weight: 700; }
+.mission__readout span[data-src="hook"] b { color: #37d392; }
+.mission__readout span[data-src="ekf"] b { color: #f5a524; }
+.mission__readout span[data-src="est"] b { color: #8a94a6; text-shadow: 0 0 6px rgba(138,148,166,.5); }
+.mission__readout span[data-src] { padding: 2px 8px; border-radius: 999px; background: rgba(255,255,255,.05); }
 .mission__stage { flex: 1; position: relative; min-height: 0; background: radial-gradient(circle at 50% 0, rgba(20,216,255,.05), transparent 60%), #061320; border: 1px solid rgba(20,216,255,.12); border-radius: var(--r); overflow: hidden; }
 .mission__stage canvas { display: block; }
 .mission__btns { position: absolute; top: 12px; left: 12px; display: flex; gap: 8px; z-index: 2; }
