@@ -221,6 +221,13 @@ function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
       const data = JSON.parse(line);
       latestHookVision = data;
       broadcast({ type: "hook_vision", data });
+      // YOLO berjalan di laptop, sedangkan FSM berjalan di Pi. Teruskan hasil
+      // observasi saja; Pi tetap melakukan validasi umur/confidence sebelum
+      // hasil ini boleh memengaruhi command ROV.
+      udp.send(Buffer.from(JSON.stringify({ name: "hook_vision", value: data })),
+        UDP_OUT, RPI_ADDR, (err) => {
+          if (err && DEBUG) console.warn(`[VISION] gagal kirim hasil YOLO ke ROV: ${err.message}`);
+        });
     } catch (err) {
       console.warn(`[VISION] output worker bukan JSON: ${err.message}`);
     }
@@ -882,6 +889,7 @@ udp.on("error", (e) => console.error("[UDP] error:", e.message));
 
 udp.bind(UDP_IN, "0.0.0.0", () => {
   console.log(`[UDP] mendengar telemetri di 0.0.0.0:${UDP_IN}`);
+  startHookVision();
 });
 
 /* ----------------------- simulator (opsional) ----------------------- */

@@ -5,6 +5,7 @@
 
 import ast
 import json
+import math
 import os
 import tempfile
 import threading
@@ -334,8 +335,8 @@ class TestWiringDiRovAgent(unittest.TestCase):
         self.assertIn("set_motion_config", self.src)
         self.assertIn('"mission5_motion_config"', self.src)
 
-    def test_produksi_mulai_dari_m5_redive(self):
-        self.assertIn('os.environ.get("M5_START_STATE", "M5_REDIVE")', self.src)
+    def test_produksi_mulai_dari_alur_sisi_kiri(self):
+        self.assertIn('os.environ.get("M5_START_STATE", "M5_LEFT_PREP")', self.src)
 
     def test_hook_map_produksi_opt_in(self):
         self.assertIn('"hook_map": os.environ.get("M5_HOOK_MAP") or None', self.src)
@@ -357,6 +358,27 @@ class TestWiringDiRovAgent(unittest.TestCase):
         self.assertIn('qr_url=cfg.get("wall_url")', bridge)
         self.assertIn('hook_url=None', bridge)
         self.assertIn('calib_file=cfg.get("calib_wall")', bridge)
+
+    def test_yolo_laptop_diteruskan_ke_pi_dengan_watchdog(self):
+        with open("server/server.js", encoding="utf-8") as fh:
+            server = fh.read()
+        with open("autonomy/tools/hook_vision_worker.py", encoding="utf-8") as fh:
+            worker = fh.read()
+        self.assertIn('name: "hook_vision"', server)
+        self.assertIn('elif name == "hook_vision"', self.src)
+        self.assertIn('time.monotonic() - latest_hook_vision_received <= 1.0', self.src)
+        self.assertIn("'frame_w': detection.get('frame_w')", worker)
+
+    def test_validasi_yolo_menolak_bbox_di_luar_frame(self):
+        node = next(n for n in self.tree.body
+                    if isinstance(n, ast.FunctionDef) and n.name == "_validate_hook_vision")
+        scope = {"math": math}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), "rov_agent.py", "exec"), scope)
+        validate = scope["_validate_hook_vision"]
+        valid = {"status": "relative_only", "method": "yolov8", "confidence": 0.9,
+                 "bbox": [10, 20, 100, 80], "frame_w": 640, "frame_h": 480}
+        self.assertIsNotNone(validate(valid))
+        self.assertIsNone(validate(dict(valid, bbox=[600, 20, 100, 80])))
 
 
 if __name__ == "__main__":

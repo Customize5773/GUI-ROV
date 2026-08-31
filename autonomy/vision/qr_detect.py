@@ -649,6 +649,9 @@ class VisionPipeline:
     MOCK_FAR_SEC        = 3.0                 # detik "jauh & off-center" sebelum konvergen
     MOCK_CONVERGE_SEC   = 3.0                 # durasi ramp jauh → aligned
     MOCK_TARGET_AREA    = 3000.0             # px² saat engage (samakan dgn SERVO_TARGET_AREA FSM)
+    # Alur misi 5 sisi kiri membaca bbox (fraksi luas frame), BUKAN 'area' — dua
+    # konsumen berbeda dgn target berbeda, keduanya sama-sama belum tervalidasi air.
+    MOCK_HOOK_BBOX_FRAC = 0.08               # fraksi frame saat engage (samakan dgn LEFT_YOLO_AREA_FRAC)
     MOCK_TARGET_DIST    = 0.30              # m saat engage (samakan dgn SERVO_TARGET_DIST FSM)
 
     def _run_mock(self):
@@ -687,8 +690,14 @@ class VisionPipeline:
             # closed-loop bisa dijalankan tanpa kamera (uji launch_sitl --vision mock).
             hcx, hcy = int(320 + 130 * err), int(240 - 100 * err)   # hook di atas → naik ke tengah
             harea = self.MOCK_TARGET_AREA * (1.0 - 0.6 * err)
+            # bbox MEMBESAR seiring mendekat (dulu 30x80 statis, jadi M5_YOLO_RANGE
+            # tak pernah bisa konvergen di SITL). Aspek 3:8 dipertahankan.
+            hk = math.sqrt(max(0.05, 1.0 - 0.6 * err))
+            hbw = 96.0 * hk * math.sqrt(self.MOCK_HOOK_BBOX_FRAC / 0.08)
+            hbh = hbw * 8.0 / 3.0
             self._last_hook = {
-                'type': 'hook', 'center': (hcx, hcy), 'bbox': (hcx - 15, hcy - 40, 30, 80),
+                'type': 'hook', 'center': (hcx, hcy),
+                'bbox': (hcx - hbw / 2, hcy - hbh / 2, hbw, hbh),
                 'area': harea, 'width_px': 30.0 * (1.0 - 0.5 * err), 'confidence': 0.9,
                 'method': 'mock', 'frame_w': 640, 'frame_h': 480, 'pose': None,
                 'timestamp': time.time(),

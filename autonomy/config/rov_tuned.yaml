@@ -75,6 +75,24 @@ m5_mechanics:
   unhook_lift_t: 3.0     # fallback tanpa feedback
   unhook_pull_t: 2.0
 
+# ── Misi 5 autonomous dari sisi kiri ────────────────────────────────────────
+# Baseline kode untuk dry-run/SITL; kalibrasikan pada jarak gripper nyata.
+left_flow:
+  prep_surge: 15
+  prep_sway: 10
+  prep_t: 3.0
+  turn_deg: 180.0
+  turn_tol_deg: 5.0
+  advance_max_t: 15.0    # pagar JARAK maju buta (detik x SEARCH_SPEED); skala per arena
+  yolo_conf: 0.35
+  yolo_area_frac: 0.08
+  yolo_area_tol: 0.015
+  yolo_range_kp: 250.0
+  yolo_max_surge: 20.0
+  qr_yaw_kp: 20.0
+  qr_max_yaw: 20.0
+  grip_t: 2.0
+
 # ── Toleransi kontrol kedalaman — sifat sensor & kontroler ────────────────────
 depth:
   tolerance: 0.05

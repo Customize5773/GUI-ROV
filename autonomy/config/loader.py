@@ -117,6 +117,23 @@ _SCALAR_MAP = {
     ('m5_mechanics', 'unhook_lift_t'): 'UNHOOK_LIFT_T',
     ('m5_mechanics', 'unhook_pull_t'): 'UNHOOK_PULL_T',
 
+    # Alur Misi 5 dari sisi kiri. Nilai ini WAJIB ditune dengan supervised
+    # water test; bbox target bergantung kamera, model, dan geometri gripper.
+    ('left_flow', 'prep_surge'):       'LEFT_PREP_SURGE',
+    ('left_flow', 'prep_sway'):        'LEFT_PREP_SWAY',
+    ('left_flow', 'prep_t'):           'LEFT_PREP_T',
+    ('left_flow', 'turn_deg'):         'LEFT_TURN_DEG',
+    ('left_flow', 'turn_tol_deg'):     'LEFT_TURN_TOL_DEG',
+    ('left_flow', 'advance_max_t'):    'LEFT_ADVANCE_MAX_T',
+    ('left_flow', 'yolo_conf'):        'LEFT_YOLO_CONF',
+    ('left_flow', 'yolo_area_frac'):   'LEFT_YOLO_AREA_FRAC',
+    ('left_flow', 'yolo_area_tol'):    'LEFT_YOLO_AREA_TOL',
+    ('left_flow', 'yolo_range_kp'):    'LEFT_YOLO_RANGE_KP',
+    ('left_flow', 'yolo_max_surge'):   'LEFT_YOLO_MAX_SURGE',
+    ('left_flow', 'qr_yaw_kp'):        'LEFT_QR_YAW_KP',
+    ('left_flow', 'qr_max_yaw'):       'LEFT_QR_MAX_YAW',
+    ('left_flow', 'grip_t'):           'LEFT_GRIP_T',
+
     ('payload', 'mission'): 'PAYLOAD_MISSION',
     ('payload', 'type'):    'PAYLOAD_TYPE',
 }

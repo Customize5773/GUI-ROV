@@ -250,6 +250,11 @@ KILL_SWITCH_DEADZONE = 15
 marked_heading = None
 marked_depth = None
 
+# Observasi YOLO dari worker laptop. Waktu terima memakai monotonic clock Pi,
+# bukan timestamp laptop, supaya clock drift/NTP tidak bisa meloloskan data basi.
+latest_hook_vision = None
+latest_hook_vision_received = 0.0
+
 # Hitungan trial gagal Misi 2 (grab) & Misi 3 (hang), command `mission_counter`.
 # Skor 15/10/5 per Guidebook KKI 2026 §4.7.4 ditentukan dari jumlah trial —
 # ROV tak punya sensor grip-force, jadi gagal/sukses dilihat & ditandai pilot
@@ -648,6 +653,37 @@ def send_gcs_heartbeat():
 # =========================
 # Command handler dari laptop
 # =========================
+def _validate_hook_vision(value):
+    """Validasi observasi YOLO pada batas jaringan laptop -> Pi."""
+    if not isinstance(value, dict):
+        return None
+    status = str(value.get("status", ""))[:40]
+    if value.get("method") != "yolov8":
+        return {"status": status} if status else None
+    try:
+        confidence = float(value["confidence"])
+        bbox = [float(v) for v in value["bbox"]]
+        frame_w = int(value["frame_w"])
+        frame_h = int(value["frame_h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
+            or len(bbox) != 4 or not all(math.isfinite(v) for v in bbox)
+            or bbox[2] <= 0 or bbox[3] <= 0 or frame_w <= 0 or frame_h <= 0):
+        return None
+    x, y, w, h = bbox
+    if x < 0 or y < 0 or x + w > frame_w + 1 or y + h > frame_h + 1:
+        return None
+    return {
+        "status": status,
+        "method": "yolov8",
+        "confidence": confidence,
+        "bbox": [x, y, w, h],
+        "frame_w": frame_w,
+        "frame_h": frame_h,
+    }
+
+
 def command_listener():
     global last_joystick_update
     global requested_mode
@@ -664,6 +700,8 @@ def command_listener():
     global thruster_gain
     global marked_heading
     global marked_depth
+    global latest_hook_vision
+    global latest_hook_vision_received
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -687,7 +725,7 @@ def command_listener():
         # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console.
         # Gripper analog (nilai angka dari axis gamepad) juga bisa datang cepat;
         # open/close diskrit dari tombol/keyboard tetap di-log.
-        quiet = name in AXIS_RANGE or (
+        quiet = name in AXIS_RANGE or name == "hook_vision" or (
             name == "gripper" and isinstance(value, (int, float))
             and not isinstance(value, bool)
         )
@@ -763,6 +801,10 @@ def command_listener():
                     "text": "Tuning gerak Mission 5 diterapkan untuk start berikutnya",
                     "level": "ok",
                 })
+
+            elif name == "hook_vision":
+                latest_hook_vision = _validate_hook_vision(value)
+                latest_hook_vision_received = time.monotonic()
 
             elif name == "pilot_mode":
 
@@ -1589,7 +1631,14 @@ def _fsm_read_state():
     FSM membaca 'depth', 'heading', 'roll', 'pitch', dan 'control_mode' —
     semuanya sudah diisi loop utama & send_telemetry.
     """
-    return dict(state)
+    data = dict(state)
+    data["hook_vision"] = (
+        dict(latest_hook_vision)
+        if latest_hook_vision is not None
+        and time.monotonic() - latest_hook_vision_received <= 1.0
+        else None
+    )
+    return data
 
 
 # Kalibrasi default misi 5, TERPISAH per kamera (bottom=QR, wall=hook) — dua
@@ -1657,7 +1706,7 @@ def setup_mission5_runner():
         "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_BOTTOM_DEFAULT),
         "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_WALL_DEFAULT),
         "hook_map": os.environ.get("M5_HOOK_MAP") or None,
-        "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
+        "start_state": os.environ.get("M5_START_STATE", "M5_LEFT_PREP"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
         # (lihat Mission5Runner._apply_configs). Arena lomba:
         #   M5_CONFIG="config/rov_tuned.yaml,config/pool_kki_running.yaml"

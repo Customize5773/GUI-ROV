@@ -201,6 +201,43 @@ HANG_SEAT_T        = 1.5      # detik dorong halus dudukkan lubang payload ke uj
 HANG_OPEN_T        = 1.5      # detik buka gripper (payload tergantung)
 HANG_BACK_T        = 2.0      # detik mundur agar lubang bebas dari hook
 
+# ── Misi 5 sisi kiri (alur lomba 2026) ──────────────────────────────────────
+# Urutan: prep surge+sway+depth → yaw relatif 180° → maju cari YOLO → atur
+# jarak dari bbox YOLO → QR yaw+sway → gripper close → M5_UNHOOK → surface.
+# Langkah "mundur" TIDAK berdiri sendiri: payload duduk di hook candy-cane, jadi
+# lubangnya harus DIANGKAT dulu baru ditarik — itu persis _state_m5_unhook
+# (angkat berbasis depth UNHOOK_LIFT_M, lalu tarik M5_UNHOOK_SURGE selama
+# UNHOOK_PULL_T). Menarik mundur tanpa angkat cuma menyeret ROV di hook.
+# Nilai gerak/waktu adalah knob trial kolam, bukan klaim sudah terkalibrasi.
+LEFT_PREP_SURGE       = 15
+LEFT_PREP_SWAY        = 10
+LEFT_PREP_T           = 3.0
+LEFT_TURN_DEG         = 180.0
+LEFT_TURN_TOL_DEG     = 5.0
+LEFT_TIMEOUT_PREP     = 15.0
+LEFT_TIMEOUT_TURN     = 20.0
+LEFT_TIMEOUT_YOLO     = 30.0   # jam ABORT — bukan jam maju, lihat LEFT_ADVANCE_MAX_T
+LEFT_TIMEOUT_RANGE    = 20.0
+# PAGAR JARAK maju buta di M5_YOLO_SEARCH. ROV tak punya sensor jarak depan, jadi
+# satu-satunya rem sebelum menabrak dinding adalah detik × kecepatan (pola sama
+# SEARCH_SPAN_MAX_T). Memakai SEARCH_SPEED yang SUDAH dikalibrasi (~0,222 m/s @ 20%,
+# trial 25 Agu) alih-alih SURGE_SPEED 35% yang tak pernah diukur:
+#   15 s × 0,222 ≈ 3,3 m — muat di arena Trial 5×5 m dgn sisa ruang pengereman.
+# Habis budget → berhenti maju tapi TETAP melihat sampai LEFT_TIMEOUT_YOLO.
+# ⚠ SKALAKAN per arena (pool_kki_running.yaml 10×10 m sudah di-override).
+LEFT_ADVANCE_MAX_T    = 15.0
+LEFT_YOLO_SOURCE_GRACE = 3.0
+LEFT_YOLO_CONF        = 0.35
+LEFT_YOLO_AREA_FRAC   = 0.08   # bbox/frame; wajib tune pada jarak gripper nyata
+LEFT_YOLO_AREA_TOL    = 0.015
+LEFT_YOLO_RANGE_KP    = 250.0
+LEFT_YOLO_MAX_SURGE   = 20.0
+LEFT_YOLO_LOCK_FRAMES = 5
+LEFT_QR_YAW_KP        = 20.0
+LEFT_QR_MAX_YAW       = 20.0
+LEFT_QR_LOCK_FRAMES   = 5
+LEFT_GRIP_T           = 2.0
+
 
 # ── State machine states ───────────────────────────────────────────────────────
 class State(Enum):
@@ -220,6 +257,12 @@ class State(Enum):
     M5_UNHOOK     = auto()   # Misi 5d: angkat lubang payload lepas dari hook
     M5_ASCEND     = auto()   # Misi 5e: naik ke permukaan bawa payload
     M5_FALLBACK   = auto()   # Misi 5*: jalur timed (degraded) bila visual gagal
+    M5_LEFT_PREP  = auto()   # sisi kiri: selam sambil maju+serong kanan
+    M5_LEFT_TURN  = auto()   # yaw relatif 180 derajat
+    M5_YOLO_SEARCH = auto()  # maju sampai YOLO laptop melihat hook
+    M5_YOLO_RANGE = auto()   # auto-surge sampai bbox pada jarak kerja
+    M5_QR_DOCK    = auto()   # QR: koreksi yaw+sway saja
+    M5_GRIP       = auto()   # tutup gripper (lalu M5_UNHOOK: angkat + tarik)
     DONE          = auto()
     ABORT         = auto()
 
@@ -337,7 +380,7 @@ class Mission5FSM:
     def __init__(self, cmd: CommandSender, telem: TelemetryReceiver,
                  vision: VisionPipeline, runlog=None,
                  marked_heading=None, marked_depth=None, hook_map_file=None,
-                 hook_calib_file=None):
+                 hook_calib_file=None, yolo_source=None):
         # Tanda gantungan yang direkam operator lewat tombol MARK saat misi 3
         # (command `mark_hook` di rov_agent.py), yaitu SAAT payload benar-benar
         # tergantung di hook. Dipakai M5_REDIVE untuk kembali ke sana.
@@ -355,6 +398,7 @@ class Mission5FSM:
         self.telem  = telem
         self.vision = vision
         self.runlog = runlog        # tools.run_log.RunLogger | None (None = tak merekam)
+        self._yolo_source = yolo_source or (lambda: None)
         self._sample_t = 0.0        # timestamp sample JSONL terakhir (throttle ~2 Hz)
         # Peredam approach — dipakai SEMUA instans servo di bawah agar satu tuning
         # berlaku seragam (IBVS & PBVS beda satuan error, jadi deadband-nya beda).
@@ -420,6 +464,10 @@ class Mission5FSM:
         self._dock_used_fallback = False  # instrumentasi: DOCK jatuh ke fallback timed?
         self._unhook_start_depth = None
         self._unhook_pull_t = None
+        self._left_start_heading = None
+        self._left_depth = None   # target depth alur kiri, dikunci di M5_LEFT_PREP
+        self._left_range_hits = 0
+        self._left_qr_hits = 0
 
         # Telemetri live untuk GUI (dibaca rov_link.py, diteruskan sbg field "mission5").
         self.telemetry_out = {
@@ -599,6 +647,18 @@ class Mission5FSM:
                 self._state_m5_ascend(telem)
             elif self._state == State.M5_FALLBACK:
                 self._state_m5_fallback(telem)
+            elif self._state == State.M5_LEFT_PREP:
+                self._state_m5_left_prep(telem)
+            elif self._state == State.M5_LEFT_TURN:
+                self._state_m5_left_turn(telem)
+            elif self._state == State.M5_YOLO_SEARCH:
+                self._state_m5_yolo_search(telem)
+            elif self._state == State.M5_YOLO_RANGE:
+                self._state_m5_yolo_range(telem)
+            elif self._state == State.M5_QR_DOCK:
+                self._state_m5_qr_dock(telem)
+            elif self._state == State.M5_GRIP:
+                self._state_m5_grip(telem)
 
             self._log_sample(telem)
             time.sleep(0.1)
@@ -1446,6 +1506,197 @@ class Mission5FSM:
         self.cmd.send(vert=ASCEND_SPEED, gripper=1)
         log.debug("[FSM] M5_ASCEND naik depth=%.2f", depth)
 
+    def _fresh_external_yolo(self, det=None):
+        """Deteksi YOLO yang sudah divalidasi umur/skema oleh rov_agent."""
+        if det is None:
+            det = self._yolo_source()
+        if not isinstance(det, dict) or det.get('method') != 'yolov8':
+            return None
+        if float(det.get('confidence', 0.0)) < LEFT_YOLO_CONF:
+            return None
+        return det
+
+    @staticmethod
+    def _yolo_source_failed(det):
+        return isinstance(det, dict) and str(det.get('status', '')).endswith('_error')
+
+    # Setelah M5_LEFT_TURN selesai, ROV SUDAH menghadap dinding hook di kedalaman
+    # kerja — posisi yang diasumsikan M5_FALLBACK (maju timed → grip → angkat →
+    # tarik → naik), jadi gagal di sini masih bisa didegradasi dan tetap berskor.
+    # SEBELUM itu (PREP/TURN) orientasi belum tentu benar atau telemetri rusak:
+    # menjalankan surge timed buta ke arah yang salah lebih buruk daripada skor 0.
+    LEFT_DEGRADABLE = (State.M5_YOLO_SEARCH, State.M5_YOLO_RANGE, State.M5_QR_DOCK)
+
+    def _left_abort(self, reason):
+        if self._state in self.LEFT_DEGRADABLE:
+            log.warning("[FSM] alur M5 sisi kiri gagal (%s) — degradasi ke fallback timed",
+                        reason)
+            self.cmd.stop_all()
+            self._transition(State.M5_FALLBACK)
+            return
+        log.error("[FSM] alur M5 sisi kiri ABORT — %s", reason)
+        self.abort()
+
+    def _left_out_of_time(self) -> bool:
+        """Degradasi DINI bila sisa jam heat tak cukup lagi menuntaskan rantai.
+
+        Tanpa ini tiap state kiri menghabiskan timeout-nya sendiri dulu, dan
+        M5_FALLBACK (yang tetap memberi skor) bisa terpotong peluit."""
+        if self._time_left() >= self._min_time_needed_from(self._state):
+            return False
+        self._left_abort("sisa jam heat %.0fs < kebutuhan minimum" % self._time_left())
+        return True
+
+    def _left_hold(self, telem) -> int:
+        """Vert penahan kedalaman hook untuk SELURUH alur sisi kiri.
+
+        Tanpa ini state 2-7 mengirim send() tanpa vert sama sekali selama
+        puluhan detik — ROV sedikit apung, hook/QR hanyut keluar bidang pandang
+        vertikal justru saat sedang dicari (bug yang sama dgn M5_SEARCH dulu)."""
+        if self._left_depth is None:
+            self._left_depth = (self._marked_depth if self._marked_depth is not None
+                                else HOOK_DEPTH)
+        return self._hold_depth(telem, self._left_depth)
+
+    def _state_m5_left_prep(self, telem):
+        """1. Selam ke kedalaman hook sambil maju dan serong kanan sedikit."""
+        depth = telem.get('depth')
+        heading = telem.get('heading')
+        if (not isinstance(depth, (int, float)) or not math.isfinite(depth)
+                or not isinstance(heading, (int, float)) or not math.isfinite(heading)):
+            self._left_abort("depth/heading tidak valid")
+            return
+        if self._left_start_heading is None:
+            self._left_start_heading = float(heading)
+        if self._elapsed() > LEFT_TIMEOUT_PREP:
+            self._left_abort("target kedalaman/prep timeout")
+            return
+
+        vert = self._left_hold(telem)   # 0 = sudah di dalam DEPTH_TOLERANCE
+        moving = self._elapsed() < LEFT_PREP_T
+        self.cmd.send(surge=LEFT_PREP_SURGE if moving else 0,
+                      sway=LEFT_PREP_SWAY if moving else 0,
+                      vert=vert, gripper=0)
+        if not moving and vert == 0:
+            self.cmd.stop_all()
+            self._transition(State.M5_LEFT_TURN)
+
+    def _state_m5_left_turn(self, telem):
+        """2. Putar yaw 180 derajat relatif terhadap heading saat mulai."""
+        heading = telem.get('heading')
+        if (not isinstance(heading, (int, float)) or not math.isfinite(heading)
+                or self._left_start_heading is None):
+            self._left_abort("heading rotasi tidak valid")
+            return
+        if self._elapsed() > LEFT_TIMEOUT_TURN:
+            self._left_abort("yaw 180 timeout")
+            return
+        target = (self._left_start_heading + LEFT_TURN_DEG) % 360.0
+        error = self._heading_error(float(heading), target)
+        if abs(error) <= LEFT_TURN_TOL_DEG:
+            self.cmd.stop_all()
+            self._transition(State.M5_YOLO_SEARCH)
+            return
+        self.cmd.send(yaw=YAW_SPEED if error > 0 else -YAW_SPEED,
+                      vert=self._left_hold(telem), gripper=0)
+
+    def _state_m5_yolo_search(self, telem):
+        """3. Maju sampai hasil YOLO laptop yang segar terdeteksi."""
+        if self._elapsed() > LEFT_TIMEOUT_YOLO:
+            self._left_abort("YOLO tidak mendeteksi hook")
+            return
+        if self._left_out_of_time():
+            return
+        raw = self._yolo_source()
+        if self._yolo_source_failed(raw):
+            self._left_abort("worker/kamera YOLO error")
+            return
+        if raw is None:
+            self.cmd.stop_all()
+            if self._elapsed() > LEFT_YOLO_SOURCE_GRACE:
+                self._left_abort("stream YOLO tidak tersedia atau basi")
+            return
+        det = self._fresh_external_yolo(raw)
+        if det is not None:
+            self.cmd.stop_all()
+            self._transition(State.M5_YOLO_RANGE)
+            return
+        # Budget jarak habis: berhenti maju, tapi terus melihat sampai timeout —
+        # tanpa sensor jarak, terus merangsek = menabrak dinding.
+        if self._elapsed() > LEFT_ADVANCE_MAX_T:
+            self.cmd.send(vert=self._left_hold(telem), gripper=0)
+            return
+        self.cmd.send(surge=SEARCH_SPEED, vert=self._left_hold(telem), gripper=0)
+
+    def _state_m5_yolo_range(self, telem):
+        """4. Atur jarak hanya dengan surge dari fraksi luas bbox YOLO."""
+        if self._elapsed() > LEFT_TIMEOUT_RANGE:
+            self._left_abort("jarak YOLO tidak konvergen")
+            return
+        if self._left_out_of_time():
+            return
+        raw = self._yolo_source()
+        if self._yolo_source_failed(raw):
+            self._left_abort("worker/kamera YOLO error")
+            return
+        det = self._fresh_external_yolo(raw)
+        if det is None:
+            self._left_range_hits = 0
+            self.cmd.stop_all()  # data hilang/basi: jangan terus maju buta
+            return
+        _x, _y, width, height = det['bbox']
+        area_frac = width * height / (det['frame_w'] * det['frame_h'])
+        error = LEFT_YOLO_AREA_FRAC - area_frac
+        self._left_range_hits = (self._left_range_hits + 1 if abs(error) <= LEFT_YOLO_AREA_TOL
+                                 else max(0, self._left_range_hits - 1))
+        self.telemetry_out.update(active_cam='WALL', bbox=det['bbox'],
+                                  confidence=det['confidence'], distance_z=None,
+                                  offset_x=round(error, 4), offset_y=None)
+        if self._left_range_hits >= LEFT_YOLO_LOCK_FRAMES:
+            self.cmd.stop_all()
+            self._transition(State.M5_QR_DOCK)
+            return
+        surge = max(-LEFT_YOLO_MAX_SURGE,
+                    min(LEFT_YOLO_MAX_SURGE, LEFT_YOLO_RANGE_KP * error))
+        self.cmd.send(surge=surge, vert=self._left_hold(telem), gripper=0)
+
+    def _state_m5_qr_dock(self, telem):
+        """5. Pusatkan QR memakai yaw+sway; jarak/depth dipertahankan."""
+        if self._elapsed() > TIMEOUT_M5_DOCK:
+            self._left_abort("QR docking timeout")
+            return
+        if self._left_out_of_time():
+            return
+        det = self._fresh_payload(0.5)
+        if det is None:
+            self._left_qr_hits = 0
+            since = time.time() - self._m5_last_det_t
+            if since < M5_LOCK_GRACE_T:
+                self.cmd.stop_all()
+            else:
+                self.cmd.send(yaw=YAW_SPEED * self._m5_search_dir,
+                              vert=self._left_hold(telem), gripper=0)
+            return
+
+        self._note_detection(det)
+        out, _mode = self._servo_step(det)
+        ex = (det['center'][0] - det['frame_w'] / 2.0) / (det['frame_w'] / 2.0)
+        self._left_qr_hits = (self._left_qr_hits + 1 if abs(ex) < self.servo.tol_norm
+                              else max(0, self._left_qr_hits - 1))
+        yaw = max(-LEFT_QR_MAX_YAW, min(LEFT_QR_MAX_YAW, LEFT_QR_YAW_KP * ex))
+        self.cmd.send(sway=out.sway, yaw=yaw, vert=self._left_hold(telem), gripper=0)
+        if self._left_qr_hits >= LEFT_QR_LOCK_FRAMES:
+            self.cmd.stop_all()
+            self._transition(State.M5_GRIP)
+
+    def _state_m5_grip(self, telem):
+        """6. Tutup gripper, lalu serahkan langkah 7 (mundur) ke M5_UNHOOK —
+        yang mengangkat lubang payload lepas dari hook DULU sebelum menarik."""
+        self.cmd.send(vert=self._left_hold(telem), gripper=1)
+        if self._elapsed() >= LEFT_GRIP_T:
+            self.cmd.stop_all()
+            self._transition(State.M5_UNHOOK)
+
     def _state_m5_fallback(self, telem):
         """Misi 5*: jalur DEGRADED timed (tanpa lock visual) — jaring pengaman bila QR gagal.
         Tetap autonomous (tanpa kemudi manual), namun reliabilitas rendah."""
@@ -1489,11 +1740,20 @@ class Mission5FSM:
             self._scan_sweep_dir = 1
             self._scan_sweep_t = self._state_t
         # Mulai grace lock "segar" saat masuk fase docking (QR baru diakuisisi di REDIVE)
-        if new_state in (State.M5_DOCK, State.M5_ENGAGE):
+        if new_state in (State.M5_DOCK, State.M5_ENGAGE, State.M5_QR_DOCK):
             self._m5_last_det_t = self._state_t
         if new_state == State.M5_UNHOOK:
             self._unhook_start_depth = None
             self._unhook_pull_t = None
+        if new_state == State.M5_LEFT_PREP:
+            self._left_start_heading = None
+            self._left_depth = None
+        elif new_state == State.M5_YOLO_RANGE:
+            self._left_range_hits = 0
+        elif new_state == State.M5_QR_DOCK:
+            self._left_qr_hits = 0
+            self.servo.reset()
+            self.pose_servo.reset()
         # Ladder pencarian selalu mulai dari nol tiap kali masuk M5_SEARCH
         if new_state == State.M5_SEARCH:
             self._search_phase   = 'backoff'
@@ -1571,6 +1831,12 @@ class Mission5FSM:
             State.M5_SEARCH: TIMEOUT_M5_DOCK + TIMEOUT_M5_ENGAGE + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
             State.M5_DOCK:   TIMEOUT_M5_ENGAGE + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
             State.M5_ENGAGE: TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
+            # Alur sisi kiri — sisa rantainya berakhir di M5_UNHOOK yang sama.
+            State.M5_YOLO_SEARCH: (LEFT_TIMEOUT_RANGE + TIMEOUT_M5_DOCK + LEFT_GRIP_T
+                                   + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND),
+            State.M5_YOLO_RANGE:  (TIMEOUT_M5_DOCK + LEFT_GRIP_T
+                                   + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND),
+            State.M5_QR_DOCK:     LEFT_GRIP_T + TIMEOUT_UNHOOK + TIMEOUT_M5_ASCEND,
         }
         return chain.get(state, 0.0)
 
@@ -1692,9 +1958,11 @@ def main():
     ap.add_argument('--wall-cnn-min-conf', type=float, default=0.8,
                     help='confidence minimum agar tebakan wall-CNN dihitung')
     ap.add_argument('--start-state', default='DIVE',
-                    choices=['DIVE', 'M5_REDIVE', 'M5_DOCK'],
+                    choices=['DIVE', 'M5_REDIVE', 'M5_DOCK', 'M5_LEFT_PREP'],
                     help='DIVE=full misi 1-5; M5_REDIVE=misi 5 autonomous (1-4 manual via GUI); '
-                         'M5_DOCK=uji docking QR saja (sudah di kedalaman hook)')
+                         'M5_DOCK=uji docking QR saja; M5_LEFT_PREP=alur lomba dari sisi '
+                         'kiri (dry-run WAJIB --hook-model: --vision mock tak punya '
+                         'deteksi yolov8 dan akan berhenti di M5_YOLO_SEARCH)')
     ap.add_argument('--no-wait-autonomous', action='store_true',
                     help='langsung jalan tanpa menunggu toggle GUI mode=autonomous (uji SITL/mock)')
     ap.add_argument('--loglevel', default='INFO')
@@ -1755,7 +2023,23 @@ def main():
     log.info("[main] Mulai setelah 3 detik... (Ctrl+C untuk abort)")
     time.sleep(3)
 
+    # Sumber deteksi YOLO alur sisi kiri, jalur STANDALONE = pipeline lokal
+    # (--hook-model). Field telemetri 'hook_vision' SENGAJA tidak dibaca di sini:
+    # yang mengisinya cuma rov_agent._fsm_read_state (YOLO jalan di laptop), dan
+    # jalur itu lewat rov_mission5_bridge yang punya yolo_source-nya sendiri —
+    # rov_link.py tak pernah mengirim field itu. Skema keduanya identik
+    # (method/bbox/frame_w/confidence) dan sama-sama sudah disaring umur.
+    def _yolo_source():
+        det = cam.latest_hook(max_age=1.0)
+        if det is not None and args.vision == 'mock':
+            # Mock meniru worker laptop supaya alur kiri bisa diuji di SITL. Relabel
+            # ditaruh DI SINI, bukan dgn melonggarkan gate method=='yolov8' di FSM:
+            # gate itu yang menjaga hasil OpenCV/mock tak menyetir ROV sungguhan.
+            det = dict(det, method='yolov8')
+        return det
+
     fsm = Mission5FSM(cmd=cmd, telem=telem, vision=cam, runlog=runlog,
+                      yolo_source=_yolo_source,
                       hook_map_file=args.hook_map,
                       hook_calib_file=args.calib_wall if args.hook_map else None)
     alasan = 'selesai'

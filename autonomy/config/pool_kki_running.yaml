@@ -50,3 +50,10 @@ speed:
 
 hook_docking:
   approach_speed: 17   # default mission5.py 20
+
+# ── Alur misi 5 sisi kiri — pagar jarak maju buta (arena 2x lebih panjang) ────
+# M5_YOLO_SEARCH maju tanpa sensor jarak; batasnya detik x SEARCH_SPEED (~0,222 m/s).
+# 30 s ≈ 6,7 m — cukup menyeberang arena 10×10 m, masih menyisakan ruang pengereman.
+# ⚠ UKUR jarak start→dinding hook di lokasi; turunkan bila ROV start lebih dekat.
+left_flow:
+  advance_max_t: 30.0   # default mission5.py 15.0 (arena 5×5 m)

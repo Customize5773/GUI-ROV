@@ -110,6 +110,170 @@ def test_payload_validation_accepts_legacy_non_json():
     assert fsm._is_target_payload({'payload': None})   # QR string biasa → tak divalidasi
 
 
+# ── Alur Misi 5 dari sisi kiri ──────────────────────────────────────────────
+def test_left_prep_menyelam_maju_dan_serong_kanan():
+    fsm = _make_fsm()
+    fsm._transition(State.M5_LEFT_PREP)
+    fsm._state_m5_left_prep({'depth': 0.10, 'heading': 25.0})
+    axes = fsm.cmd.plant._in
+    assert axes['surge'] > 0 and axes['sway'] > 0
+    assert axes['vert'] < 0, "konvensi FSM: vert negatif = menyelam"
+    assert fsm._left_start_heading == 25.0
+
+
+def test_left_turn_memakai_heading_relatif_180():
+    fsm = _make_fsm()
+    fsm._left_start_heading = 10.0
+    fsm._state = State.M5_LEFT_TURN
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_left_turn({'heading': 190.0})
+    assert fsm._state == State.M5_YOLO_SEARCH
+
+
+def _yolo_at_area_fraction(frac):
+    frame_w, frame_h = 640, 480
+    width = 192.0
+    height = frac * frame_w * frame_h / width
+    return {'status': 'relative_only', 'method': 'yolov8', 'confidence': 0.9,
+            'bbox': [100.0, 100.0, width, height],
+            'frame_w': frame_w, 'frame_h': frame_h}
+
+
+def test_left_yolo_range_butuh_beberapa_frame_stabil():
+    fsm = _make_fsm()
+    fsm._state = State.M5_YOLO_RANGE
+    fsm._state_t = m5.time.time()
+    det = _yolo_at_area_fraction(m5.LEFT_YOLO_AREA_FRAC)
+    fsm._yolo_source = lambda: det
+    for _ in range(m5.LEFT_YOLO_LOCK_FRAMES - 1):
+        fsm._state_m5_yolo_range({})
+        assert fsm._state == State.M5_YOLO_RANGE
+    fsm._state_m5_yolo_range({})
+    assert fsm._state == State.M5_QR_DOCK
+
+
+def test_left_yolo_range_stop_saat_data_hilang():
+    fsm = _make_fsm()
+    fsm.cmd.send(surge=30)
+    fsm._state = State.M5_YOLO_RANGE
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_yolo_range({})
+    assert fsm.cmd.plant._in['surge'] == 0
+
+
+def test_left_yolo_search_berhenti_maju_setelah_budget_jarak():
+    """Tanpa sensor jarak, satu-satunya rem sebelum dinding adalah budget detik."""
+    fsm = _make_fsm()
+    lemah = dict(_yolo_at_area_fraction(0.01), confidence=0.1)   # ada stream, blm yakin
+    fsm._yolo_source = lambda: lemah
+    fsm._state = State.M5_YOLO_SEARCH
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm.cmd.plant._in['surge'] == m5.SEARCH_SPEED, "pakai kecepatan terkalibrasi"
+
+    fsm._state_t = m5.time.time() - m5.LEFT_ADVANCE_MAX_T - 0.1
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm.cmd.plant._in['surge'] == 0, "budget habis → berhenti maju"
+    assert fsm._state == State.M5_YOLO_SEARCH, "tetap melihat sampai LEFT_TIMEOUT_YOLO"
+
+
+def test_left_yolo_search_tidak_maju_saat_worker_belum_ada():
+    fsm = _make_fsm()
+    fsm.cmd.send(surge=30)
+    fsm._state = State.M5_YOLO_SEARCH
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_yolo_search({})
+    assert fsm.cmd.plant._in['surge'] == 0
+
+
+def test_left_gagal_setelah_menghadap_dinding_degradasi_bukan_abort():
+    """Misi 40 poin: timeout YOLO jangan pulang dengan skor 0."""
+    for state, call in [
+        (State.M5_YOLO_SEARCH, lambda f: f._state_m5_yolo_search({})),
+        (State.M5_YOLO_RANGE, lambda f: f._state_m5_yolo_range({})),
+        (State.M5_QR_DOCK, lambda f: f._state_m5_qr_dock({})),
+    ]:
+        fsm = _make_fsm()
+        fsm._state = state
+        fsm._state_t = m5.time.time() - 1e6      # semua timeout terlampaui
+        call(fsm)
+        assert fsm._state == State.M5_FALLBACK, state.name
+
+
+def test_left_gagal_sebelum_menghadap_dinding_tetap_abort():
+    """PREP/TURN: orientasi belum tentu benar → surge timed buta lebih berbahaya."""
+    for state, call in [
+        (State.M5_LEFT_PREP, lambda f: f._state_m5_left_prep({'depth': None, 'heading': 0.0})),
+        (State.M5_LEFT_TURN, lambda f: f._state_m5_left_turn({'heading': None})),
+    ]:
+        fsm = _make_fsm()
+        fsm._state = state
+        fsm._state_t = m5.time.time()
+        call(fsm)
+        assert fsm._state == State.ABORT, state.name
+
+
+def test_left_degradasi_dini_saat_jam_heat_hampir_habis():
+    fsm = _make_fsm()
+    fsm._state = State.M5_QR_DOCK
+    fsm._state_t = m5.time.time()
+    fsm._mission_t0 = m5.time.time() - m5.TIME_BUDGET_TOTAL + 5.0   # sisa 5 s
+    fsm._state_m5_qr_dock({})
+    assert fsm._state == State.M5_FALLBACK, "harus degradasi sebelum peluit, bukan ABORT"
+
+
+def test_left_grip_menyerahkan_mundur_ke_unhook_yang_mengangkat_dulu():
+    """Payload duduk di hook candy-cane: tarik mundur tanpa angkat = nyangkut."""
+    fsm = _make_fsm()
+    fsm._state = State.M5_GRIP
+    fsm._state_t = m5.time.time() - m5.LEFT_GRIP_T - 0.1
+    fsm._state_m5_grip({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_UNHOOK
+
+    # fase pertama M5_UNHOOK harus MENGANGKAT, belum mundur
+    fsm._state_m5_unhook({'depth': m5.HOOK_DEPTH})
+    axes = fsm.cmd.plant._in
+    assert axes['vert'] > 0 and axes['surge'] == 0, "angkat dulu, jangan tarik"
+
+    # setelah naik sejauh UNHOOK_LIFT_M baru menarik mundur
+    fsm._state_m5_unhook({'depth': m5.HOOK_DEPTH - m5.UNHOOK_LIFT_M})
+    assert fsm.cmd.plant._in['surge'] < 0
+
+
+def test_left_qr_dock_hanya_memerintah_yaw_sway_dan_depth_hold():
+    fsm = _make_fsm()
+    det = {'center': (400, 240), 'area': m5.SERVO_TARGET_AREA,
+           'frame_w': 640, 'frame_h': 480, 'pose': None, 'payload': None}
+    fsm._fresh_payload = lambda _age=0.5: det
+    fsm._state = State.M5_QR_DOCK
+    fsm._state_t = m5.time.time()
+    fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    axes = fsm.cmd.plant._in
+    assert axes['yaw'] != 0 and axes['sway'] != 0
+    assert axes['surge'] == 0, "jarak dipegang YOLO_RANGE, bukan state ini"
+    assert axes['vert'] == 0, "sudah di kedalaman target → tak ada koreksi"
+
+
+def test_alur_kiri_menahan_kedalaman_di_tiap_state():
+    """Tanpa vert, ROV yang sedikit apung hanyut naik selama puluhan detik."""
+    det = _yolo_at_area_fraction(m5.LEFT_YOLO_AREA_FRAC * 0.5)   # msh perlu maju
+    lemah = dict(det, confidence=0.1)   # stream ada, blm yakin → SEARCH terus maju
+    dangkal = {'depth': m5.HOOK_DEPTH - 0.30, 'heading': 0.0}
+    for state, source, call in [
+        (State.M5_LEFT_TURN, None, lambda f: f._state_m5_left_turn(dangkal)),
+        (State.M5_YOLO_SEARCH, lemah, lambda f: f._state_m5_yolo_search(dangkal)),
+        (State.M5_YOLO_RANGE, det, lambda f: f._state_m5_yolo_range(dangkal)),
+        (State.M5_GRIP, None, lambda f: f._state_m5_grip(dangkal)),
+    ]:
+        fsm = _make_fsm()
+        fsm._left_start_heading = 0.0   # M5_LEFT_TURN: target 180° masih jauh
+        fsm._yolo_source = lambda src=source: src
+        fsm._state = state
+        fsm._state_t = m5.time.time()
+        call(fsm)
+        assert fsm.cmd.plant._in['vert'] < 0, f"{state.name} tak menahan kedalaman"
+
+
 # ── SCAN_QR: creep ke wall-hint (belum tervalidasi) vs fallback yaw-sweep ────
 def test_scan_qr_creeps_toward_wall_hint_without_setting_target():
     fsm = _make_fsm()
