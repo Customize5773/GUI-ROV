@@ -93,16 +93,28 @@ def check_qr(cap, results, n_frames, fps):
     _report(results, "Deteksi QR (BOTTOM)", status, f"detection-rate {rate*100:.0f}% dari {n_frames} frame")
 
 
-def check_hook(cap, results, n_frames, fps):
+def check_hook(cap, results, n_frames, fps, detector=None):
+    """detector=None → detect_hook (OpenCV geometrik, misi 3b/4).
+
+    Dengan --hook-model, dipakai YOLO — detektor yang SAMA dgn alur misi 5 sisi
+    kiri, supaya fraksi luas yang dicetak bisa langsung dipakai menyetel
+    left_flow.yolo_area_frac. Angka dari detect_hook TIDAK sepadan untuk itu."""
+    label = "Deteksi hook (WALL)" + ("" if detector is None else " [YOLO]")
     if cap is None:
-        _report(results, "Deteksi hook (WALL)", FAIL, "kamera WALL tak terbuka — dilewati")
+        _report(results, label, FAIL, "kamera WALL tak terbuka — dilewati")
         return
-    rate, hits = _detection_rate(cap, detect_hook, n_frames, fps)
+    rate, hits = _detection_rate(cap, detector or detect_hook, n_frames, fps)
     if rate == 0:
-        _report(results, "Deteksi hook (WALL)", FAIL, f"detection-rate 0% dari {n_frames} frame")
+        _report(results, label, FAIL, f"detection-rate 0% dari {n_frames} frame")
         return
     avg_frac = sum(h['area'] / (h['frame_w'] * h['frame_h']) for h in hits) / len(hits)
     detail = f"detection-rate {rate*100:.0f}%, area rata {avg_frac*100:.1f}% frame"
+    if detector is not None:
+        # Angka yang selama ini ditebak 0.08 tanpa pernah diukur di air.
+        _report(results, label, PASS, detail +
+                f" → posisikan ROV di jarak gripper, lalu set "
+                f"left_flow.yolo_area_frac: {avg_frac:.3f}")
+        return
     if avg_frac > HOOK_MAX_AREA_FRAC * 0.8:
         # Mendekati batas HOOK_MAX_AREA_FRAC (pola gagal HOOK-02: air keruh →
         # satu contour raksasa membungkus seluruh frame) — WARN, bukan FAIL,
@@ -167,6 +179,9 @@ def main():
     ap.add_argument("--bottom-device", type=int, default=None, help="index USB kamera BOTTOM (alternatif --bottom-url)")
     ap.add_argument("--wall-url", default=None, help="stream MJPEG kamera WALL (hook)")
     ap.add_argument("--wall-device", type=int, default=None, help="index USB kamera WALL (alternatif --wall-url)")
+    ap.add_argument("--hook-model", default=None, metavar="BEST.PT",
+                    help="pakai YOLO (detektor alur misi 5 sisi kiri) alih-alih detect_hook, "
+                         "dan cetak fraksi luas bbox utk menyetel left_flow.yolo_area_frac")
     ap.add_argument("--frames", type=int, default=20, help="jumlah frame per cek deteksi (default 20)")
     ap.add_argument("--fps", type=float, default=10.0, help="target fps sampling (default 10)")
     ap.add_argument("--telem-port", type=int, default=14552, help="port UDP telemetry (default 14552, lihat docstring)")
@@ -186,9 +201,18 @@ def main():
     if wall_cap is None and wall_src is None:
         _report(results, "Kamera WALL", WARN, "--wall-url/--wall-device tak diisi — cek hook dilewati")
 
+    detector = None
+    if args.hook_model:
+        try:
+            from vision.yolo_hook import YOLOHookDetector
+            detector = YOLOHookDetector(args.hook_model).detect
+        except Exception as exc:      # bobot/ultralytics tak ada → jangan bunuh preflight
+            _report(results, "Model YOLO hook", WARN,
+                    f"{exc} — jatuh ke detect_hook (angka TAK sepadan utk yolo_area_frac)")
+
     check_qr(bottom_cap, results, args.frames, args.fps)
     if wall_cap is not None:
-        check_hook(wall_cap, results, args.frames, args.fps)
+        check_hook(wall_cap, results, args.frames, args.fps, detector)
 
     if bottom_cap is not None:
         bottom_cap.release()

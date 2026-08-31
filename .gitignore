@@ -133,3 +133,5 @@ Data dari Pyload 2.zip
 Data dari pyload.zip
 Planning/RISET-STRATEGI-KONTROL-6DOF-ROV.md
 server/OPZ.log
+.venv/lib
+.venv/bin
