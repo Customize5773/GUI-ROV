@@ -28,7 +28,6 @@ from rov_params import (
     param_type_name,
 )
 from rov_mavlink import RateLimiter, sanitize_fields, stream_still_wanted
-from rov_pistat import read_cpu_percent, read_soc_temp
 
 from rov_pid import (
     resolve_pid_writes,
@@ -67,6 +66,9 @@ PIXHAWK_BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
 # disambungkan ulang (USB lepas / Pixhawk re-enumerate).
 LINK_TIMEOUT = 3.0
 thruster_gain = 1.0
+
+heading_zero = None
+latest_yaw = 0.0
 
 # =========================
 # Socket UDP
@@ -135,18 +137,8 @@ state = {
     "depth": 0.0,       # sementara 0 dulu, nanti kita isi dari sensor depth
     "roll": 0.0,
     "pitch": 0.0,
-    # None (bukan 0.0) selama SCALED_PRESSURE2 belum datang: GUI menggambar
-    # "—" untuk null, sedangkan 0.0 terbaca sebagai suhu air 0 °C yang sah.
-    "temp": None,
-    # None (bukan 0.0) dengan alasan sama seperti temp: 0.0 V terbaca sebagai
-    # baterai mati total, padahal artinya SYS_STATUS belum pernah datang.
-    "voltage": None,
-    # Status hardware Pi (bukan wahana): beban CPU % dan suhu SoC °C. Pi
-    # menurunkan clock sendiri saat panas, dan tanpa ini throttling terlihat
-    # operator sebagai "ROV mendadak lag" tanpa sebab. None = belum tersampel
-    # / bukan Pi, alasan sama seperti temp & voltage di atas.
-    "pi_cpu": None,
-    "pi_temp": None,
+    "temp": 0.0,        # sementara 0 dulu, nanti bisa dari sensor suhu
+    "voltage": 0.0,
     "armed": False,
     "light": False,
     "mode": "manual",
@@ -249,11 +241,6 @@ KILL_SWITCH_DEADZONE = 15
 # saat rov-agent.service restart, satu run lomba 10 menit.
 marked_heading = None
 marked_depth = None
-
-# Observasi YOLO dari worker laptop. Waktu terima memakai monotonic clock Pi,
-# bukan timestamp laptop, supaya clock drift/NTP tidak bisa meloloskan data basi.
-latest_hook_vision = None
-latest_hook_vision_received = 0.0
 
 # Hitungan trial gagal Misi 2 (grab) & Misi 3 (hang), command `mission_counter`.
 # Skor 15/10/5 per Guidebook KKI 2026 §4.7.4 ditentukan dari jumlah trial —
@@ -511,14 +498,6 @@ _mav_rate = RateLimiter()
 
 _last_telem_log = 0.0
 
-# Status Pi disampel 1 Hz, BUKAN 10 Hz seperti sisa telemetri: membuka dua file
-# sysfs sepuluh kali per detik di dalam loop kontrol justru menambah beban yang
-# sedang diukur. Nilai terakhir tetap tinggal di `state`, jadi tetap ikut
-# terkirim tiap paket seperti field lain. read_cpu_percent() stateless, jadi
-# snapshot /proc/stat sebelumnya disimpan di sini.
-_pistat_rate = RateLimiter(1.0)
-_pistat_prev_cpu = None
-
 def send_to_gui(obj):
     """Kirim satu pesan JSON ke laptop lewat socket telemetry.
 
@@ -550,12 +529,7 @@ def send_telemetry():
     Mencetak tiap paket (10 Hz) plus log joystick 20 Hz membuat stdout yang
     ter-pipe jadi blocking dan menimbulkan jitter pada loop kontrol di Pi.
     """
-    global _last_telem_log, _pistat_prev_cpu
-
-    if _pistat_rate.allow("pistat", time.time()):
-        pct, _pistat_prev_cpu = read_cpu_percent(_pistat_prev_cpu)
-        state["pi_cpu"] = pct
-        state["pi_temp"] = read_soc_temp()
+    global _last_telem_log
 
     with depth_lock:
         state["depth_hold"] = depth_hold_enabled
@@ -653,37 +627,6 @@ def send_gcs_heartbeat():
 # =========================
 # Command handler dari laptop
 # =========================
-def _validate_hook_vision(value):
-    """Validasi observasi YOLO pada batas jaringan laptop -> Pi."""
-    if not isinstance(value, dict):
-        return None
-    status = str(value.get("status", ""))[:40]
-    if value.get("method") != "yolov8":
-        return {"status": status} if status else None
-    try:
-        confidence = float(value["confidence"])
-        bbox = [float(v) for v in value["bbox"]]
-        frame_w = int(value["frame_w"])
-        frame_h = int(value["frame_h"])
-    except (KeyError, TypeError, ValueError):
-        return None
-    if (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
-            or len(bbox) != 4 or not all(math.isfinite(v) for v in bbox)
-            or bbox[2] <= 0 or bbox[3] <= 0 or frame_w <= 0 or frame_h <= 0):
-        return None
-    x, y, w, h = bbox
-    if x < 0 or y < 0 or x + w > frame_w + 1 or y + h > frame_h + 1:
-        return None
-    return {
-        "status": status,
-        "method": "yolov8",
-        "confidence": confidence,
-        "bbox": [x, y, w, h],
-        "frame_w": frame_w,
-        "frame_h": frame_h,
-    }
-
-
 def command_listener():
     global last_joystick_update
     global requested_mode
@@ -700,8 +643,8 @@ def command_listener():
     global thruster_gain
     global marked_heading
     global marked_depth
-    global latest_hook_vision
-    global latest_hook_vision_received
+    global heading_zero
+
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -725,7 +668,7 @@ def command_listener():
         # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console.
         # Gripper analog (nilai angka dari axis gamepad) juga bisa datang cepat;
         # open/close diskrit dari tombol/keyboard tetap di-log.
-        quiet = name in AXIS_RANGE or name == "hook_vision" or (
+        quiet = name in AXIS_RANGE or (
             name == "gripper" and isinstance(value, (int, float))
             and not isinstance(value, bool)
         )
@@ -740,6 +683,7 @@ def command_listener():
                 # COMMAND_ACK dari loop RX utama, sehingga status armed telat
                 # sampai ke GUI. ACK ditangani non-blocking di main().
                 print("[MAV] ARM" if value else "[MAV] DISARM")
+
                 send_arm_disarm(bool(value))
 
             elif name == "control_mode":
@@ -753,6 +697,10 @@ def command_listener():
                 print(f"[CONTROL] {requested}")
 
                 if requested == "autonomous":
+
+                    heading_zero = latest_yaw
+                    print(f"[HEADING] AUTONOMOUS -> zero = {heading_zero:.2f}°")
+
                     # Axis FSM dinolkan DULU: sisa setpoint dari sesi
                     # sebelumnya tidak boleh ikut terbawa saat FSM baru mulai.
                     with fsm_axes_lock:
@@ -776,6 +724,7 @@ def command_listener():
                     if mission5_runner is None:
                         print("[M5] runner tidak tersedia — toggle autonomous "
                               "tidak menjalankan FSM (kontrol manual tetap normal)")
+
                     elif not mission5_runner.start():
                         print("[M5] start GAGAL — tetap di mode manual")
                         send_to_gui({
@@ -801,10 +750,6 @@ def command_listener():
                     "text": "Tuning gerak Mission 5 diterapkan untuk start berikutnya",
                     "level": "ok",
                 })
-
-            elif name == "hook_vision":
-                latest_hook_vision = _validate_hook_vision(value)
-                latest_hook_vision_received = time.monotonic()
 
             elif name == "pilot_mode":
 
@@ -1631,14 +1576,7 @@ def _fsm_read_state():
     FSM membaca 'depth', 'heading', 'roll', 'pitch', dan 'control_mode' —
     semuanya sudah diisi loop utama & send_telemetry.
     """
-    data = dict(state)
-    data["hook_vision"] = (
-        dict(latest_hook_vision)
-        if latest_hook_vision is not None
-        and time.monotonic() - latest_hook_vision_received <= 1.0
-        else None
-    )
-    return data
+    return dict(state)
 
 
 # Kalibrasi default misi 5, TERPISAH per kamera (bottom=QR, wall=hook) — dua
@@ -1706,7 +1644,7 @@ def setup_mission5_runner():
         "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_BOTTOM_DEFAULT),
         "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_WALL_DEFAULT),
         "hook_map": os.environ.get("M5_HOOK_MAP") or None,
-        "start_state": os.environ.get("M5_START_STATE", "M5_LEFT_PREP"),
+        "start_state": os.environ.get("M5_START_STATE", "M5_REDIVE"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
         # (lihat Mission5Runner._apply_configs). Arena lomba:
         #   M5_CONFIG="config/rov_tuned.yaml,config/pool_kki_running.yaml"
@@ -2038,6 +1976,7 @@ def drop_link(reason):
 def main():
     global prev_attitude_ts
     global _raw_depth
+    global heading_zero
 
     connect_pixhawk()
 
@@ -2130,7 +2069,14 @@ def main():
             )
             state["roll"] = roll_f
             state["pitch"] = pitch_f
-            state["heading"] = yaw_f
+
+            latest_yaw = yaw_f
+
+            if heading_zero is None:
+                state["heading"] = yaw_f
+            else:
+                state["heading"] = normalize_heading(yaw_f - heading_zero)
+
             prev_attitude_ts = now_ts
 
         # --------------------------------
@@ -2175,18 +2121,8 @@ def main():
         # voltage_battery dalam mV
         # --------------------------------
         elif mtype == "SYS_STATUS":
-            # 65535 = "tidak diukur", 0 = monitor baterai belum dikonfigurasi.
-            # Keduanya bukan tegangan; biarkan None supaya GUI tetap "—".
-            if msg.voltage_battery not in (0, 65535):
-                state["voltage"] = round(msg.voltage_battery / 1000.0, 1)
-
-        # --------------------------------
-        # SCALED_PRESSURE2: suhu air dari baro eksternal (Bar30), centi-°C.
-        # Depth TETAP dari AHRS2 di bawah (sudah lewat EKF); di sini hanya
-        # temperature, satu-satunya sumber suhu yang dipunya wahana.
-        # --------------------------------
-        elif mtype == "SCALED_PRESSURE2":
-            state["temp"] = round(msg.temperature / 100.0, 1)
+            if msg.voltage_battery != 65535:
+                state["voltage"] = msg.voltage_battery / 1000.0
 
         # --------------------------------
         # AHRS2 : Depth dari ArduSub (meter)
@@ -2265,7 +2201,11 @@ def main():
 
             base_mode = msg.base_mode
             was_armed = state["armed"]
-            state["armed"] = bool(base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+            new_armed = bool(
+                base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED
+            )
+
+            state["armed"] = new_armed
             if was_armed and not state["armed"]:
                 with depth_lock:
                     if depth_hold_enabled:
