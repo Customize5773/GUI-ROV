@@ -136,3 +136,4 @@ server/OPZ.log
 .venv/
 
 autonomy/vision/wall_cnn.npz
+hook 1.zip

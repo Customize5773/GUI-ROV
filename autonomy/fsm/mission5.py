@@ -466,6 +466,7 @@ class Mission5FSM:
         self._unhook_pull_t = None
         self._left_start_heading = None
         self._left_depth = None   # target depth alur kiri, dikunci di M5_LEFT_PREP
+        self._left_search_hits = 0
         self._left_range_hits = 0
         self._left_qr_hits = 0
 
@@ -1458,8 +1459,16 @@ class Mission5FSM:
         """Angkat berbasis depth sampai lubang bebas, lalu mundur dari hook."""
         elapsed = self._elapsed()
         if elapsed > TIMEOUT_UNHOOK:
-            log.error("[FSM] M5_UNHOOK timeout — ABORT, payload mungkin masih tersangkut")
-            self.abort()
+            # Payload SUDAH digenggam — ABORT di sini menjamin skor 0. M5_ASCEND
+            # memakai perintah naik yang sama (vert=+30), cuma dgn syarat selesai
+            # yang berbeda, jadi tak ada bahaya baru: kalau lubang masih tersangkut
+            # ROV mentok dan ASCEND timeout → kredit parsial, bukan nol.
+            log.warning("[FSM] M5_UNHOOK timeout (angkat %.3f m belum cukup) — "
+                        "lanjut naik, payload mungkin masih tersangkut", 
+                        (self._unhook_start_depth - telem.get('depth', 0.0))
+                        if self._unhook_start_depth is not None else 0.0)
+            self.cmd.stop_all()
+            self._transition(State.M5_ASCEND)
             return
 
         depth = telem.get('depth')
@@ -1568,11 +1577,22 @@ class Mission5FSM:
             return
         if self._left_start_heading is None:
             self._left_start_heading = float(heading)
+        vert = self._left_hold(telem)   # 0 = di dalam DEPTH_TOLERANCE; mengunci _left_depth
+        # Dua tingkat, sama seperti _state_m5_redive: ROV ini punya plateau daya
+        # angkat yang terdokumentasi (pool_kki_running.yaml menaikkan dive 30→45
+        # karena kedalaman mentok datar di 0,37 m). Timeout di sini berarti
+        # "belum pas kedalaman", bukan "misi gagal" — selama sudah cukup dalam,
+        # lanjut saja; ABORT hanya bila benar-benar tak turun.
         if self._elapsed() > LEFT_TIMEOUT_PREP:
-            self._left_abort("target kedalaman/prep timeout")
+            if depth >= self._left_depth - 2 * DEPTH_TOLERANCE:
+                log.warning("[FSM] M5_LEFT_PREP timeout tapi kedalaman memadai "
+                            "(%.2f/%.2f m) — lanjut", depth, self._left_depth)
+                self.cmd.stop_all()
+                self._transition(State.M5_LEFT_TURN)
+            else:
+                self._left_abort("gagal menyelam (%.2f/%.2f m)" % (depth, self._left_depth))
             return
 
-        vert = self._left_hold(telem)   # 0 = sudah di dalam DEPTH_TOLERANCE
         moving = self._elapsed() < LEFT_PREP_T
         self.cmd.send(surge=LEFT_PREP_SURGE if moving else 0,
                       sway=LEFT_PREP_SWAY if moving else 0,
@@ -1618,9 +1638,18 @@ class Mission5FSM:
             return
         det = self._fresh_external_yolo(raw)
         if det is not None:
-            self.cmd.stop_all()
-            self._transition(State.M5_YOLO_RANGE)
+            # Voting spt M5_YOLO_RANGE di bawah — SATU frame tak cukup. Model ini
+            # sesekali menyatakan "Hook" pada frame tanpa hook (uji 40 frame CAM
+            # WALL: 1 lolos gate di conf 0,41), dan latch palsu menghentikan ROV
+            # jauh dari dinding. Berhenti maju selagi mengonfirmasi: kalau memang
+            # hook, ~1 detik tak hilang; kalau hantu, ROV tak terlanjur berhenti.
+            self._left_search_hits += 1
+            self.cmd.send(vert=self._left_hold(telem), gripper=0)
+            if self._left_search_hits >= LEFT_YOLO_LOCK_FRAMES:
+                self.cmd.stop_all()
+                self._transition(State.M5_YOLO_RANGE)
             return
+        self._left_search_hits = max(0, self._left_search_hits - 1)
         # Budget jarak habis: berhenti maju, tapi terus melihat sampai timeout —
         # tanpa sensor jarak, terus merangsek = menabrak dinding.
         if self._elapsed() > LEFT_ADVANCE_MAX_T:
@@ -1723,8 +1752,14 @@ class Mission5FSM:
             self.cmd.send(vert=ASCEND_SPEED, gripper=1)
         else:
             self.cmd.stop_all()
-            self._score['m5'] = 40
-            log.warning("[FSM] Misi 5 selesai via FALLBACK timed (degraded, tanpa lock visual)")
+            # Jalur ini TAK PERNAH melihat payload — urutannya timed murni, jadi
+            # ia tak tahu apakah gripper menjepit payload atau air. Mengklaim 40
+            # membuat log berbohong (mis. worker YOLO mati → degradasi di detik 3
+            # → "selesai +40" padahal ROV belum bergerak ke dinding). Kredit
+            # parsial saja; angka sesungguhnya ditentukan juri.
+            self._score['m5'] = 10
+            log.warning("[FSM] Misi 5 selesai via FALLBACK timed — TANPA verifikasi visual, "
+                        "payload belum tentu terambil (skor dicatat sbg kredit parsial)")
             self._transition(State.DONE)
 
     # ── Utility ────────────────────────────────────────────────────────────────
@@ -1748,6 +1783,8 @@ class Mission5FSM:
         if new_state == State.M5_LEFT_PREP:
             self._left_start_heading = None
             self._left_depth = None
+        elif new_state == State.M5_YOLO_SEARCH:
+            self._left_search_hits = 0
         elif new_state == State.M5_YOLO_RANGE:
             self._left_range_hits = 0
         elif new_state == State.M5_QR_DOCK:

@@ -130,11 +130,11 @@ def test_left_turn_memakai_heading_relatif_180():
     assert fsm._state == State.M5_YOLO_SEARCH
 
 
-def _yolo_at_area_fraction(frac):
+def _yolo_at_area_fraction(frac, conf=0.9):
     frame_w, frame_h = 640, 480
     width = 192.0
     height = frac * frame_w * frame_h / width
-    return {'status': 'relative_only', 'method': 'yolov8', 'confidence': 0.9,
+    return {'status': 'relative_only', 'method': 'yolov8', 'confidence': conf,
             'bbox': [100.0, 100.0, width, height],
             'frame_w': frame_w, 'frame_h': frame_h}
 
@@ -161,6 +161,36 @@ def test_left_yolo_range_stop_saat_data_hilang():
     assert fsm.cmd.plant._in['surge'] == 0
 
 
+def test_left_yolo_search_butuh_voting_bukan_satu_frame():
+    """best.pt sesekali menyatakan Hook pada frame tanpa hook — satu frame palsu
+    tak boleh menghentikan ROV jauh dari dinding."""
+    fsm = _make_fsm()
+    det = _yolo_at_area_fraction(0.02)          # conf 0.9, lolos gate
+    fsm._yolo_source = lambda: det
+    fsm._transition(State.M5_YOLO_SEARCH)
+    for _ in range(m5.LEFT_YOLO_LOCK_FRAMES - 1):
+        fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+        assert fsm._state == State.M5_YOLO_SEARCH
+        assert fsm.cmd.plant._in['surge'] == 0, "berhenti maju selagi konfirmasi"
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_YOLO_RANGE
+
+
+def test_left_yolo_search_deteksi_sekejap_tidak_mengunci():
+    """Satu frame palsu lalu hilang → hitungan luruh, ROV lanjut maju."""
+    fsm = _make_fsm()
+    hantu = [_yolo_at_area_fraction(0.02), None, None]
+    fsm._yolo_source = lambda: hantu.pop(0) if hantu else None
+    fsm._transition(State.M5_YOLO_SEARCH)
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})     # hantu
+    assert fsm._left_search_hits == 1
+    fsm._yolo_source = lambda: _yolo_at_area_fraction(0.02, conf=0.1)   # ada stream, di bawah gate
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm._left_search_hits == 0
+    assert fsm._state == State.M5_YOLO_SEARCH
+    assert fsm.cmd.plant._in['surge'] == m5.SEARCH_SPEED
+
+
 def test_left_yolo_search_berhenti_maju_setelah_budget_jarak():
     """Tanpa sensor jarak, satu-satunya rem sebelum dinding adalah budget detik."""
     fsm = _make_fsm()
@@ -184,6 +214,41 @@ def test_left_yolo_search_tidak_maju_saat_worker_belum_ada():
     fsm._state_t = m5.time.time()
     fsm._state_m5_yolo_search({})
     assert fsm.cmd.plant._in['surge'] == 0
+
+
+def test_left_prep_timeout_lanjut_bila_kedalaman_sudah_memadai():
+    """Plateau daya angkat terdokumentasi — jangan diperlakukan sbg misi gagal."""
+    fsm = _make_fsm()
+    fsm._transition(State.M5_LEFT_PREP)
+    fsm._state_t = m5.time.time() - m5.LEFT_TIMEOUT_PREP - 0.1
+    hampir = m5.HOOK_DEPTH - 1.5 * m5.DEPTH_TOLERANCE      # kurang pas, tapi memadai
+    fsm._state_m5_left_prep({'depth': hampir, 'heading': 0.0})
+    assert fsm._state == State.M5_LEFT_TURN
+
+    fsm = _make_fsm()
+    fsm._transition(State.M5_LEFT_PREP)
+    fsm._state_t = m5.time.time() - m5.LEFT_TIMEOUT_PREP - 0.1
+    fsm._state_m5_left_prep({'depth': 0.02, 'heading': 0.0})   # benar-benar tak turun
+    assert fsm._state == State.ABORT
+
+
+def test_unhook_timeout_tetap_naik_bukan_abort_sambil_menggenggam():
+    """Payload sudah di gripper: ABORT di sini menjamin skor 0."""
+    fsm = _make_fsm()
+    fsm._transition(State.M5_UNHOOK)
+    fsm._state_t = m5.time.time() - m5.TIMEOUT_UNHOOK - 0.1
+    fsm._state_m5_unhook({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_ASCEND
+
+
+def test_fallback_tidak_mengklaim_skor_penuh():
+    """Jalur timed tak pernah melihat payload — log tak boleh bilang '+40 poin'."""
+    fsm = _make_fsm()
+    fsm._transition(State.M5_FALLBACK)
+    fsm._state_t = m5.time.time() - (14.0 + m5.UNHOOK_LIFT_T + m5.UNHOOK_PULL_T) - 0.1
+    fsm._state_m5_fallback({'depth': 0.0})     # sudah di permukaan → fase akhir
+    assert fsm._state == State.DONE
+    assert 0 < fsm.score()['m5'] < 40
 
 
 def test_left_gagal_setelah_menghadap_dinding_degradasi_bukan_abort():
