@@ -90,6 +90,8 @@ left_flow:
   yolo_range_kp: 250.0
   yolo_max_surge: 20.0
   qr_yaw_kp: 20.0
+  qr_yaw_kp_deg: 1.0     # yaw dari kemiringan QR (PBVS); qr_yaw_kp hanya utk IBVS
+  qr_yaw_tol_deg: 8.0
   qr_max_yaw: 20.0
   grip_t: 2.0
 

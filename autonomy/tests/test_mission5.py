@@ -305,18 +305,69 @@ def test_left_grip_menyerahkan_mundur_ke_unhook_yang_mengangkat_dulu():
     assert fsm.cmd.plant._in['surge'] < 0
 
 
-def test_left_qr_dock_hanya_memerintah_yaw_sway_dan_depth_hold():
+def test_qr_dock_yaw_dari_kemiringan_bukan_lenceng_lateral():
+    """Dua aktuator tak boleh mengejar error yang sama: QR bisa 'di tengah'
+    karena ROV menghadapnya, bukan karena ROV di depannya."""
     fsm = _make_fsm()
-    det = {'center': (400, 240), 'area': m5.SERVO_TARGET_AREA,
-           'frame_w': 640, 'frame_h': 480, 'pose': None, 'payload': None}
+    # QR melenceng jauh ke kanan TAPI bidangnya tegak lurus (yaw_deg 0)
+    det = {'center': (600, 240), 'area': m5.SERVO_TARGET_AREA, 'frame_w': 640,
+           'frame_h': 480, 'payload': None,
+           'pose': {'x': 0.2, 'y': 0.0, 'z': 0.3, 'dist': 0.3, 'yaw_deg': 0.0}}
     fsm._fresh_payload = lambda _age=0.5: det
-    fsm._state = State.M5_QR_DOCK
-    fsm._state_t = m5.time.time()
+    fsm._transition(State.M5_QR_DOCK)
     fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
     axes = fsm.cmd.plant._in
-    assert axes['yaw'] != 0 and axes['sway'] != 0
-    assert axes['surge'] == 0, "jarak dipegang YOLO_RANGE, bukan state ini"
-    assert axes['vert'] == 0, "sudah di kedalaman target → tak ada koreksi"
+    assert axes['sway'] != 0, "lenceng lateral tetap diurus sway"
+    assert axes['yaw'] == 0, "sudah tegak lurus → tak ada alasan memutar"
+
+    # Sebaliknya: QR di tengah tapi bidangnya miring → yaw bekerja, sway tidak
+    det['center'] = (320, 240)
+    det['pose'].update(x=0.0, yaw_deg=20.0)
+    fsm2 = _make_fsm()
+    fsm2._fresh_payload = lambda _age=0.5: det
+    fsm2._transition(State.M5_QR_DOCK)
+    fsm2._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    assert fsm2.cmd.plant._in['yaw'] != 0
+
+
+def test_qr_dock_tidak_selesai_selagi_masih_miring():
+    """Terpusat saja tak cukup — gripper tak boleh menutup dalam keadaan menyerong."""
+    fsm = _make_fsm()
+    det = {'center': (320, 240), 'area': m5.SERVO_TARGET_AREA, 'frame_w': 640,
+           'frame_h': 480, 'payload': None,
+           'pose': {'x': 0.0, 'y': 0.0, 'z': 0.3, 'dist': 0.3,
+                    'yaw_deg': m5.LEFT_QR_YAW_TOL_DEG + 5.0}}
+    fsm._fresh_payload = lambda _age=0.5: det
+    fsm._transition(State.M5_QR_DOCK)
+    for _ in range(fsm.servo.aligned_frames + 3):
+        fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_QR_DOCK, "masih miring → jangan lanjut ke GRIP"
+
+    det['pose']['yaw_deg'] = 0.0                     # sudah tegak lurus
+    for _ in range(fsm.servo.aligned_frames):
+        fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_GRIP
+
+
+def test_qr_dock_center_dulu_baru_maju():
+    """Servo menggerbang surge sampai terpusat — merapat menyerong bikin gripper
+    meleset. Dulu FSM membuang out.surge dan membalik urutan itu."""
+    fsm = _make_fsm()
+    jauh = m5.SERVO_TARGET_AREA * 0.4          # masih jauh → ingin maju
+    det = {'center': (400, 240), 'area': jauh,  # tapi melenceng lateral
+           'frame_w': 640, 'frame_h': 480, 'pose': None, 'payload': None}
+    fsm._fresh_payload = lambda _age=0.5: det
+    fsm._transition(State.M5_QR_DOCK)
+    fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    melenceng = fsm.cmd.plant._in['surge']
+    assert fsm.cmd.plant._in['sway'] != 0, "lateral dikoreksi lebih dulu"
+
+    det['center'] = (320, 240)                 # sudah terpusat
+    fsm2 = _make_fsm()
+    fsm2._fresh_payload = lambda _age=0.5: det
+    fsm2._transition(State.M5_QR_DOCK)
+    fsm2._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    assert fsm2.cmd.plant._in['surge'] > melenceng, "terpusat → boleh maju penuh"
 
 
 def test_alur_kiri_menahan_kedalaman_di_tiap_state():
