@@ -101,6 +101,7 @@ SERVO_TARGET_X     = 0.0      # PBVS: offset sumbu kamera ke mulut gripper (m)
 SERVO_TARGET_Y     = 0.0      # PBVS: offset sumbu kamera ke mulut gripper (m)
 SERVO_TARGET_YAW_DEG = 0.0    # PBVS: yaw QR saat tepat di mulut gripper
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
+SERVO_MAX_SPEED    = 35.0     # % — pagar servo QR; bench dapat override ke 100
 CALIB_FILE         = "vision/calibration/dwe_underwater.npz"  # jalur satu-kamera lama; None → IBVS
 CALIB_FILE_BOTTOM  = "vision/calibration/bottom.npz"  # kalibrasi kamera QR/BOTTOM (mode dual-camera)
 CALIB_FILE_WALL    = "vision/calibration/wall.npz"    # kalibrasi kamera hook/WALL (mode dual-camera)
@@ -253,7 +254,6 @@ LEFT_QR_YAW_KP_DEG    = 1.0    # % yaw per derajat kemiringan (20° → cap 20%)
 LEFT_QR_YAW_TOL_DEG   = 8.0    # derajat — seordo SEARCH_YAW_TOL
 LEFT_QR_MAX_YAW       = 20.0
 LEFT_GRIP_T           = 2.0
-BENCH_QR_MAX_AXIS     = 10.0   # % hard-cap uji darat; heave selalu dikunci nol
 
 
 # ── State machine states ───────────────────────────────────────────────────────
@@ -431,10 +431,12 @@ class Mission5FSM:
         # Servo docking ke QR payload (IBVS piksel / PBVS meter). Arah sumbu = SERVO_INVERT.
         self.servo      = VisualServo(target_area=SERVO_TARGET_AREA, kp_yaw=SERVO_KP_YAW,
                                       kp_sway=IBVS_KP_SWAY, kp_surge=IBVS_KP_SURGE,
-                                      kp_vert=IBVS_KP_VERT, **_ibvs_smooth, **SERVO_INVERT)
+                                      kp_vert=IBVS_KP_VERT, max_speed=SERVO_MAX_SPEED,
+                                      **_ibvs_smooth, **SERVO_INVERT)
         self.pose_servo = PoseServo(target_dist=SERVO_TARGET_DIST, kp_yaw=SERVO_KP_YAW,
                                     kp_sway=PBVS_KP_SWAY, kp_surge=PBVS_KP_SURGE,
-                                    kp_vert=PBVS_KP_VERT, **_pbvs_smooth, **SERVO_INVERT)
+                                    kp_vert=PBVS_KP_VERT, max_speed=SERVO_MAX_SPEED,
+                                    **_pbvs_smooth, **SERVO_INVERT)
         # Servo "creep" SCAN_QR — mendekat ke tebakan CNN wall-hint (BELUM tervalidasi
         # decode) sebelum decode penuh berhasil, gantikan yaw-di-tempat murni saat air
         # keruh butuh jarak baca lebih dekat. Target sama dgn SERVO_TARGET_AREA (satu
@@ -564,8 +566,14 @@ class Mission5FSM:
         if wait_mode and not self._wait_for_autonomous():
             log.warning("[FSM] Batal: tidak masuk mode AUTONOMOUS")
             return
+        if self._bench_qr_dock:
+            log.info("[FSM] BENCH QR — menunggu decode fresh sebelum ARM")
+            while self._running and self._fresh_payload(0.5) is None:
+                time.sleep(0.1)
+            if not self._running:
+                return
+        self.cmd.arm(True)
         if not self._bench_qr_dock:
-            self.cmd.arm(True)      # jalur lomba; bench di-arm eksplisit oleh operator
             time.sleep(0.5)
         self._mission_t0 = time.time()
         self._transition(start_state)
@@ -1728,12 +1736,12 @@ class Mission5FSM:
         if pose is not None:
             yaw_deg = normalize_plane_yaw(
                 pose.get('yaw_deg', 0.0) - SERVO_TARGET_YAW_DEG)
-            yaw = LEFT_QR_YAW_KP_DEG * yaw_deg
+            yaw = out.yaw if SERVO_KP_YAW else LEFT_QR_YAW_KP_DEG * yaw_deg
             square = abs(yaw_deg) <= LEFT_QR_YAW_TOL_DEG
         else:
             # Tanpa kalibrasi, kemiringan tak terukur sama sekali — ex satu-satunya
             # sinyal yang ada, jadi ambiguitas lama tetap melekat di mode IBVS.
-            yaw = LEFT_QR_YAW_KP * out.ex
+            yaw = out.yaw if SERVO_KP_YAW else LEFT_QR_YAW_KP * out.ex
             square = True
         yaw = max(-LEFT_QR_MAX_YAW, min(LEFT_QR_MAX_YAW, yaw))
         # Keluaran servo dipakai UTUH, bukan cuma sway. Ia sudah menggerbang surge
@@ -1742,13 +1750,10 @@ class Mission5FSM:
         # dan out.aligned sudah menghitung tally 3 sumbu (ex/ey/ea) berhisteresis.
         # Menulis ulang semua itu di sini dulu justru membalik urutannya: merapat
         # menyerong, lalu menggeser lateral di jarak paling sempit.
-        surge, sway, vert = out.surge, out.sway, out.vert or self._left_hold(telem)
-        if self._bench_qr_dock:
-            cap = BENCH_QR_MAX_AXIS
-            surge = max(-cap, min(cap, surge))
-            sway = max(-cap, min(cap, sway))
-            yaw = max(-cap, min(cap, yaw))
-            vert = 0
+        surge, sway = out.surge, out.sway
+        # Bench QR memberi seluruh 4-DOF ke visual servo. Di jalur lomba,
+        # depth-hold lama tetap menjadi fallback saat error vertikal tepat nol.
+        vert = out.vert if self._bench_qr_dock else out.vert or self._left_hold(telem)
         self.cmd.send(surge=surge, sway=sway, yaw=yaw, vert=vert, gripper=0)
         if out.aligned and square:
             self.cmd.stop_all()

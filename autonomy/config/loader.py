@@ -80,6 +80,7 @@ _SCALAR_MAP = {
     ('docking', 'servo_target_y'):    'SERVO_TARGET_Y',
     ('docking', 'servo_target_yaw_deg'): 'SERVO_TARGET_YAW_DEG',
     ('docking', 'servo_kp_yaw'):      'SERVO_KP_YAW',
+    ('docking', 'servo_max_speed'):   'SERVO_MAX_SPEED',
     ('docking', 'lock_grace_t'):      'M5_LOCK_GRACE_T',
 
     # ── Misi 3b (HANG) & Misi 4 (DOCK): docking berbasis deteksi hook ──

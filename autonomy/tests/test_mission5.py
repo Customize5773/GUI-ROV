@@ -397,16 +397,57 @@ def test_bench_qr_target_mulut_gripper_align_dan_berhenti_setelah_grip(monkeypat
     assert not fsm.cmd.plant.s.armed
 
 
-def test_bench_qr_membatasi_axis_dan_qr_hilang_abort():
+def test_bench_qr_start_menunggu_decode_sebelum_auto_arm(monkeypatch):
     fsm = _make_fsm(bench_qr_dock=True)
-    det = {'center': (1200, 700), 'area': 100.0, 'frame_w': 1280,
+    det = {'center': (640, 360), 'area': 9402.0, 'frame_w': 1280,
            'frame_h': 720, 'payload': None, 'pose': None}
+    results = iter((None, None, det))
+    armed_while_waiting = []
+    def fresh(_age=0.5):
+        armed_while_waiting.append(fsm.cmd.plant.s.armed)
+        return next(results)
+    monkeypatch.setattr(fsm, '_fresh_payload', fresh)
+    sleeps = []
+    monkeypatch.setattr(m5.time, 'sleep', sleeps.append)
+    monkeypatch.setattr(fsm, '_loop', lambda: None)
+    fsm.start(State.M5_QR_DOCK, wait_mode=False)
+    assert armed_while_waiting == [False, False, False]
+    assert fsm.cmd.plant.s.armed
+    assert sleeps == [0.1, 0.1]
+
+
+def test_bench_qr_otoritas_penuh_tetap_mulus_dan_qr_hilang_abort(monkeypatch):
+    monkeypatch.setattr(m5, 'SERVO_MAX_SPEED', 100.0)
+    monkeypatch.setattr(m5, 'SERVO_KP_YAW', 1.0)
+    monkeypatch.setattr(m5, 'SERVO_SLEW', 60.0)
+    monkeypatch.setattr(m5, 'LEFT_QR_MAX_YAW', 100.0)
+    fsm = _make_fsm(bench_qr_dock=True)
+    fsm._servo_dt = lambda: 0.1
+    det = {'center': (1200, 700), 'area': 100.0, 'frame_w': 1280,
+           'frame_h': 720, 'payload': None,
+           'pose': {'x': 0.8, 'y': 0.8, 'z': 1.2, 'yaw_deg': 80.0}}
     fsm._fresh_payload = lambda _age=0.5: det
     fsm._transition(State.M5_QR_DOCK)
-    fsm._state_m5_qr_dock({'depth': 0.0})
-    axes = fsm.cmd.plant._in
-    assert all(abs(axes[k]) <= m5.BENCH_QR_MAX_AXIS for k in ('surge', 'sway', 'yaw'))
-    assert axes['vert'] == 0
+    samples = []
+    for _ in range(8):
+        fsm._state_m5_qr_dock({'depth': 0.0})
+        samples.append(dict(fsm.cmd.plant._in))
+    assert all(abs(samples[0][k]) <= 6.0 for k in ('surge', 'sway', 'yaw', 'vert'))
+    assert all(abs(samples[i][k] - samples[i - 1][k]) <= 6.01
+               for i in range(1, len(samples))
+               for k in ('surge', 'sway', 'yaw', 'vert'))
+    assert all(abs(samples[-1][k]) > 10.0 for k in ('sway', 'yaw', 'vert'))
+    assert samples[-1]['surge'] > 0, "surge merayap sampai QR terpusat"
+
+    # Setelah lateral/vertikal terpusat, surge juga boleh memakai rentang >10%.
+    fsm_center = _make_fsm(bench_qr_dock=True)
+    fsm_center._servo_dt = lambda: 0.1
+    centered = dict(det, pose={'x': 0.0, 'y': 0.0, 'z': 1.2, 'yaw_deg': 0.0})
+    fsm_center._fresh_payload = lambda _age=0.5: centered
+    fsm_center._transition(State.M5_QR_DOCK)
+    for _ in range(8):
+        fsm_center._state_m5_qr_dock({'depth': 0.0})
+    assert abs(fsm_center.cmd.plant._in['surge']) > 10.0
 
     fsm._fresh_payload = lambda _age=0.5: None
     fsm._m5_last_det_t = m5.time.time() - m5.M5_LOCK_GRACE_T - 0.1

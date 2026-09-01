@@ -306,16 +306,17 @@ def decode_qr(frame, enhance=True):
     'pts': ndarray(N,2) koordinat frame ASLI}.
 
     Jenjang (berhenti di jenjang pertama yang berhasil):
-      1. pyzbar pada frame mentah (cepat, kasus QR jelas).
-      2. pyzbar pada grayscale + CLAHE (cahaya tak rata / glare).
-      3. pyzbar pada grayscale+CLAHE yang di-adaptive-threshold (pisahkan modul
+      1. zxing-cpp pada grayscale asli (cepat + checksum-verified).
+      2. pyzbar pada frame mentah.
+      3. pyzbar pada grayscale + CLAHE (cahaya tak rata / glare).
+      4. pyzbar pada grayscale+CLAHE yang di-adaptive-threshold (pisahkan modul
          QR dari lantai berfaset/riak — beda mekanisme dari CLAHE saja).
-      4. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
-      5. cv2 detect → perspective warp → decode (QR miring/distorsi).
-      6. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
-      7. zxing-cpp pada grayscale 2x, 4x, lalu 4x unsharp (decoder terpisah untuk
+      5. pyzbar pada grayscale+CLAHE yang di-upscale UPSCALE× (QR kecil/jauh).
+      6. cv2 detect → perspective warp → decode (QR miring/distorsi).
+      7. cv2.QRCodeDetector.detectAndDecodeMulti pada grayscale (fallback detektor beda).
+      8. zxing-cpp pada grayscale 2x, 4x, lalu 4x unsharp (decoder terpisah untuk
          modul kecil/lunak akibat haze dan kompresi).
-    enhance=False → hanya jenjang 1 (perilaku lama; utk benchmark/uji A-B).
+    enhance=False → hanya pyzbar mentah (perilaku lama; utk benchmark/uji A-B).
 
     Tiap jenjang di-gate `_quiet_zone_ok` — kandidat tanpa quiet zone putih (mis.
     siluet hook/dinding/bayangan yg kebetulan membentuk quad) DIBUANG dari jenjang
@@ -324,6 +325,14 @@ def decode_qr(frame, enhance=True):
     if not CV2_OK:
         return []
     gray_raw = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    # Pada RPi, frame WALL 1280x720 terukur 0,055 s di ZXing 1x tetapi pyzbar
+    # mentah 1,17 s dan seluruh fallback sebelum ZXing mencapai beberapa detik.
+    # Dahulukan decoder checksum-verified ini agar timestamp visual servo tidak
+    # basi; jalur preprocessing lama tetap menjadi fallback untuk QR sulit.
+    if enhance and ZXING_OK:
+        res = _zxing_qr(gray_raw)
+        if res:
+            return res
     if PYZBAR_OK:
         res = _pyzbar_qr(frame, 1.0, gray_for_gate=gray_raw)
         if res or not enhance:
@@ -359,12 +368,12 @@ def decode_qr(frame, enhance=True):
                     return out
         except cv2.error:
             pass
-    # Jenjang 7: zxing-cpp — decoder terpisah (bukan pyzbar/zbar), jauh lebih toleran
+    # Jenjang 8: upscale zxing-cpp — decoder terpisah (bukan pyzbar/zbar), jauh lebih toleran
     # thd tilt/perspective. Divalidasi: pipeline di atas sudah gagal total pada QR
     # sintetis yg di-tilt 20°, zxing-cpp masih berhasil sampai ~45°. ROV jarang persis
     # tegak lurus ke payload sebelum visual servo align penuh — ini kelas kegagalan
-    # yg berbeda dari kontras/riak yg jenjang 1-5 targetkan. Lebih cepat dari jenjang
-    # lain juga. Hanya dijalankan setelah seluruh jalur cepat gagal.
+    # yg berbeda dari kontras/riak yg fallback sebelumnya targetkan. Hanya
+    # dijalankan setelah jalur cepat 1x dan seluruh preprocessing gagal.
     if enhance and ZXING_OK:
         for candidate, scale in (
                 (cv2.resize(gray_raw, None, fx=ZXING_SCALES[0], fy=ZXING_SCALES[0],
@@ -399,7 +408,16 @@ def _decode_tracked_roi(frame, pts):
     xb, yb = min(w, int(x1 + pad)), min(h, int(y1 + pad))
     if xb - xa < 24 or yb - ya < 24:
         return []
-    out = decode_qr(frame[ya:yb, xa:xb], enhance=True)
+    crop = frame[ya:yb, xa:xb]
+    if ZXING_OK:
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+        # ROI adalah optimisasi, bukan jalur wajib. Bila ZXing cepat gagal pada
+        # crop (mis. quiet zone ikut terpotong), segera biarkan caller mencoba
+        # frame penuh; menjalankan seluruh cascade mahal di sini membuat hasil
+        # terakhir basi sebelum frame penuh sempat dibaca.
+        out = _zxing_qr(gray)
+    else:
+        out = decode_qr(crop, enhance=True)
     for det in out:
         det['pts'] = np.asarray(det['pts'], dtype=np.float32) + (xa, ya)
     return out
@@ -435,6 +453,7 @@ class VisionPipeline:
         hook_min_area: float = 150.0,
         hook_pipe_diam: float = 0.025,
         hook_model: Optional[str] = None,
+        hook_enabled: bool = True,
         wall_cnn=None,
         wall_cnn_votes: int = 3,
         wall_cnn_min_conf: float = 0.8,
@@ -465,6 +484,9 @@ class VisionPipeline:
         hook_pipe_diam : diameter pipa hook fisik (m) — KKI 2026 ¾" = 0.025 (estimasi jarak)
         hook_model : path bobot YOLOv8 Hook di laptop. None → detector OpenCV lama.
                      YOLO hanya memberi bbox/offset X-Y relatif; pose 3D tetap None.
+        hook_enabled : False menonaktifkan detector hook seluruhnya. Dipakai hanya
+                     pada bench QR docking agar Hough/contour hook tidak merebut CPU
+                     dari loop visual-servo QR real-time.
         wall_cnn   : aktifkan fallback tebak sisi kolam saat decode_qr() GAGAL.
                      True → bobot bawaan (vision/wall_cnn.npz); str → path .npz;
                      None/False → nonaktif (default). Hasilnya TIDAK masuk latest_qr()
@@ -546,8 +568,9 @@ class VisionPipeline:
         self.hook_hsv_range = hook_hsv_range
         self.hook_min_area = hook_min_area
         self.hook_pipe_diam = hook_pipe_diam
+        self.hook_enabled = bool(hook_enabled)
         self._hook_yolo = None
-        if hook_model:
+        if hook_model and self.hook_enabled:
             from vision.yolo_hook import YOLOHookDetector
             self._hook_yolo = YOLOHookDetector(hook_model)
 
@@ -806,14 +829,7 @@ class VisionPipeline:
             frame = self._undistort(frame, self._K, self._dist, self._undist_cache)
 
             # Deteksi QR code (decode_qr = preprocessing berjenjang: mentah→CLAHE→upscale)
-            dets = []
-            if self._last_qr_pts is not None:
-                if time.time() - self._last_qr_pts_time <= TRACK_MAX_AGE:
-                    dets = _decode_tracked_roi(frame, self._last_qr_pts)
-                else:
-                    self._last_qr_pts = None
-            if not dets:
-                dets = decode_qr(frame)
+            dets = self._decode_qr_frame(frame)
             if not dets:
                 dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
             if not dets:
@@ -884,14 +900,7 @@ class VisionPipeline:
                 continue
 
             frame = self._undistort(frame, K, dist, self._undist_cache_qr)
-            dets = []
-            if self._last_qr_pts is not None:
-                if time.time() - self._last_qr_pts_time <= TRACK_MAX_AGE:
-                    dets = _decode_tracked_roi(frame, self._last_qr_pts)
-                else:
-                    self._last_qr_pts = None
-            if not dets:
-                dets = decode_qr(frame)
+            dets = self._decode_qr_frame(frame)
             if not dets:
                 dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
             if not dets:
@@ -949,8 +958,26 @@ class VisionPipeline:
 
     # ── Helper ────────────────────────────────────────────────────────────────
 
+    def _decode_qr_frame(self, frame):
+        """Decode real-time: saat tracking aktif, jangan blokir loop pada cascade."""
+        tracking = False
+        if self._last_qr_pts is not None:
+            if time.time() - self._last_qr_pts_time <= TRACK_MAX_AGE:
+                tracking = True
+                dets = _decode_tracked_roi(frame, self._last_qr_pts)
+                if dets:
+                    return dets
+            else:
+                self._last_qr_pts = None
+        if tracking and ZXING_OK:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+            return _zxing_qr(gray)
+        return decode_qr(frame)
+
     def _detect_hook(self, frame, K):
         """Pilih detector hook yang diminta; default tetap detector OpenCV lama."""
+        if not self.hook_enabled:
+            return None
         if self._hook_yolo is not None:
             hook = self._hook_yolo.detect(frame)
             if hook is not None:

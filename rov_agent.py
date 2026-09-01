@@ -36,6 +36,7 @@ from rov_pid import (
 
 from attitude_filter import AttitudeFilter
 from gripper_controller import GripperController
+from rov_pistat import read_cpu_percent, read_soc_temp
 
 # =========================
 # Konfigurasi jaringan
@@ -61,6 +62,7 @@ QGC_IN_PORT = int(os.environ.get("QGC_IN_PORT", "14560"))  # MAVLink QGC -> Pi
 # =========================
 PIXHAWK_PORT = os.environ.get("PIXHAWK_PORT", "/dev/ttyACM0")
 PIXHAWK_BAUD = int(os.environ.get("PIXHAWK_BAUD", "115200"))
+
 
 # Tidak ada satu pun pesan MAVLink selama ini -> link dianggap mati dan
 # disambungkan ulang (USB lepas / Pixhawk re-enumerate).
@@ -502,6 +504,10 @@ mavlink_stream_requested_at = None
 _mav_rate = RateLimiter()
 
 _last_telem_log = 0.0
+# Status Pi (readout PI di GUI): disampel 1 Hz, bukan tiap paket telemetri —
+# read_cpu_percent() butuh jarak antar sampel /proc/stat supaya deltanya berarti.
+_last_pistat = 0.0
+_pi_snapshot = None
 
 def send_to_gui(obj):
     """Kirim satu pesan JSON ke laptop lewat socket telemetry.
@@ -587,10 +593,17 @@ def send_telemetry():
         if mission5_runner is not None
         else None
     )
+    now = time.time()
+    global _last_pistat, _pi_snapshot
+    if now - _last_pistat >= 1.0:
+        _last_pistat = now
+        pct, _pi_snapshot = read_cpu_percent(_pi_snapshot)
+        state["pi_cpu"] = pct
+        state["pi_temp"] = read_soc_temp()
+
     send_to_gui(state)
 
-    now = time.time()
-    if now - _last_telem_log >= 1.0:
+    if VERBOSE_TELEMETRY and now - _last_telem_log >= 1.0:
         _last_telem_log = now
         print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
 
@@ -1882,10 +1895,13 @@ def joystick_sender():
 
         try:
             with master_lock:
-                print(
-                    f"[JOY] x={mc['x']} y={mc['y']} z={mc['z']} "
-                    f"r={mc['r']} buttons={mc['buttons']}"
-                )
+                # print() menahan master_lock sampai journald selesai menulis —
+                # semua thread lain ikut menunggu. Karena itu dia di balik flag.
+                if VERBOSE_JOYSTICK:
+                    print(
+                        f"[JOY] x={mc['x']} y={mc['y']} z={mc['z']} "
+                        f"r={mc['r']} buttons={mc['buttons']}"
+                    )
 
                 master.mav.manual_control_send(
                     master.target_system,
@@ -2203,7 +2219,8 @@ def main():
                 (t3 + t4 + t5) / 3
             )
 
-            print(f"[PWM VERTICAL] T3={t3} T4={t4} T5={t5}")
+            if VERBOSE_TELEMETRY:
+                print(f"[PWM VERTICAL] T3={t3} T4={t4} T5={t5}")
 
             state["thruster_lateral_pwm"] = t6
             state["thruster_surge_pwm"] = [t1, t2]

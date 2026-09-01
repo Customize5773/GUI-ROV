@@ -1273,6 +1273,10 @@ if (SIM) {
         pitch: 7 * Math.sin(t * 0.4 + 1),
         temp: 26.5 + Math.sin(t * 0.05),
         voltage: 15.7 + 0.2 * Math.sin(t),
+        // Status Pi (readout PI). Di ROV nyata datang dari rov_pistat.py; di sim
+        // cukup goyang pelan supaya ambang warn/crit di GUI bisa dilihat kerjanya.
+        pi_cpu: Math.round(45 + 30 * Math.sin(t * 0.11)),
+        pi_temp: Math.round(58 + 14 * Math.sin(t * 0.07)),
         armed: simState.armed,
         light: simState.light,
         // Sama seperti ROV sungguhan: field `mode` adalah mode ArduSub dari

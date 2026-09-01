@@ -46,6 +46,25 @@ def test_decode_qr_clear_uses_fast_path():
     assert res[0]['pts'].shape[0] >= 4
 
 
+def test_decode_qr_prefers_checksum_verified_zxing_fast_path(monkeypatch):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    pts = np.float32([[10, 10], [30, 10], [30, 30], [10, 30]])
+    monkeypatch.setattr(qd, "ZXING_OK", True)
+    monkeypatch.setattr(qd, "_zxing_qr", lambda gray, scale=1.0: [
+        {"data": "B", "pts": pts}
+    ])
+    monkeypatch.setattr(
+        qd.pyzbar, "decode",
+        lambda image: pytest.fail("pyzbar tidak boleh dipanggil setelah ZXing 1x sukses"),
+    )
+
+    frame = np.zeros((80, 100, 3), np.uint8)
+    assert qd.decode_qr(frame, enhance=True)[0]["data"] == "B"
+
+
 # ── Escalation + rescale (deterministik, tak bergantung ketangguhan pyzbar nyata) ──
 # pyzbar SANGAT tangguh pada gambar sintetis bersih → sulit memaksa "raw gagal" secara
 # deterministik. Jadi logika berjenjang & koreksi koordinat diuji dgn memalsukan
@@ -176,6 +195,7 @@ def test_decode_tracked_roi_maps_points_back_to_frame(monkeypatch):
         seen["shape"] = crop.shape[:2]
         return [{"data": "B", "pts": np.float32([[5, 6], [15, 6], [15, 16], [5, 16]])}]
 
+    monkeypatch.setattr(qd, "ZXING_OK", False)
     monkeypatch.setattr(qd, "decode_qr", fake_decode)
     out = qd._decode_tracked_roi(frame, np.float32([[100, 80], [120, 80],
                                                        [120, 100], [100, 100]]))
@@ -183,6 +203,54 @@ def test_decode_tracked_roi_maps_points_back_to_frame(monkeypatch):
     assert seen["shape"] == (56, 56)
     np.testing.assert_allclose(out[0]["pts"],
                                np.float32([[87, 68], [97, 68], [97, 78], [87, 78]]))
+
+
+def test_decode_tracked_roi_zxing_miss_returns_to_full_frame(monkeypatch):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    monkeypatch.setattr(qd, "ZXING_OK", True)
+    monkeypatch.setattr(qd, "_zxing_qr", lambda gray: [])
+    monkeypatch.setattr(
+        qd, "decode_qr",
+        lambda *args, **kwargs: pytest.fail("ROI tidak boleh menjalankan cascade mahal"),
+    )
+    frame = np.zeros((200, 300, 3), np.uint8)
+    pts = np.float32([[100, 80], [120, 80], [120, 100], [100, 100]])
+
+    assert qd._decode_tracked_roi(frame, pts) == []
+
+
+def test_hook_detector_can_be_disabled_for_qr_only_bench(monkeypatch):
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    monkeypatch.setattr(
+        qd, "detect_hook",
+        lambda *args, **kwargs: pytest.fail("detector hook tidak boleh berjalan"),
+    )
+    vp = qd.VisionPipeline(hook_enabled=False)
+
+    assert vp._detect_hook(np.zeros((20, 20, 3), np.uint8), None) is None
+
+
+def test_tracked_frame_miss_skips_expensive_decode_cascade(monkeypatch):
+    np = pytest.importorskip("numpy")
+    import vision.qr_detect as qd
+
+    vp = qd.VisionPipeline()
+    vp._last_qr_pts = np.float32([[10, 10], [30, 10], [30, 30], [10, 30]])
+    vp._last_qr_pts_time = qd.time.time()
+    monkeypatch.setattr(qd, "ZXING_OK", True)
+    monkeypatch.setattr(qd, "_decode_tracked_roi", lambda frame, pts: [])
+    monkeypatch.setattr(qd, "_zxing_qr", lambda gray: [])
+    monkeypatch.setattr(
+        qd, "decode_qr",
+        lambda frame: pytest.fail("tracking miss tidak boleh masuk cascade mahal"),
+    )
+
+    assert vp._decode_qr_frame(np.zeros((80, 100, 3), np.uint8)) == []
 
 
 def test_decode_qr_no_qr_returns_empty():

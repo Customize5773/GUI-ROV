@@ -245,8 +245,9 @@ class PoseServo:
         self._pid_sway = PID(kp_sway, ki, kd, max_speed, **_opt)
         self._pid_surge = PID(kp_surge, ki, kd, max_speed, **_opt)
         self._pid_vert = PID(kp_vert, ki, kd, max_speed, **_opt)
-        self._pid_yaw = PID(kp_yaw, ki, kd, max_speed,      # PBVS: yaw dlm DERAJAT
-                            deadband=deadband_yaw, d_lpf=d_lpf, slew=slew)
+        self._pid_yaw = PID(kp_yaw, ki, kd,                 # PBVS: yaw dlm DERAJAT
+                            out_limit=max_speed, deadband=deadband_yaw,
+                            d_lpf=d_lpf, slew=slew)
         self._hits = 0
 
     def reset(self):

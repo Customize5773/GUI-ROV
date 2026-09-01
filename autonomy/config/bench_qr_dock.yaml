@@ -6,3 +6,13 @@ docking:
   servo_target_x: 0.0794
   servo_target_y: -0.0349
   servo_target_yaw_deg: 11.18
+  servo_kp_yaw: 1.0
+  servo_max_speed: 100.0
+  lock_grace_t: 5.0
+
+# Otoritas penuh tetap diramp agar perubahan PWM tidak menyentak rangka.
+servo_smooth:
+  slew: 60.0
+
+left_flow:
+  qr_max_yaw: 100.0
