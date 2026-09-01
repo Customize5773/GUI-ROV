@@ -12,23 +12,25 @@ import time
 
 
 # ═══ EDIT MOTION CUSTOM DI SINI ═══
-# False = Mission5FSM lengkap (return, QR docking, unhook) tetap dipakai.
-# True  = jalankan CASE di bawah berurutan.
-CUSTOM_MOTION_ENABLED = False
+# True  = jalankan CASE di bawah (langkah 1-2 misi 5) lalu SERAHKAN ke Mission5FSM
+#         di M5_YOLO_SEARCH untuk langkah 3-8 (YOLO → ujung J → QR → grip →
+#         unhook → surface). Ini jalur lomba.
+# False = langsung Mission5FSM dari cfg["start_state"], tanpa CASE.
+CUSTOM_MOTION_ENABLED = True
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
+# heading = OFFSET derajat dari marked_heading (BUKAN kompas absolut), karena
+# pilot selalu bersandar di dinding yang di-MARK setelah misi 4. Tabel ini jadi
+# portabel antar arena: MARK diukur ulang, offsetnya tetap.
+#   0 = menghadap arah yang sama dgn saat MARK; 180 = membelakanginya.
 CUSTOM_CASES = [
-    {"name": "CASE_M1", "duration_ms": 6150,
-     "motion": (25, 100, -45, 0.40, "hold")},
-    {"name": "CASE_M2", "duration_ms": 5000,
-     "motion": (-0, 0, 25, 0.40, "open")},
-    {"name": "CASE_M3", "duration_ms": 5000,
-     "motion": (-5, 0, 115, 0.40, "close")},
-    {"name": "CASE_M4", "duration_ms": 4000,
-     "motion": (10, 0, 115, 0.40, "hold")},
-    {"name": "CASE_M5", "duration_ms": 5000,
-     "motion": (4, 0, 115, 0.40, "hold")},
+    # Langkah 1: turun ke kedalaman hook sambil maju sedikit + serong kanan.
+    {"name": "CASE_PREP", "duration_ms": 3000,
+     "motion": (15, 10, 0, 0.40, "open")},
+    # Langkah 2: putar membelakangi arah MARK, tahan sampai heading mantap.
+    {"name": "CASE_TURN", "duration_ms": 6000,
+     "motion": (0, 0, 180, 0.40, "open")},
 ]
 
 
@@ -123,6 +125,7 @@ class Mission5Runner:
         self._thread = None
         self._lock = threading.Lock()
         self._custom_stop = threading.Event()
+        self._last_case_heading = None   # heading absolut CASE terakhir → FSM
         self.custom_enabled = bool(self._cfg.get(
             "custom_motion_enabled", CUSTOM_MOTION_ENABLED))
         self.custom_cases = self._cfg.get("custom_cases", CUSTOM_CASES)
@@ -228,6 +231,16 @@ class Mission5Runner:
             self.last_error = str(exc)
             self._log(f"[CUSTOM] TIDAK BISA START — {exc}")
             return False
+        # Heading tiap CASE ditulis RELATIF terhadap MARK: pilot selalu bersandar
+        # di dinding payload yang di-MARK setelah misi 4, jadi marked_heading itu
+        # acuan yang bisa dipercaya — dan tabel CASE jadi portabel antar arena
+        # tanpa ditulis ulang. Tanpa MARK, offset relatif tak punya arti.
+        marked_heading, _marked_depth = self._cfg.get("read_mark", lambda: (None, None))()
+        if marked_heading is None:
+            self.last_error = "MARK gantungan wajib sebelum AUTONOMOUS"
+            self._log(f"[CUSTOM] TIDAK BISA START — {self.last_error}")
+            return False
+
         self._cmd.stop_all()
         if not self._cmd.set_alt_hold():
             self.last_error = "ALT_HOLD gagal"
@@ -254,8 +267,10 @@ class Mission5Runner:
                         self._custom_elapsed_ms = (time.monotonic() - started) * 1000.0
                         if self._custom_elapsed_ms >= duration_ms:
                             break
+                        abs_hdg = (marked_heading + float(self._custom_motion[2])) % 360.0
+                        self._last_case_heading = abs_hdg
                         heading = self._telem.get().get("heading", 0.0)
-                        yaw = self._heading_control(self._custom_motion[2], heading)
+                        yaw = self._heading_control(abs_hdg, heading)
                         self._cmd.send_motion(self._custom_motion, yaw_command=yaw)
                         self._custom_stop.wait(0.05)
                 self._custom_state = "STOPPED" if self._custom_stop.is_set() else "COMPLETE"
@@ -271,6 +286,17 @@ class Mission5Runner:
                     runlog.close(alasan=alasan,
                                  state_akhir=self._custom_state)
                 self._log(f"[CUSTOM] selesai state={self._custom_state}")
+
+            # Langkah 1-2 tuntas → serahkan ke FSM untuk langkah 3-8, membawa
+            # heading CASE terakhir sbg acuan yang ditahan selagi mencari hook.
+            # Cek _custom_stop LAGI di sini: kill-switch yang menyala tepat di
+            # batas serah terima tak boleh malah memulai FSM.
+            if self._custom_state == "COMPLETE" and not self._custom_stop.is_set():
+                self._log("[CUSTOM] CASE selesai → serah terima ke FSM "
+                          f"(M5_YOLO_SEARCH, heading_hold={self._last_case_heading})")
+                with self._lock:
+                    self._thread = None      # lepaskan slot agar _start_fsm bisa mulai
+                self._start_fsm("M5_YOLO_SEARCH", heading_hold=self._last_case_heading)
 
         with self._lock:
             self._thread = threading.Thread(target=run, daemon=True,
@@ -339,9 +365,14 @@ class Mission5Runner:
                 self._log("[M5] start dilewati — thread FSM masih hidup")
                 return False
 
+        # CASE menjalankan langkah 1-2 lalu MERANTAI sendiri ke _start_fsm()
+        # (lihat _start_custom.run) — bukan lagi jalur alternatif yang buntu.
         if self.custom_enabled:
             return self._start_custom()
+        return self._start_fsm()
 
+    def _start_fsm(self, start_state_name=None, heading_hold=None):
+        """Jalankan Mission5FSM. Dipanggil start() (langsung) DAN rantai CASE."""
         try:
             (Mission5FSM, State, VisionPipeline, QR_SIDE_M,
              HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA,
@@ -354,7 +385,8 @@ class Mission5Runner:
         cfg = self._cfg
         read_mark = cfg.get("read_mark", lambda: (None, None))
         marked_heading, marked_depth = read_mark()
-        start_state = getattr(State, cfg.get("start_state", "M5_REDIVE"))
+        start_state = getattr(State, start_state_name
+                              or cfg.get("start_state", "M5_REDIVE"))
         if start_state == State.M5_REDIVE and (
                 marked_heading is None or marked_depth is None or not marked_depth > 0):
             self.last_error = "MARK gantungan wajib sebelum AUTONOMOUS"
@@ -400,21 +432,20 @@ class Mission5Runner:
         fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision,
                           marked_heading=marked_heading,
                           marked_depth=marked_depth,
+                          heading_hold=heading_hold,
                           yolo_source=lambda: self._telem.get().get("hook_vision"),
                           hook_map_file=cfg.get("hook_map"),
                           hook_calib_file=(cfg.get("calib_wall")
                                            if cfg.get("hook_map") else None))
         runlog = self._new_runlog(start_state, marked_heading, marked_depth)
-        if runlog and start_state == State.M5_LEFT_PREP:
+        if runlog and start_state == State.M5_YOLO_SEARCH:
             names = (
-                "LEFT_PREP_SURGE", "LEFT_PREP_SWAY", "LEFT_PREP_T",
-                "LEFT_TURN_DEG", "LEFT_ADVANCE_MAX_T", "LEFT_YOLO_CONF",
-                "LEFT_YOLO_AREA_FRAC",
-                "LEFT_YOLO_AREA_TOL", "LEFT_YOLO_RANGE_KP",
-                "LEFT_YOLO_MAX_SURGE", "LEFT_QR_YAW_KP", "LEFT_QR_MAX_YAW",
-                "LEFT_GRIP_T",
+                "LEFT_ADVANCE_MAX_T", "LEFT_TIMEOUT_ALIGN", "LEFT_YOLO_CONF",
+                "LEFT_YOLO_AREA_FRAC", "HOOK_TIP_X_FRAC", "HOOK_TIP_Y_FRAC",
+                "LEFT_QR_YAW_KP", "LEFT_QR_YAW_KP_DEG", "LEFT_QR_YAW_TOL_DEG",
+                "LEFT_QR_MAX_YAW", "LEFT_GRIP_T",
             )
-            runlog.event("left_flow_config",
+            runlog.event("left_flow_config", heading_hold=heading_hold,
                          values={name: getattr(mission5_module, name) for name in names})
         fsm.runlog = runlog
 
@@ -463,11 +494,11 @@ class Mission5Runner:
         self._log("[M5] Mission5 FSM dihentikan")
 
     def state_name(self):
-        if self.custom_enabled:
-            return self._custom_state
+        # Setelah rantai CASE→FSM, yang berlaku adalah state FSM. Tanpa cek _fsm
+        # lebih dulu, badge GUI membeku di "COMPLETE" sepanjang fase YOLO.
         fsm = self._fsm
         if fsm is None:
-            return None
+            return self._custom_state if self.custom_enabled else None
         try:
             return fsm.telemetry_out.get("state")
         except Exception:

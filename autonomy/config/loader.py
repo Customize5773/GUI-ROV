@@ -119,17 +119,13 @@ _SCALAR_MAP = {
 
     # Alur Misi 5 dari sisi kiri. Nilai ini WAJIB ditune dengan supervised
     # water test; bbox target bergantung kamera, model, dan geometri gripper.
-    ('left_flow', 'prep_surge'):       'LEFT_PREP_SURGE',
-    ('left_flow', 'prep_sway'):        'LEFT_PREP_SWAY',
-    ('left_flow', 'prep_t'):           'LEFT_PREP_T',
-    ('left_flow', 'turn_deg'):         'LEFT_TURN_DEG',
-    ('left_flow', 'turn_tol_deg'):     'LEFT_TURN_TOL_DEG',
+    # Langkah 1-2 TIDAK ada di sini — dijalankan CASE sistem MOTION di bridge.
     ('left_flow', 'advance_max_t'):    'LEFT_ADVANCE_MAX_T',
+    ('left_flow', 'align_t'):          'LEFT_TIMEOUT_ALIGN',
     ('left_flow', 'yolo_conf'):        'LEFT_YOLO_CONF',
     ('left_flow', 'yolo_area_frac'):   'LEFT_YOLO_AREA_FRAC',
-    ('left_flow', 'yolo_area_tol'):    'LEFT_YOLO_AREA_TOL',
-    ('left_flow', 'yolo_range_kp'):    'LEFT_YOLO_RANGE_KP',
-    ('left_flow', 'yolo_max_surge'):   'LEFT_YOLO_MAX_SURGE',
+    ('left_flow', 'hook_tip_x_frac'):  'HOOK_TIP_X_FRAC',
+    ('left_flow', 'hook_tip_y_frac'):  'HOOK_TIP_Y_FRAC',
     ('left_flow', 'qr_yaw_kp'):        'LEFT_QR_YAW_KP',
     ('left_flow', 'qr_yaw_kp_deg'):    'LEFT_QR_YAW_KP_DEG',
     ('left_flow', 'qr_yaw_tol_deg'):   'LEFT_QR_YAW_TOL_DEG',

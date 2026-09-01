@@ -65,7 +65,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                     help="lewati start rov_link.py (mis. rov_link sudah jalan terpisah, "
                          "hanya ingin iterasi ulang --fsm lawan-nya)")
     ap.add_argument("--fsm", action="store_true", help="sekalian jalankan fsm/mission5.py")
-    ap.add_argument("--start-state", default="DIVE", choices=["DIVE", "M5_REDIVE", "M5_DOCK", "M5_LEFT_PREP"],
+    ap.add_argument("--start-state", default="DIVE", choices=["DIVE", "M5_REDIVE", "M5_DOCK", "M5_YOLO_SEARCH"],
                     help="dipakai bila --fsm")
     ap.add_argument("--vision", default="mock", choices=["mock", "usb", "rtsp"],
                     help="dipakai bila --fsm")

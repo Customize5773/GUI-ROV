@@ -78,17 +78,13 @@ m5_mechanics:
 # ── Misi 5 autonomous dari sisi kiri ────────────────────────────────────────
 # Baseline kode untuk dry-run/SITL; kalibrasikan pada jarak gripper nyata.
 left_flow:
-  prep_surge: 15
-  prep_sway: 10
-  prep_t: 3.0
-  turn_deg: 180.0
-  turn_tol_deg: 5.0
+  # Langkah 1-2 diatur CUSTOM_CASES di rov_mission5_bridge.py, bukan di sini.
   advance_max_t: 15.0    # pagar JARAK maju buta (detik x SEARCH_SPEED); skala per arena
+  align_t: 20.0
   yolo_conf: 0.35
-  yolo_area_frac: 0.08
-  yolo_area_tol: 0.015
-  yolo_range_kp: 250.0
-  yolo_max_surge: 20.0
+  yolo_area_frac: 0.08   # UKUR: preflight_check.py --hook-model di jarak gripper
+  hook_tip_x_frac: 0.5   # titik bidik ujung "J" thd bbox: 0=kiri, 1=kanan
+  hook_tip_y_frac: 0.9   # 0=atas, 1=bawah — ujung J ada di sisi BAWAH
   qr_yaw_kp: 20.0
   qr_yaw_kp_deg: 1.0     # yaw dari kemiringan QR (PBVS); qr_yaw_kp hanya utk IBVS
   qr_yaw_tol_deg: 8.0

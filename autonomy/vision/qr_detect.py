@@ -652,6 +652,12 @@ class VisionPipeline:
     # Alur misi 5 sisi kiri membaca bbox (fraksi luas frame), BUKAN 'area' — dua
     # konsumen berbeda dgn target berbeda, keduanya sama-sama belum tervalidasi air.
     MOCK_HOOK_BBOX_FRAC = 0.08               # fraksi frame saat engage (samakan dgn LEFT_YOLO_AREA_FRAC)
+    # Yang dibidik FSM (M5_HOOK_ALIGN) adalah KEPALA UJUNG HOOK "J" di sisi bawah
+    # bbox, bukan centroid — jadi titik ITU yang harus meluruh ke tengah frame,
+    # kalau tidak state itu tak akan pernah konvergen di SITL. Samakan dgn
+    # HOOK_TIP_X_FRAC / HOOK_TIP_Y_FRAC di fsm/mission5.py.
+    MOCK_HOOK_TIP_X_FRAC = 0.5
+    MOCK_HOOK_TIP_Y_FRAC = 0.9
     MOCK_TARGET_DIST    = 0.30              # m saat engage (samakan dgn SERVO_TARGET_DIST FSM)
 
     def _run_mock(self):
@@ -688,16 +694,20 @@ class VisionPipeline:
 
             # Mock hook (CAM WALL) — konvergen seiring `err` meluruh spt QR, agar HANG/DOCK
             # closed-loop bisa dijalankan tanpa kamera (uji launch_sitl --vision mock).
+            # (hcx, hcy) = UJUNG J, titik yang meluruh ke tengah frame.
             hcx, hcy = int(320 + 130 * err), int(240 - 100 * err)   # hook di atas → naik ke tengah
             harea = self.MOCK_TARGET_AREA * (1.0 - 0.6 * err)
-            # bbox MEMBESAR seiring mendekat (dulu 30x80 statis, jadi M5_YOLO_RANGE
+            # bbox MEMBESAR seiring mendekat (dulu 30x80 statis, jadi jarak
             # tak pernah bisa konvergen di SITL). Aspek 3:8 dipertahankan.
             hk = math.sqrt(max(0.05, 1.0 - 0.6 * err))
             hbw = 96.0 * hk * math.sqrt(self.MOCK_HOOK_BBOX_FRAC / 0.08)
             hbh = hbw * 8.0 / 3.0
+            # bbox diturunkan DARI ujung J, bukan sebaliknya.
+            hbx = hcx - hbw * self.MOCK_HOOK_TIP_X_FRAC
+            hby = hcy - hbh * self.MOCK_HOOK_TIP_Y_FRAC
             self._last_hook = {
-                'type': 'hook', 'center': (hcx, hcy),
-                'bbox': (hcx - hbw / 2, hcy - hbh / 2, hbw, hbh),
+                'type': 'hook', 'center': (int(hbx + hbw / 2), int(hby + hbh / 2)),
+                'bbox': (hbx, hby, hbw, hbh),
                 'area': harea, 'width_px': 30.0 * (1.0 - 0.5 * err), 'confidence': 0.9,
                 'method': 'mock', 'frame_w': 640, 'frame_h': 480, 'pose': None,
                 'timestamp': time.time(),
