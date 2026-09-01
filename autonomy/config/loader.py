@@ -131,6 +131,8 @@ _SCALAR_MAP = {
     ('left_flow', 'yolo_range_kp'):    'LEFT_YOLO_RANGE_KP',
     ('left_flow', 'yolo_max_surge'):   'LEFT_YOLO_MAX_SURGE',
     ('left_flow', 'qr_yaw_kp'):        'LEFT_QR_YAW_KP',
+    ('left_flow', 'qr_yaw_kp_deg'):    'LEFT_QR_YAW_KP_DEG',
+    ('left_flow', 'qr_yaw_tol_deg'):   'LEFT_QR_YAW_TOL_DEG',
     ('left_flow', 'qr_max_yaw'):       'LEFT_QR_MAX_YAW',
     ('left_flow', 'grip_t'):           'LEFT_GRIP_T',
 

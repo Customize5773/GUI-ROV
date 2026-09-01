@@ -233,9 +233,16 @@ LEFT_YOLO_AREA_TOL    = 0.015
 LEFT_YOLO_RANGE_KP    = 250.0
 LEFT_YOLO_MAX_SURGE   = 20.0
 LEFT_YOLO_LOCK_FRAMES = 5
-LEFT_QR_YAW_KP        = 20.0
+LEFT_QR_YAW_KP        = 20.0   # dipakai HANYA bila pose QR tak ada (IBVS, tanpa kalibrasi)
+# Sumber error yaw saat pose tersedia: KEMIRINGAN bidang QR (solvePnP yaw_deg),
+# bukan lenceng lateral. Dulu yaw dan sway sama-sama digerakkan oleh ex sehingga
+# "QR di tengah gambar" bisa dicapai dgn MENGHADAP, bukan dgn BERADA DI DEPAN —
+# gripper menutup miring. Dgn dua sumber terpisah, sway mengurus posisi dan yaw
+# mengurus ketegaklurusan, dan syarat selesai menuntut keduanya.
+# ⚠ VERIFIKASI ARAH di kolam (lihat SERVO_INVERT): balik tanda bila error MEMBESAR.
+LEFT_QR_YAW_KP_DEG    = 1.0    # % yaw per derajat kemiringan (20° → cap 20%)
+LEFT_QR_YAW_TOL_DEG   = 8.0    # derajat — seordo SEARCH_YAW_TOL
 LEFT_QR_MAX_YAW       = 20.0
-LEFT_QR_LOCK_FRAMES   = 5
 LEFT_GRIP_T           = 2.0
 
 
@@ -468,7 +475,6 @@ class Mission5FSM:
         self._left_depth = None   # target depth alur kiri, dikunci di M5_LEFT_PREP
         self._left_search_hits = 0
         self._left_range_hits = 0
-        self._left_qr_hits = 0
 
         # Telemetri live untuk GUI (dibaca rov_link.py, diteruskan sbg field "mission5").
         self.telemetry_out = {
@@ -1611,7 +1617,11 @@ class Mission5FSM:
         if self._elapsed() > LEFT_TIMEOUT_TURN:
             self._left_abort("yaw 180 timeout")
             return
-        target = (self._left_start_heading + LEFT_TURN_DEG) % 360.0
+        # MARK direkam pilot DI gantungan, jadi ia menunjuk dinding hook yang
+        # sebenarnya. Putaran relatif 180° hanya benar bila ROV selalu diletakkan
+        # tepat membelakangi dinding itu — pakai MARK bila ada, asumsi bila tidak.
+        target = (self._marked_heading if self._marked_heading is not None
+                  else (self._left_start_heading + LEFT_TURN_DEG) % 360.0)
         error = self._heading_error(float(heading), target)
         if abs(error) <= LEFT_TURN_TOL_DEG:
             self.cmd.stop_all()
@@ -1650,10 +1660,14 @@ class Mission5FSM:
                 self._transition(State.M5_YOLO_RANGE)
             return
         self._left_search_hits = max(0, self._left_search_hits - 1)
-        # Budget jarak habis: berhenti maju, tapi terus melihat sampai timeout —
-        # tanpa sensor jarak, terus merangsek = menabrak dinding.
+        # Budget jarak habis: berhenti maju (tanpa sensor jarak, terus merangsek =
+        # menabrak dinding) lalu SAPU YAW. Galat sisa dari putaran 180° bersifat
+        # SUDUT, bukan lateral, jadi memutar di tempat yang menemukan hook —
+        # bukan ladder zigzag M5_SEARCH yang mengobati lenceng posisi.
         if self._elapsed() > LEFT_ADVANCE_MAX_T:
-            self.cmd.send(vert=self._left_hold(telem), gripper=0)
+            fase = int((self._elapsed() - LEFT_ADVANCE_MAX_T) / SCAN_SWEEP_T)
+            self.cmd.send(yaw=YAW_SPEED if fase % 2 == 0 else -YAW_SPEED,
+                          vert=self._left_hold(telem), gripper=0)
             return
         self.cmd.send(surge=SEARCH_SPEED, vert=self._left_hold(telem), gripper=0)
 
@@ -1698,7 +1712,6 @@ class Mission5FSM:
             return
         det = self._fresh_payload(0.5)
         if det is None:
-            self._left_qr_hits = 0
             since = time.time() - self._m5_last_det_t
             if since < M5_LOCK_GRACE_T:
                 self.cmd.stop_all()
@@ -1709,12 +1722,26 @@ class Mission5FSM:
 
         self._note_detection(det)
         out, _mode = self._servo_step(det)
-        ex = (det['center'][0] - det['frame_w'] / 2.0) / (det['frame_w'] / 2.0)
-        self._left_qr_hits = (self._left_qr_hits + 1 if abs(ex) < self.servo.tol_norm
-                              else max(0, self._left_qr_hits - 1))
-        yaw = max(-LEFT_QR_MAX_YAW, min(LEFT_QR_MAX_YAW, LEFT_QR_YAW_KP * ex))
-        self.cmd.send(sway=out.sway, yaw=yaw, vert=self._left_hold(telem), gripper=0)
-        if self._left_qr_hits >= LEFT_QR_LOCK_FRAMES:
+        pose = det.get('pose')
+        if pose is not None:
+            yaw_deg = float(pose.get('yaw_deg', 0.0))
+            yaw = LEFT_QR_YAW_KP_DEG * yaw_deg
+            square = abs(yaw_deg) <= LEFT_QR_YAW_TOL_DEG
+        else:
+            # Tanpa kalibrasi, kemiringan tak terukur sama sekali — ex satu-satunya
+            # sinyal yang ada, jadi ambiguitas lama tetap melekat di mode IBVS.
+            yaw = LEFT_QR_YAW_KP * out.ex
+            square = True
+        yaw = max(-LEFT_QR_MAX_YAW, min(LEFT_QR_MAX_YAW, yaw))
+        # Keluaran servo dipakai UTUH, bukan cuma sway. Ia sudah menggerbang surge
+        # sampai terpusat ("center dulu, baru maju" — _approach_gate), memegang
+        # jarak ke target metrik saat PBVS, mengoreksi tinggi dari QR itu sendiri,
+        # dan out.aligned sudah menghitung tally 3 sumbu (ex/ey/ea) berhisteresis.
+        # Menulis ulang semua itu di sini dulu justru membalik urutannya: merapat
+        # menyerong, lalu menggeser lateral di jarak paling sempit.
+        self.cmd.send(surge=out.surge, sway=out.sway, yaw=yaw,
+                      vert=out.vert or self._left_hold(telem), gripper=0)
+        if out.aligned and square:
             self.cmd.stop_all()
             self._transition(State.M5_GRIP)
 
@@ -1788,7 +1815,6 @@ class Mission5FSM:
         elif new_state == State.M5_YOLO_RANGE:
             self._left_range_hits = 0
         elif new_state == State.M5_QR_DOCK:
-            self._left_qr_hits = 0
             self.servo.reset()
             self.pose_servo.reset()
         # Ladder pencarian selalu mulai dari nol tiap kali masuk M5_SEARCH
