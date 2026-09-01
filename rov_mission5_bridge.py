@@ -14,7 +14,7 @@ import time
 # ═══ EDIT MOTION CUSTOM DI SINI ═══
 # False = Mission5FSM lengkap (return, QR docking, unhook) tetap dipakai.
 # True  = jalankan CASE di bawah berurutan.
-CUSTOM_MOTION_ENABLED = True
+CUSTOM_MOTION_ENABLED = False
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
@@ -301,6 +301,37 @@ class Mission5Runner:
                   f"surge={module.SURGE_SPEED}% yaw={module.YAW_SPEED}% "
                   f"search={module.SEARCH_SPEED}% scan_creep={module.SCAN_CREEP_MAX_SPEED}%")
 
+    def _apply_configs(self):
+        """Terapkan tuning/geometri arena sebelum membuat servo dan FSM."""
+        paths = [p.strip() for p in (self._cfg.get("config_files") or "").split(",")
+                 if p.strip()]
+        if not paths:
+            return
+        try:
+            from config.loader import apply_config, load_config
+            import fsm.mission5 as module
+        except Exception as exc:
+            self._log(f"[M5] loader config tidak tersedia: {exc} — pakai default")
+            return
+        changed = set()
+        for requested in paths:
+            path = requested
+            if not os.path.isfile(path) and not os.path.isabs(path):
+                packaged = os.path.join(os.path.dirname(__file__), "autonomy", path)
+                if os.path.isfile(packaged):
+                    path = packaged
+            try:
+                applied = apply_config(vars(module), load_config(path))
+            except Exception as exc:
+                self._log(f"[M5] config GAGAL dimuat: {requested}: {exc} — dilewati")
+                continue
+            changed.update(name for name, _old, _new in applied)
+            self._log(f"[M5] config dimuat: {requested} ({len(applied)} nilai)")
+        try:
+            module._derive_depths(changed)
+        except Exception as exc:
+            self._log(f"[M5] geometri config tidak valid: {exc} — pakai nilai terakhir")
+
     def start(self):
         self.last_error = None
         with self._lock:
@@ -331,6 +362,7 @@ class Mission5Runner:
             return False
 
         import fsm.mission5 as mission5_module
+        self._apply_configs()
         self._apply_motion_config(mission5_module)
 
         vision = None
@@ -343,10 +375,10 @@ class Mission5Runner:
                 qr_url=cfg.get("wall_url"),
                 hook_url=None,
                 calib_file=cfg.get("calib_wall"),
-                qr_length=cfg.get("qr_size", QR_SIDE_M),
-                hook_hsv_range=HOOK_COLOR_HSV_RANGE,
-                hook_min_area=HOOK_MIN_AREA,
-                hook_pipe_diam=HOOK_PIPE_DIAM_M,
+                qr_length=cfg.get("qr_size", mission5_module.QR_SIDE_M),
+                hook_hsv_range=mission5_module.HOOK_COLOR_HSV_RANGE,
+                hook_min_area=mission5_module.HOOK_MIN_AREA,
+                hook_pipe_diam=mission5_module.HOOK_PIPE_DIAM_M,
                 wall_cnn=cfg.get("wall_cnn", True),
             )
             vision.start()
@@ -368,10 +400,22 @@ class Mission5Runner:
         fsm = Mission5FSM(cmd=self._cmd, telem=self._telem, vision=vision,
                           marked_heading=marked_heading,
                           marked_depth=marked_depth,
+                          yolo_source=lambda: self._telem.get().get("hook_vision"),
                           hook_map_file=cfg.get("hook_map"),
                           hook_calib_file=(cfg.get("calib_wall")
                                            if cfg.get("hook_map") else None))
         runlog = self._new_runlog(start_state, marked_heading, marked_depth)
+        if runlog and start_state == State.M5_LEFT_PREP:
+            names = (
+                "LEFT_PREP_SURGE", "LEFT_PREP_SWAY", "LEFT_PREP_T",
+                "LEFT_TURN_DEG", "LEFT_ADVANCE_MAX_T", "LEFT_YOLO_CONF",
+                "LEFT_YOLO_AREA_FRAC",
+                "LEFT_YOLO_AREA_TOL", "LEFT_YOLO_RANGE_KP",
+                "LEFT_YOLO_MAX_SURGE", "LEFT_QR_YAW_KP", "LEFT_QR_MAX_YAW",
+                "LEFT_GRIP_T",
+            )
+            runlog.event("left_flow_config",
+                         values={name: getattr(mission5_module, name) for name in names})
         fsm.runlog = runlog
 
         def run():
