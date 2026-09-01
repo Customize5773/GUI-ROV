@@ -76,6 +76,9 @@ _SCALAR_MAP = {
     ('docking', 'qr_side_m'):         'QR_SIDE_M',
     ('docking', 'servo_target_area'): 'SERVO_TARGET_AREA',
     ('docking', 'servo_target_dist'): 'SERVO_TARGET_DIST',
+    ('docking', 'servo_target_x'):    'SERVO_TARGET_X',
+    ('docking', 'servo_target_y'):    'SERVO_TARGET_Y',
+    ('docking', 'servo_target_yaw_deg'): 'SERVO_TARGET_YAW_DEG',
     ('docking', 'servo_kp_yaw'):      'SERVO_KP_YAW',
     ('docking', 'lock_grace_t'):      'M5_LOCK_GRACE_T',
 

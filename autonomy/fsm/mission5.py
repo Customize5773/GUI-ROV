@@ -44,7 +44,7 @@ from typing import Optional
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from vision.qr_detect import VisionPipeline
+from vision.qr_detect import VisionPipeline, normalize_plane_yaw
 from control.visual_servo import VisualServo, PoseServo
 
 log = logging.getLogger(__name__)
@@ -97,6 +97,9 @@ WALL_HEADING = {'A': 270, 'B': 90, 'C': 0, 'D': 180}
 QR_SIDE_M          = 0.04     # sisi fisik QR payload (m) — KKI 2026 = 4 cm (utk solvePnP)
 SERVO_TARGET_AREA  = 3000.0   # IBVS: luas QR (px^2) saat jarak engage (tanpa kalibrasi)
 SERVO_TARGET_DIST  = 0.30     # PBVS: jarak engage (m) — gripper mencapai payload (TUNE di kolam)
+SERVO_TARGET_X     = 0.0      # PBVS: offset sumbu kamera ke mulut gripper (m)
+SERVO_TARGET_Y     = 0.0      # PBVS: offset sumbu kamera ke mulut gripper (m)
+SERVO_TARGET_YAW_DEG = 0.0    # PBVS: yaw QR saat tepat di mulut gripper
 SERVO_KP_YAW       = 0.0      # >0 → ROV squaring tegak lurus dinding saat dock (aktifkan stlh verifikasi)
 CALIB_FILE         = "vision/calibration/dwe_underwater.npz"  # jalur satu-kamera lama; None → IBVS
 CALIB_FILE_BOTTOM  = "vision/calibration/bottom.npz"  # kalibrasi kamera QR/BOTTOM (mode dual-camera)
@@ -250,6 +253,7 @@ LEFT_QR_YAW_KP_DEG    = 1.0    # % yaw per derajat kemiringan (20° → cap 20%)
 LEFT_QR_YAW_TOL_DEG   = 8.0    # derajat — seordo SEARCH_YAW_TOL
 LEFT_QR_MAX_YAW       = 20.0
 LEFT_GRIP_T           = 2.0
+BENCH_QR_MAX_AXIS     = 10.0   # % hard-cap uji darat; heave selalu dikunci nol
 
 
 # ── State machine states ───────────────────────────────────────────────────────
@@ -392,7 +396,8 @@ class Mission5FSM:
     def __init__(self, cmd: CommandSender, telem: TelemetryReceiver,
                  vision: VisionPipeline, runlog=None,
                  marked_heading=None, marked_depth=None, hook_map_file=None,
-                 hook_calib_file=None, yolo_source=None, heading_hold=None):
+                 hook_calib_file=None, yolo_source=None, heading_hold=None,
+                 bench_qr_dock=False):
         # Tanda gantungan yang direkam operator lewat tombol MARK saat misi 3
         # (command `mark_hook` di rov_agent.py), yaitu SAAT payload benar-benar
         # tergantung di hook. Dipakai M5_REDIVE untuk kembali ke sana.
@@ -410,6 +415,7 @@ class Mission5FSM:
         # bridge saat rantai CASE→FSM. M5_YOLO_SEARCH menahannya selagi maju supaya
         # ROV tak melenceng dari dinding yang sudah dihadapkan. None = tak menahan.
         self._heading_hold   = heading_hold
+        self._bench_qr_dock  = bool(bench_qr_dock)
         self.cmd    = cmd
         self.telem  = telem
         self.vision = vision
@@ -558,8 +564,9 @@ class Mission5FSM:
         if wait_mode and not self._wait_for_autonomous():
             log.warning("[FSM] Batal: tidak masuk mode AUTONOMOUS")
             return
-        self.cmd.arm(True)          # WAJIB: arm dulu sebelum thruster merespons
-        time.sleep(0.5)
+        if not self._bench_qr_dock:
+            self.cmd.arm(True)      # jalur lomba; bench di-arm eksplisit oleh operator
+            time.sleep(0.5)
         self._mission_t0 = time.time()
         self._transition(start_state)
         self._loop()
@@ -1105,8 +1112,11 @@ class Mission5FSM:
         self.telemetry_out['active_cam'] = 'WALL'
         self.telemetry_out.update(bbox=None, confidence=None)  # bbox hook cuma dari cam WALL
         if pose is not None:                       # PBVS — pose 3D (m) bila terkalibrasi
-            out = self.pose_servo.step(pose['x'], pose['y'], pose['z'],
-                                       pose.get('yaw_deg', 0.0), dt=dt)
+            x_err = pose['x'] - SERVO_TARGET_X
+            y_err = pose['y'] - SERVO_TARGET_Y
+            yaw_err = normalize_plane_yaw(
+                pose.get('yaw_deg', 0.0) - SERVO_TARGET_YAW_DEG)
+            out = self.pose_servo.step(x_err, y_err, pose['z'], yaw_err, dt=dt)
             log.debug("[FSM] servo(PBVS) x=%.2f y=%.2f z=%.2f → su=%.0f sw=%.0f vt=%.0f",
                       pose['x'], pose['y'], pose['z'], out.surge, out.sway, out.vert)
             self.telemetry_out.update(distance_z=out.z, offset_x=out.x, offset_y=out.y)
@@ -1547,6 +1557,10 @@ class Mission5FSM:
     LEFT_DEGRADABLE = (State.M5_YOLO_SEARCH, State.M5_HOOK_ALIGN, State.M5_QR_DOCK)
 
     def _left_abort(self, reason):
+        if self._bench_qr_dock:
+            log.error("[FSM] BENCH QR ABORT — %s", reason)
+            self.abort()
+            return
         if self._state in self.LEFT_DEGRADABLE:
             log.warning("[FSM] alur M5 sisi kiri gagal (%s) — degradasi ke fallback timed",
                         reason)
@@ -1701,6 +1715,8 @@ class Mission5FSM:
             since = time.time() - self._m5_last_det_t
             if since < M5_LOCK_GRACE_T:
                 self.cmd.stop_all()
+            elif self._bench_qr_dock:
+                self._left_abort("QR hilang/basi")
             else:
                 self.cmd.send(yaw=YAW_SPEED * self._m5_search_dir,
                               vert=self._left_hold(telem), gripper=0)
@@ -1710,7 +1726,8 @@ class Mission5FSM:
         out, _mode = self._servo_step(det)
         pose = det.get('pose')
         if pose is not None:
-            yaw_deg = float(pose.get('yaw_deg', 0.0))
+            yaw_deg = normalize_plane_yaw(
+                pose.get('yaw_deg', 0.0) - SERVO_TARGET_YAW_DEG)
             yaw = LEFT_QR_YAW_KP_DEG * yaw_deg
             square = abs(yaw_deg) <= LEFT_QR_YAW_TOL_DEG
         else:
@@ -1725,8 +1742,14 @@ class Mission5FSM:
         # dan out.aligned sudah menghitung tally 3 sumbu (ex/ey/ea) berhisteresis.
         # Menulis ulang semua itu di sini dulu justru membalik urutannya: merapat
         # menyerong, lalu menggeser lateral di jarak paling sempit.
-        self.cmd.send(surge=out.surge, sway=out.sway, yaw=yaw,
-                      vert=out.vert or self._left_hold(telem), gripper=0)
+        surge, sway, vert = out.surge, out.sway, out.vert or self._left_hold(telem)
+        if self._bench_qr_dock:
+            cap = BENCH_QR_MAX_AXIS
+            surge = max(-cap, min(cap, surge))
+            sway = max(-cap, min(cap, sway))
+            yaw = max(-cap, min(cap, yaw))
+            vert = 0
+        self.cmd.send(surge=surge, sway=sway, yaw=yaw, vert=vert, gripper=0)
         if out.aligned and square:
             self.cmd.stop_all()
             self._transition(State.M5_GRIP)
@@ -1734,10 +1757,14 @@ class Mission5FSM:
     def _state_m5_grip(self, telem):
         """6. Tutup gripper, lalu serahkan langkah 7 (mundur) ke M5_UNHOOK —
         yang mengangkat lubang payload lepas dari hook DULU sebelum menarik."""
-        self.cmd.send(vert=self._left_hold(telem), gripper=1)
+        self.cmd.send(vert=0 if self._bench_qr_dock else self._left_hold(telem), gripper=1)
         if self._elapsed() >= LEFT_GRIP_T:
             self.cmd.stop_all()
-            self._transition(State.M5_UNHOOK)
+            if self._bench_qr_dock:
+                self.cmd.arm(False)
+                self._transition(State.DONE)
+            else:
+                self._transition(State.M5_UNHOOK)
 
     def _state_m5_fallback(self, telem):
         """Misi 5*: jalur DEGRADED timed (tanpa lock visual) — jaring pengaman bila QR gagal.

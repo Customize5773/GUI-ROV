@@ -33,12 +33,12 @@ from tests.sim_plant import (FakeClock, SimPlant, SimCommandLink, SimTelemetry,
                              SimVision, install_fake_time)
 
 
-def _make_fsm():
+def _make_fsm(bench_qr_dock=False):
     """FSM ringan dgn adapter sim — cukup untuk menguji helper murni (validasi payload)."""
     clock = FakeClock()
     plant = SimPlant()
     return Mission5FSM(SimCommandLink(plant), SimTelemetry(plant),
-                       SimVision(plant, clock))
+                       SimVision(plant, clock), bench_qr_dock=bench_qr_dock)
 
 
 # ── Unit: PID ────────────────────────────────────────────────────────────────
@@ -372,6 +372,46 @@ def test_qr_dock_center_dulu_baru_maju():
     fsm2._transition(State.M5_QR_DOCK)
     fsm2._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
     assert fsm2.cmd.plant._in['surge'] > melenceng, "terpusat → boleh maju penuh"
+
+
+def test_bench_qr_target_mulut_gripper_align_dan_berhenti_setelah_grip(monkeypatch):
+    monkeypatch.setattr(m5, 'SERVO_TARGET_X', 0.0794)
+    monkeypatch.setattr(m5, 'SERVO_TARGET_Y', -0.0349)
+    monkeypatch.setattr(m5, 'SERVO_TARGET_DIST', 0.3573)
+    monkeypatch.setattr(m5, 'SERVO_TARGET_YAW_DEG', 11.18)
+    fsm = _make_fsm(bench_qr_dock=True)
+    det = {'center': (613, 401), 'area': 9402.0, 'frame_w': 1280,
+           'frame_h': 720, 'payload': None,
+           'pose': {'x': 0.0794, 'y': -0.0349, 'z': 0.3573,
+                    'dist': 0.368, 'yaw_deg': 11.18}}
+    fsm._fresh_payload = lambda _age=0.5: det
+    fsm._transition(State.M5_QR_DOCK)
+    for _ in range(fsm.pose_servo.aligned_frames + 1):
+        fsm._state_m5_qr_dock({'depth': 0.0})
+    assert fsm._state == State.M5_GRIP
+    assert fsm.cmd.plant._in['vert'] == 0
+
+    fsm._state_t = m5.time.time() - m5.LEFT_GRIP_T - 0.1
+    fsm._state_m5_grip({'depth': 0.0})
+    assert fsm._state == State.DONE
+    assert not fsm.cmd.plant.s.armed
+
+
+def test_bench_qr_membatasi_axis_dan_qr_hilang_abort():
+    fsm = _make_fsm(bench_qr_dock=True)
+    det = {'center': (1200, 700), 'area': 100.0, 'frame_w': 1280,
+           'frame_h': 720, 'payload': None, 'pose': None}
+    fsm._fresh_payload = lambda _age=0.5: det
+    fsm._transition(State.M5_QR_DOCK)
+    fsm._state_m5_qr_dock({'depth': 0.0})
+    axes = fsm.cmd.plant._in
+    assert all(abs(axes[k]) <= m5.BENCH_QR_MAX_AXIS for k in ('surge', 'sway', 'yaw'))
+    assert axes['vert'] == 0
+
+    fsm._fresh_payload = lambda _age=0.5: None
+    fsm._m5_last_det_t = m5.time.time() - m5.M5_LOCK_GRACE_T - 0.1
+    fsm._state_m5_qr_dock({'depth': 0.0})
+    assert fsm._state == State.ABORT
 
 
 def test_alur_kiri_menahan_kedalaman_di_tiap_state():

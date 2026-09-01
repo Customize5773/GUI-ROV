@@ -1692,6 +1692,7 @@ def setup_mission5_runner():
         "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_BOTTOM_DEFAULT),
         "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_WALL_DEFAULT),
         "hook_map": os.environ.get("M5_HOOK_MAP") or None,
+        "bench_qr_dock": os.environ.get("M5_BENCH_QR_DOCK", "0") == "1",
         "start_state": os.environ.get("M5_START_STATE", "M5_YOLO_SEARCH"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
         # (lihat Mission5Runner._apply_configs). Arena lomba:

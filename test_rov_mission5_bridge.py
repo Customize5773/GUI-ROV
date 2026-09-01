@@ -139,6 +139,7 @@ class TestRunnerGagalLunak(unittest.TestCase):
                 events = [json.loads(line) for line in f]
             self.assertEqual(events[0]["kind"], "config")
             self.assertEqual(events[0]["marked_depth"], 0.385)
+            self.assertFalse(events[0]["bench_qr_dock"])
             self.assertEqual(events[-1]["kind"], "end")
             self.assertEqual(r.telemetry()["run_log"], runlog.path)
 
@@ -169,6 +170,14 @@ class TestRunnerGagalLunak(unittest.TestCase):
                            config={"custom_motion_enabled": False},
                            log=lambda *_: None)
         self.assertIsNone(r.state_name())
+
+    def test_bench_qr_mematikan_custom_mode(self):
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
+                           config={"bench_qr_dock": True,
+                                   "custom_motion_enabled": True},
+                           log=lambda *_: None)
+        self.assertFalse(r.custom_enabled)
+        self.assertTrue(r.telemetry()["bench_qr_dock"])
 
     def test_m5_redive_ditolak_tanpa_mark(self):
         class State:

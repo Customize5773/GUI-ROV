@@ -62,6 +62,15 @@ def parse_payload(data) -> Optional[dict]:
     return obj if isinstance(obj, dict) else None
 
 
+def normalize_plane_yaw(yaw_deg: float) -> float:
+    """Normalisasi orientasi bidang persegi ke [-90, 90) derajat.
+
+    Fiducial planar yang sama dapat keluar dari solvePnP dengan normal bidang
+    berbeda 180 derajat. Untuk squaring docking, kedua representasi itu setara.
+    """
+    return (float(yaw_deg) + 90.0) % 180.0 - 90.0
+
+
 def wall_from_qr(data) -> Optional[str]:
     """Petakan isi QR → sisi kolam 'A'|'B'|'C'|'D', atau None bila tak ada.
 
@@ -1150,7 +1159,8 @@ class VisionPipeline:
         x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
         R, _ = cv2.Rodrigues(rvec)
         # yaw = skew fiducial thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.
-        yaw_deg = math.degrees(math.atan2(R[0, 2], R[2, 2]))
+        yaw_deg = normalize_plane_yaw(
+            math.degrees(math.atan2(R[0, 2], R[2, 2])))
         return {'x': x, 'y': y, 'z': z, 'dist': math.sqrt(x * x + y * y + z * z),
                 'yaw_deg': yaw_deg}
 

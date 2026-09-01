@@ -126,8 +126,9 @@ class Mission5Runner:
         self._lock = threading.Lock()
         self._custom_stop = threading.Event()
         self._last_case_heading = None   # heading absolut CASE terakhir → FSM
-        self.custom_enabled = bool(self._cfg.get(
-            "custom_motion_enabled", CUSTOM_MOTION_ENABLED))
+        self.bench_qr_dock = bool(self._cfg.get("bench_qr_dock", False))
+        self.custom_enabled = (not self.bench_qr_dock and bool(self._cfg.get(
+            "custom_motion_enabled", CUSTOM_MOTION_ENABLED)))
         self.custom_cases = self._cfg.get("custom_cases", CUSTOM_CASES)
         self._custom_state = "IDLE"
         self._custom_motion = None
@@ -151,6 +152,7 @@ class Mission5Runner:
             self._run_log_path = path
             runlog.event("config", start_state=getattr(start_state, "name", str(start_state)),
                          marked_heading=marked_heading, marked_depth=marked_depth,
+                         bench_qr_dock=self.bench_qr_dock,
                          motion_config=dict(self.motion_config),
                          hook_map=self._cfg.get("hook_map"))
             self._log(f"[M5] Run log: {path}")
@@ -385,8 +387,9 @@ class Mission5Runner:
         cfg = self._cfg
         read_mark = cfg.get("read_mark", lambda: (None, None))
         marked_heading, marked_depth = read_mark()
-        start_state = getattr(State, start_state_name
-                              or cfg.get("start_state", "M5_REDIVE"))
+        start_state = (State.M5_QR_DOCK if self.bench_qr_dock else
+                       getattr(State, start_state_name
+                               or cfg.get("start_state", "M5_REDIVE")))
         if start_state == State.M5_REDIVE and (
                 marked_heading is None or marked_depth is None or not marked_depth > 0):
             self.last_error = "MARK gantungan wajib sebelum AUTONOMOUS"
@@ -414,7 +417,7 @@ class Mission5Runner:
                 wall_cnn=cfg.get("wall_cnn", True),
             )
             vision.start()
-            if not self._cmd.set_alt_hold():
+            if not self.bench_qr_dock and not self._cmd.set_alt_hold():
                 vision.stop()
                 self.last_error = "ALT_HOLD gagal"
                 self._log(f"[M5] ABORT — {self.last_error}")
@@ -433,6 +436,7 @@ class Mission5Runner:
                           marked_heading=marked_heading,
                           marked_depth=marked_depth,
                           heading_hold=heading_hold,
+                          bench_qr_dock=self.bench_qr_dock,
                           yolo_source=lambda: self._telem.get().get("hook_vision"),
                           hook_map_file=cfg.get("hook_map"),
                           hook_calib_file=(cfg.get("calib_wall")
@@ -511,6 +515,7 @@ class Mission5Runner:
         data["running"] = self.is_running()
         data["hook_map_enabled"] = bool(self._cfg.get("hook_map"))
         data["custom_mode"] = self.custom_enabled
+        data["bench_qr_dock"] = self.bench_qr_dock
         if self.custom_enabled:
             data["motion"] = self._custom_motion
             data["elapsed_ms"] = round(self._custom_elapsed_ms, 1)

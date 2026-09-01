@@ -432,6 +432,12 @@ def test_estimate_pose_after_undistort_requires_zero_dist():
         "dist asli dipakai lagi pasca-undistort (bug) seharusnya menyimpang jelas dari z sebenarnya"
 
 
+@pytest.mark.parametrize('raw,expected', [(-167.0, 13.0), (193.0, 13.0), (12.0, 12.0)])
+def test_normalize_plane_yaw_menghapus_ambiguitas_180(raw, expected):
+    from vision.qr_detect import normalize_plane_yaw
+    assert normalize_plane_yaw(raw) == pytest.approx(expected)
+
+
 # ── Source 'image' (file gambar statis) ───────────────────────────────────────
 def test_image_source_decodes_qr_and_dispatches():
     cv2 = pytest.importorskip("cv2")

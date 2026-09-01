@@ -1,0 +1,8 @@
+# Kalibrasi uji darat 2026-09-01, kamera WALL 1280x720.
+# Median 20/20 frame saat QR berada tepat di area mulut gripper.
+# Jangan pakai di air: refraksi mengubah pose kamera.
+docking:
+  servo_target_dist: 0.3573
+  servo_target_x: 0.0794
+  servo_target_y: -0.0349
+  servo_target_yaw_deg: 11.18
