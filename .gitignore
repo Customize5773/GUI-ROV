@@ -134,3 +134,5 @@ Data dari pyload.zip
 Planning/RISET-STRATEGI-KONTROL-6DOF-ROV.md
 server/OPZ.log
 .venv/
+
+autonomy/vision/wall_cnn.npz
