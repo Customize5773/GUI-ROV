@@ -280,17 +280,116 @@
                   <label class="axis"><span class="axis__k">Yaw</span><input class="axis__v" id="axYaw" type="number" value="0" step="1" /></label>
                   <label class="axis"><span class="axis__k">Vertical</span><input class="axis__v" id="axHeave" type="number" value="0" step="1" /></label>
                 </div>
-                <label class="axis">
-                  <span class="axis__k">Target Depth (m)</span>
-                  <input class="axis__v" id="depthTargetInput" type="number"
-                         min="0" step="0.01" value="0.50" inputmode="decimal"
-                         title="Ketik target depth, lalu tekan D-pad UP/DOWN untuk APPLY." />
-                </label>
-                <div style="font-size:11px;opacity:.7;margin:6px 0 0 0;">
-                  D-pad ↑ / ↓ = APPLY target depth
-                </div>
-                <button class="btn-wide" id="btnSetSurface">Set Surface Level &amp; Depth = 0</button>
+                <!-- DEPTH TARGET PRESETS -->
+                <div class="depth-target-section">
 
+                  <div class="depth-target-title">
+                    DEPTH TARGET
+                  </div>
+
+                  <div class="depth-target-grid">
+
+                    <!-- DEPTH MASUK HOOK -->
+                    <div class="depth-target-card">
+
+                      <div class="depth-target-name">
+                        DEPTH MASUK HOOK
+                      </div>
+
+                      <div class="depth-target-input-wrap">
+                        <input
+                          class="axis__v"
+                          id="depthTargetInput"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value="0.50"
+                          inputmode="decimal"
+                          aria-label="Depth masuk hook"
+                        />
+                        <span>m</span>
+                      </div>
+
+                      <button
+                        class="btn-wide depth-set-btn"
+                        id="btnDepthMasukHook"
+                        type="button">
+                        SET
+                      </button>
+
+                    </div>
+
+
+                    <!-- DEPTH DASAR -->
+                    <div class="depth-target-card">
+
+                      <div class="depth-target-name">
+                        DEPTH DASAR
+                      </div>
+
+                      <div class="depth-target-input-wrap">
+                        <input
+                          class="axis__v"
+                          id="depthDasarInput"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value="0.50"
+                          inputmode="decimal"
+                          aria-label="Depth dasar"
+                        />
+                        <span>m</span>
+                      </div>
+
+                      <button
+                        class="btn-wide depth-set-btn"
+                        id="btnDepthDasar"
+                        type="button">
+                        SET
+                      </button>
+
+                    </div>
+
+
+                    <!-- DEPTH AMBIL HOOK -->
+                    <div class="depth-target-card">
+
+                      <div class="depth-target-name">
+                        DEPTH AMBIL HOOK
+                      </div>
+
+                      <div class="depth-target-input-wrap">
+                        <input
+                          class="axis__v"
+                          id="depthAmbilHookInput"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value="0.50"
+                          inputmode="decimal"
+                          aria-label="Depth ambil hook"
+                        />
+                        <span>m</span>
+                      </div>
+
+                      <button
+                        class="btn-wide depth-set-btn"
+                        id="btnDepthAmbilHook"
+                        type="button">
+                        SET
+                      </button>
+
+                    </div>
+
+                  </div>
+
+                </div>
+
+                <button
+                  class="btn-wide"
+                  id="btnSetSurface">
+                  Set Surface Level &amp; Depth = 0
+                </button>
                 <!-- MARK gantungan: ditekan saat MISI 3, tepat setelah payload
                      tersangkut di hook dinding. Merekam heading + depth saat itu
                      supaya misi 5 autonomous tahu ARAH untuk kembali.

@@ -1756,3 +1756,76 @@ body.pseudo-fs-lock { overflow: hidden; }
 .thruster-gain-btn--up {
   color: #8ce7ff;
 }
+
+/* =========================
+   DEPTH TARGET PRESETS
+   ========================= */
+
+.depth-target-section {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 2px;
+}
+
+.depth-target-title {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.depth-target-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.depth-target-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: rgba(255,255,255,.025);
+  border: 1px solid rgba(20,216,255,.12);
+  border-radius: 6px;
+}
+
+.depth-target-name {
+  min-height: 22px;
+
+  font-family: "JetBrains Mono", monospace;
+  font-size: 8px;
+  line-height: 1.25;
+  letter-spacing: 1px;
+  color: var(--ink-dim);
+  text-transform: uppercase;
+}
+
+.depth-target-input-wrap {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.depth-target-input-wrap .axis__v {
+  flex: 1;
+  min-width: 0;
+}
+
+.depth-target-input-wrap > span {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 10px;
+  color: var(--ink-dim);
+}
+
+.depth-set-btn {
+  padding: 7px 8px;
+  font-size: 10px;
+}
+
+.depth-set-btn:hover {
+  background: rgba(20,216,255,.12);
+  border-color: rgba(20,216,255,.45);
+}

@@ -1401,7 +1401,6 @@ const KEY_AXIS = {
    sekali-jalan, bukan nilai axis yang harus dinolkan saat tombol dilepas.
 
    ↑ = SET (rekam kedalaman saat ini), ↓ = ON/OFF. Sama seperti D-pad. */
-const KEY_DEPTH = { ArrowUp: "depth_up", ArrowDown: "depth_down" };
 
 function getDepthApplyTarget() {
   if (!els.depthTargetInput) return null;
@@ -1420,6 +1419,57 @@ function applyDepthTargetFromGui() {
   log(`APPLY target depth: ${target.toFixed(2)} m`, "ok");
   return true;
 }
+
+/* ================= DEPTH TARGET BUTTONS ================= */
+
+function applyDepthFromInput(inputId, label) {
+  const input = document.getElementById(inputId);
+
+  if (!input) {
+    log(`${label}: input tidak ditemukan`, "err");
+    return;
+  }
+
+  const target = Number(input.value);
+
+  if (!Number.isFinite(target) || target < 0) {
+    log(`${label}: target depth tidak valid`, "warn");
+    return;
+  }
+
+  const depth = Math.round(target * 100) / 100;
+
+  sendCmd("depth_apply", depth);
+
+  log(`${label} → APPLY ${depth.toFixed(2)} m`, "ok");
+}
+
+
+/* DEPTH MASUK HOOK */
+document.getElementById("btnDepthMasukHook")?.addEventListener("click", () => {
+  applyDepthFromInput(
+    "depthTargetInput",
+    "DEPTH MASUK HOOK"
+  );
+});
+
+
+/* DEPTH DASAR */
+document.getElementById("btnDepthDasar")?.addEventListener("click", () => {
+  applyDepthFromInput(
+    "depthDasarInput",
+    "DEPTH DASAR"
+  );
+});
+
+
+/* DEPTH AMBIL HOOK */
+document.getElementById("btnDepthAmbilHook")?.addEventListener("click", () => {
+  applyDepthFromInput(
+    "depthAmbilHookInput",
+    "DEPTH AMBIL HOOK"
+  );
+});
 
 const heldKeys = new Set();
 function pilotKeyActive(e) {
@@ -1753,11 +1803,44 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    /* ================= TARGET DEPTH ================= */
-    case "depth_up":
-    case "depth_down": {
-      // Kedua D-pad menerapkan angka yang sama dari input GUI.
-      applyDepthTargetFromGui();
+    /* ================= DEPTH TARGET PRESETS ================= */
+
+    case "depth_masuk_hook": {
+      const btn = document.getElementById("btnDepthMasukHook");
+
+      if (btn) {
+        btn.click();
+        log("Joystick → DEPTH MASUK HOOK", "ok");
+      } else {
+        log("Button DEPTH MASUK HOOK tidak ditemukan", "err");
+      }
+
+      return;
+    }
+
+    case "depth_dasar": {
+      const btn = document.getElementById("btnDepthDasar");
+
+      if (btn) {
+        btn.click();
+        log("Joystick → DEPTH DASAR", "ok");
+      } else {
+        log("Button DEPTH DASAR tidak ditemukan", "err");
+      }
+
+      return;
+    }
+
+    case "depth_ambil_hook": {
+      const btn = document.getElementById("btnDepthAmbilHook");
+
+      if (btn) {
+        btn.click();
+        log("Joystick → DEPTH AMBIL HOOK", "ok");
+      } else {
+        log("Button DEPTH AMBIL HOOK tidak ditemukan", "err");
+      }
+
       return;
     }
   }

@@ -78,8 +78,9 @@ export const BUTTON_ACTIONS = [
   "grip_close",
   "lights_brighter",
   "lights_dimmer",
-  "depth_up",
-  "depth_down",
+  "depth_masuk_hook",
+  "depth_dasar",
+  "depth_ambil_hook",
   "thruster_gain_inc",
   "thruster_gain_dec",
   "toggle_light",
@@ -195,8 +196,8 @@ function defaultButtonLayer() {
     { action: "grip_open", button: 7, mode: "hold" },          // RT (analog)
     { action: "input_hold_set", button: 8, mode: "toggle" },   // Back
     { action: "mount_center", button: 9, mode: "toggle" },     // Start
-    { action: "depth_up", button: 12, mode: "toggle" },   // D-pad ↑
-    { action: "depth_down", button: 13, mode: "toggle" }, // D-pad ↓
+    { action: "no_function", button: 12, mode: "toggle" },
+    { action: "no_function", button: 13, mode: "toggle" },
     { action: "cam_prev", button: 14, mode: "toggle" },        // D-pad ← : CAM sebelumnya
     { action: "no_function", button: 15, mode: "toggle" },     // D-pad → : shift (lihat shiftButton)
     { action: "thruster_gain_dec", button: 10, mode: "toggle" }, // L3

@@ -136,6 +136,9 @@ const ACTION_LABELS = {
   camera_snapshot: "Snapshot kamera",
   toggle_record: "Toggle record video",
   toggle_control_mode: "Toggle mode Manual/Autonomous",
+  depth_masuk_hook: "Depth Masuk Hook",
+  depth_dasar: "Depth Dasar",
+  depth_ambil_hook: "Depth Ambil Hook",
 };
 
 const COCKPIT_LAYOUT = {
