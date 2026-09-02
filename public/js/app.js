@@ -412,6 +412,10 @@ function applyTelemetry(d) {
   }
 
   applyMission5(d.mission5);
+  // Worker YOLO laptop masuk sebagai d.hook_xy dan tetap aktif saat FSM idle.
+  if (d.hook_xy && d.hook_xy.bbox) {
+    drawHookBbox({ ...d.hook_xy, active_cam: "WALL" });
+  }
   applyMissionCounter(d.mission_counter);
 
   // teruskan sampel ke modul halaman yang sudah di-init (buffering murah;
@@ -476,7 +480,7 @@ function applyCmdLink(d) {
   els.cmdLinkBanner.hidden = d.cmd_link !== "stale";
 }
 
-/* overlay bbox+confidence deteksi hook (kamera WALL) di atas #camImg — nilai
+/* overlay bbox+confidence+keypoints deteksi hook (kamera WALL) di atas #camImg — nilai
    tambah kepercayaan pilot saat autonomous, tak cuma angka offset/distance
    sebagai teks. #camImg pakai object-fit:cover jadi skala harus max(sx,sy)
    + centering letterbox, BUKAN stretch naif seperti buffer scanControlQR. */
@@ -491,7 +495,9 @@ function drawHookBbox(m5) {
 
   const bbox = m5 && m5.bbox, conf = m5 && m5.confidence;
   const sw = els.camImg.naturalWidth, sh = els.camImg.naturalHeight;
-  if (!bbox || !sw || !sh || !m5 || m5.active_cam !== "WALL") return;
+  if (!bbox || !sw || !sh || !m5 || (m5.active_cam && m5.active_cam !== "WALL")) return;
+  const shownCamera = (CONFIG.CAMERAS || []).find((c) => c.url === CONFIG.CAMERA_URL);
+  if (shownCamera && String(shownCamera.role || "").toUpperCase() !== "WALL") return;
 
   const scale = Math.max(cv.width / sw, cv.height / sh);
   const ox = (cv.width - sw * scale) / 2, oy = (cv.height - sh * scale) / 2;
@@ -506,6 +512,20 @@ function drawHookBbox(m5) {
   ctx.fillStyle = color;
   ctx.font = "12px 'JetBrains Mono', monospace";
   ctx.fillText(`HOOK ${(c * 100).toFixed(0)}%`, rx, ry > 14 ? ry - 4 : ry + rh + 14);
+
+  // YOLOv8-Pose worker mengirim titik pada koordinat frame asli.
+  // Titik ini hanya visualisasi/telemetri, bukan command gerak.
+  if (Array.isArray(m5.keypoints)) {
+    ctx.fillStyle = "#ffd21f";
+    ctx.font = "11px 'JetBrains Mono', monospace";
+    for (const kp of m5.keypoints) {
+      const kx = Number(kp && kp.x), ky = Number(kp && kp.y);
+      if (!Number.isFinite(kx) || !Number.isFinite(ky)) continue;
+      const px = kx * scale + ox, py = ky * scale + oy;
+      ctx.beginPath(); ctx.arc(px, py, 4, 0, Math.PI * 2); ctx.fill();
+      ctx.fillText(String(kp.id ?? ""), px + 6, py - 5);
+    }
+  }
 }
 
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */

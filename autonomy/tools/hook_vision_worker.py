@@ -112,6 +112,7 @@ def main():
                         'offset_y': detection['center'][1] - detection['frame_h'] / 2.0,
                         'timestamp': detection.get('timestamp', time.time()),
                         'method': 'yolov8',
+                        'active_cam': 'WALL',
                     }
 
             now = time.time()
