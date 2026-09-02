@@ -21,7 +21,7 @@ const SRC_STYLE = {
 
 export const missionPage = {
   three: null,
-  follow: false,
+  follow: true,
   pos: new THREE.Vector3(0, 0, 0),
   heading: 0,
   depth: 0,
@@ -61,7 +61,7 @@ export const missionPage = {
         <div class="mission__stage" id="missionStage">
           <div class="mission__btns">
             <button class="chip" id="msReset">Reset</button>
-            <button class="chip" id="msFollow" aria-pressed="false">Follow</button>
+            <button class="chip" id="msFollow" aria-pressed="true">Follow</button>
             <button class="chip" id="msSave">Save PNG</button>
           </div>
         </div>
