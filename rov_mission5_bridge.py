@@ -414,8 +414,7 @@ class Mission5Runner:
                 hook_hsv_range=mission5_module.HOOK_COLOR_HSV_RANGE,
                 hook_min_area=mission5_module.HOOK_MIN_AREA,
                 hook_pipe_diam=mission5_module.HOOK_PIPE_DIAM_M,
-                hook_enabled=not self.bench_qr_dock,
-                wall_cnn=(False if self.bench_qr_dock else cfg.get("wall_cnn", True)),
+                wall_cnn=cfg.get("wall_cnn", True),
             )
             vision.start()
             if not self.bench_qr_dock and not self._cmd.set_alt_hold():
