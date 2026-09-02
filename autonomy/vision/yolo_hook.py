@@ -28,8 +28,11 @@ class YOLOHookDetector:
         self.augment = bool(augment)
         self.enhance_underwater = bool(enhance_underwater)
         self.model = YOLO(self.weights)
+        # Ultralytics YOLOv8-Pose tidak mendukung test-time augmentation;
+        # memaksakan augment=True hanya menghasilkan warning berulang per frame.
+        self.effective_augment = self.augment and getattr(self.model, 'task', None) == 'detect'
         log.info("[vision] YOLO hook aktif: %s (conf>=%.2f, imgsz=%d, tta=%s, underwater=%s)",
-                 self.weights, self.conf, self.imgsz, self.augment,
+                 self.weights, self.conf, self.imgsz, self.effective_augment,
                  self.enhance_underwater)
 
     @staticmethod
@@ -50,7 +53,7 @@ class YOLOHookDetector:
             return None
         source = self._enhance(frame) if self.enhance_underwater else frame
         result = self.model.predict(source=source, conf=self.conf, imgsz=self.imgsz,
-                                    device=self.device, augment=self.augment,
+                                    device=self.device, augment=self.effective_augment,
                                     verbose=False)[0]
         boxes = result.boxes
         if boxes is None or len(boxes) == 0:
@@ -63,6 +66,21 @@ class YOLOHookDetector:
         x1, y1 = max(0, min(w - 1, int(round(x1)))), max(0, min(h - 1, int(round(y1))))
         x2, y2 = max(x1 + 1, min(w, int(round(x2)))), max(y1 + 1, min(h, int(round(y2))))
         bw, bh = x2 - x1, y2 - y1
+        keypoints = None
+        pose = getattr(result, 'keypoints', None)
+        if pose is not None and getattr(pose, 'xy', None) is not None and len(pose.xy) > index:
+            xy = pose.xy[index].detach().cpu().numpy()
+            kp_conf = (pose.conf[index].detach().cpu().numpy()
+                       if getattr(pose, 'conf', None) is not None else None)
+            keypoints = []
+            for kp_index, (kx, ky) in enumerate(xy):
+                keypoints.append({
+                    'id': kp_index,
+                    'x': float(kx),
+                    'y': float(ky),
+                    'confidence': (float(kp_conf[kp_index])
+                                   if kp_conf is not None else None),
+                })
         return {
             'type': 'hook',
             'center': (int(round((x1 + x2) / 2)), int(round((y1 + y2) / 2))),
@@ -74,5 +92,6 @@ class YOLOHookDetector:
             'frame_w': int(w),
             'frame_h': int(h),
             'pose': None,
+            'keypoints': keypoints,
             'timestamp': time.time(),
         }

@@ -40,7 +40,7 @@ const SHARED_ROOT = path.join(__dirname, "..", "shared");
 const AUTONOMY = path.join(__dirname, "..", "autonomy");
 const REPO_ROOT = path.join(__dirname, "..");
 const HOOK_VISION_WORKER = path.join(AUTONOMY, "tools", "hook_vision_worker.py");
-const HOOK_VISION_MODEL = path.resolve(process.env.HOOK_VISION_MODEL || path.join(AUTONOMY, "vision", "best.pt"));
+const HOOK_VISION_MODEL = path.resolve(process.env.HOOK_VISION_MODEL || path.join(AUTONOMY, "vision", "best_pose.pt"));
 const HOOK_VISION_MAP = path.resolve(process.env.HOOK_VISION_MAP || path.join(AUTONOMY, "config", "hook_map.pool.yaml"));
 const HOOK_VISION_CALIB = path.resolve(process.env.HOOK_VISION_CALIB || path.join(AUTONOMY, "vision", "calibration", "wall.npz"));
 const HOOK_VISION_DEFAULT_URL = process.env.HOOK_CAMERA_URL || "http://192.168.2.2:8080/stream";
@@ -212,7 +212,7 @@ function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
     stdio: ["pipe", "pipe", "pipe"],
   });
   hookVisionProcess = processRef;
-  console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl}`);
+  console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl} | model: ${HOOK_VISION_MODEL}`);
 
   const lines = readline.createInterface({ input: processRef.stdout });
   lines.on("line", (line) => {

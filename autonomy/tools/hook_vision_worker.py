@@ -105,12 +105,14 @@ def main():
                         'reason': localized.get('reason'),
                         'confidence': detection.get('confidence'),
                         'bbox': detection.get('bbox'),
+                        'keypoints': detection.get('keypoints'),
                         'frame_w': detection.get('frame_w'),
                         'frame_h': detection.get('frame_h'),
                         'offset_x': detection['center'][0] - detection['frame_w'] / 2.0,
                         'offset_y': detection['center'][1] - detection['frame_h'] / 2.0,
                         'timestamp': detection.get('timestamp', time.time()),
                         'method': 'yolov8',
+                        'active_cam': 'WALL',
                     }
 
             now = time.time()
