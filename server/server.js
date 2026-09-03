@@ -40,10 +40,13 @@ const SHARED_ROOT = path.join(__dirname, "..", "shared");
 const AUTONOMY = path.join(__dirname, "..", "autonomy");
 const REPO_ROOT = path.join(__dirname, "..");
 const HOOK_VISION_WORKER = path.join(AUTONOMY, "tools", "hook_vision_worker.py");
-const HOOK_VISION_MODEL = path.resolve(process.env.HOOK_VISION_MODEL || path.join(AUTONOMY, "vision", "best_pose.pt"));
-const HOOK_VISION_MAP = path.resolve(process.env.HOOK_VISION_MAP || path.join(AUTONOMY, "config", "hook_map.pool.yaml"));
-const HOOK_VISION_CALIB = path.resolve(process.env.HOOK_VISION_CALIB || path.join(AUTONOMY, "vision", "calibration", "wall.npz"));
+// Path relatif dari .env selalu dihitung dari root repo, bukan dari folder
+// tempat npm/node kebetulan dijalankan.
+const HOOK_VISION_MODEL = path.resolve(REPO_ROOT, process.env.HOOK_VISION_MODEL || path.join(AUTONOMY, "vision", "best_pose.pt"));
+const HOOK_VISION_MAP = path.resolve(REPO_ROOT, process.env.HOOK_VISION_MAP || path.join(AUTONOMY, "config", "hook_map.pool.yaml"));
+const HOOK_VISION_CALIB = path.resolve(REPO_ROOT, process.env.HOOK_VISION_CALIB || path.join(AUTONOMY, "vision", "calibration", "wall.npz"));
 const HOOK_VISION_DEFAULT_URL = process.env.HOOK_CAMERA_URL || "http://192.168.2.2:8080/stream";
+const DEFAULT_PYTHON = process.platform === "win32" ? "python" : "python3";
 const AUTONOMOUS_LOG_DIR = path.join(AUTONOMY, "logs");
 fs.mkdirSync(AUTONOMOUS_LOG_DIR, { recursive: true });
 
@@ -200,7 +203,7 @@ function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
   if (hookVisionProcess && hookVisionUrl === cameraUrl) return;
   stopHookVision();
 
-  const python = process.env.HOOK_VISION_PYTHON || "python3";
+  const python = process.env.HOOK_VISION_PYTHON || DEFAULT_PYTHON;
   const envPath = [AUTONOMY, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
   hookVisionUrl = cameraUrl;
   const processRef = spawn(python, [HOOK_VISION_WORKER,

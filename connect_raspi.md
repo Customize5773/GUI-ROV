@@ -20,8 +20,9 @@ rsync -av --include='*.py' --exclude='*' ./ hydroships@192.168.2.2:~/rov-agent/
 
 # 2) Folder autonomy/* -> diratakan (tanpa prefix "autonomy/")
 rsync -av --delete autonomy/fsm/    hydroships@192.168.2.2:~/rov-agent/fsm/
-rsync -av --delete autonomy/vision/ hydroships@192.168.2.2:~/rov-agent/vision/
-rsync -av --delete autonomy/tools/  hydroships@192.168.2.2:~/rov-agent/tools/
+# Bobot YOLO *.pt tetap di laptop; Pi tidak memuat Ultralytics/model.
+rsync -av --delete --exclude='*.pt' autonomy/vision/ hydroships@192.168.2.2:~/rov-agent/vision/
+rsync -av --delete --exclude='hook_vision_worker.py' autonomy/tools/ hydroships@192.168.2.2:~/rov-agent/tools/
 rsync -av --delete autonomy/config/ hydroships@192.168.2.2:~/rov-agent/config/
 rsync -av --delete autonomy/control/ hydroships@192.168.2.2:~/rov-agent/control/
 
@@ -37,6 +38,22 @@ ssh hydroships@192.168.2.2 "sudo systemctl restart rov-agent"
 > tempat pilot simpan sesuatu) — TAPI JANGAN pakai `--delete` pada langkah 1,
 > karena banyak file `*.py.bak-*`/`rov_agent_frendy.py`/dll milik tim lain
 > yang sengaja disimpan langsung di Pi (lihat [[pi-agent-deploy-drift]]).
+
+## Pembagian Beban Vision
+
+- **Laptop:** `npm start` otomatis menyalakan `hook_vision_worker.py`, membuka
+  CAM WALL `http://192.168.2.2:8080/stream`, memuat `best_pose.pt`, lalu
+  menjalankan YOLOv8-Pose/keypoint dan lokalisasi hook.
+- **Raspberry Pi:** `rov_agent.py` hanya menerima JSON `hook_vision`, memvalidasi
+  bbox/confidence, dan membuang hasil yang berumur lebih dari 1 detik. Detektor
+  hook OpenCV lokal serta fallback wall-CNN juga dimatikan; Pi tidak memuat
+  model `.pt` atau paket Ultralytics. Decoder QR asli masih berjalan di Pi saat
+  Mission 5 aktif karena hasilnya dipakai langsung oleh FSM.
+- **Pixhawk/ArduSub:** tetap menangani mixing thruster, stabilisasi, PWM, dan
+  failsafe. Pemindahan vision tidak memindahkan kontrol hardware ke laptop.
+
+Di laptop instal `autonomy/requirements-laptop.txt`. Di Pi instal
+`autonomy/requirements.txt`; jangan instal Ultralytics/Torch hanya untuk hook.
 
 ## Ambil Log Trial (Pi → Laptop)
 

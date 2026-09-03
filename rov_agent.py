@@ -134,13 +134,24 @@ def qgc_command_receiver():
 # =========================
 # Status telemetry lokal
 # =========================
+def _battery_voltage(raw_mv):
+    """Ubah SYS_STATUS.voltage_battery ke volt; abaikan ADC yang tidak valid."""
+    try:
+        raw_mv = int(raw_mv)
+    except (TypeError, ValueError):
+        return None
+    # ROV memakai baterai 4S. Nilai <3 V saat FC masih hidup bukan tegangan
+    # baterai utama, biasanya battery monitor/pin/scaling belum dikonfigurasi.
+    return raw_mv / 1000.0 if 3000 <= raw_mv < 65535 else None
+
+
 state = {
     "heading": 0.0,
     "depth": 0.0,       # sementara 0 dulu, nanti kita isi dari sensor depth
     "roll": 0.0,
     "pitch": 0.0,
     "temp": 0.0,        # sementara 0 dulu, nanti bisa dari sensor suhu
-    "voltage": 0.0,
+    "voltage": None,
     "armed": False,
     "light": False,
     "mode": "manual",
@@ -2186,8 +2197,7 @@ def main():
         # voltage_battery dalam mV
         # --------------------------------
         elif mtype == "SYS_STATUS":
-            if msg.voltage_battery != 65535:
-                state["voltage"] = msg.voltage_battery / 1000.0
+            state["voltage"] = _battery_voltage(msg.voltage_battery)
 
         # --------------------------------
         # AHRS2 : Depth dari ArduSub (meter)

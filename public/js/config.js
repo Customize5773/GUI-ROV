@@ -6,12 +6,13 @@ export const CONFIG = {
   UNIVERSITY: "Politeknik Perkapalan Negeri Surabaya",
 
   //http://192.168.2.2:8080/?action=stream
-  CAMERA_URL: "http://192.168.2.2:8081/stream",
+  // CAM WALL menjadi tampilan awal Control karena ini sumber YOLO Hook.
+  CAMERA_URL: "http://192.168.2.2:8080/stream",
 
   // sumber kamera untuk halaman Camera (label + peran + url)
   // KKI 2026: camera 1 = bottom (lantai/QR), camera 2 = wall (dinding)
-  // PERBAIKAN 23 Agu 2026: url dulu tertukar — dikonfirmasi operator bahwa
-  // :8080 menghadap DEPAN (gripper) dan :8081 menghadap BAWAH (dasar kolam).
+  // :8080 = WALL (menghadap depan sejajar POV gripper)
+  // :8081 = BOTTOM (kamera kepala menghadap 45 derajat ke bawah)
   // rov_agent.py M5_BOTTOM_URL/M5_WALL_URL (dipakai QR docking + drift
   // sensing) ikut diperbaiki bersamaan — lihat rov_agent.py.
   CAMERAS: [

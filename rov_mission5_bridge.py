@@ -414,7 +414,12 @@ class Mission5Runner:
                 hook_hsv_range=mission5_module.HOOK_COLOR_HSV_RANGE,
                 hook_min_area=mission5_module.HOOK_MIN_AREA,
                 hook_pipe_diam=mission5_module.HOOK_PIPE_DIAM_M,
-                wall_cnn=cfg.get("wall_cnn", True),
+                # Hook berasal dari worker YOLO di laptop melalui hook_vision.
+                # Jangan jalankan detector hook OpenCV/YOLO kedua di Raspberry Pi.
+                hook_enabled=False,
+                # Jangan muat fallback CNN lain di Pi. Ini hanya tebakan sisi
+                # saat QR gagal, bukan hasil decode yang boleh dipercaya FSM.
+                wall_cnn=False,
             )
             vision.start()
             if not self.bench_qr_dock and not self._cmd.set_alt_hold():

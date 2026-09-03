@@ -84,11 +84,17 @@ class PID:
         self._d += self.d_lpf * (d_raw - self._d)
         out = _clamp(self.kp * error + self.ki * self._i + self.kd * self._d,
                      -self.out_limit, self.out_limit)
-        if self.slew > 0 and dt > 0:
-            step_max = self.slew * dt
-            out = _clamp(out, self._out - step_max, self._out + step_max)
+        out = _slew_limit(self._out, out, self.slew, dt)
         self._out = out
         return out
+
+
+def _slew_limit(prev, out, slew, dt):
+    """Batasi laju perubahan command (unit keluaran per detik)."""
+    if slew <= 0 or dt <= 0:
+        return out
+    step_max = slew * dt
+    return _clamp(out, prev - step_max, prev + step_max)
 
 
 def _approach_gate(align_err, floor):
@@ -166,11 +172,13 @@ class VisualServo:
         self._pid_vert = PID(kp_vert, ki, kd, max_speed, **_opt)
         self._pid_surge = PID(kp_surge, ki, kd, max_speed, **_opt)
         self._pid_yaw = PID(kp_yaw, ki, kd, max_speed, **_opt)   # IBVS: yaw dari ex, satuan sama
+        self._surge_slew, self._surge_out = slew, 0.0
         self._hits = 0
 
     def reset(self):
         for p in (self._pid_sway, self._pid_vert, self._pid_surge, self._pid_yaw):
             p.reset()
+        self._surge_out = 0.0
         self._hits = 0
 
     def step(self, cx, cy, area, frame_w, frame_h, dt=0.1) -> ServoOutput:
@@ -185,6 +193,13 @@ class VisualServo:
 
         # Center dulu, baru maju — approach menyerong bikin gripper meleset payload.
         surge *= _approach_gate(max(abs(ex), abs(ey)) / self.tol_norm, self.approach_floor)
+        # Gerbang di atas dikali SETELAH PID, jadi peredam laju DI DALAM PID tak
+        # pernah melihatnya: begitu error lateral masuk toleransi, gerbang
+        # melompat 0.15 -> 1.0 dan surge menyentak (terukur 297 %/s vs pagar 120
+        # %/s). Sentakan itu jatuh persis saat gripper paling dekat payload/hook.
+        # Karena itu keluaran akhir diredam sekali lagi.
+        surge = _slew_limit(self._surge_out, surge, self._surge_slew, dt)
+        self._surge_out = surge
 
         in_tol = abs(ex) < self.tol_norm and abs(ey) < self.tol_norm and abs(ea) < self.tol_area
         self._hits = _tally(self._hits, in_tol)
@@ -248,11 +263,13 @@ class PoseServo:
         self._pid_yaw = PID(kp_yaw, ki, kd,                 # PBVS: yaw dlm DERAJAT
                             out_limit=max_speed, deadband=deadband_yaw,
                             d_lpf=d_lpf, slew=slew)
+        self._surge_slew, self._surge_out = slew, 0.0
         self._hits = 0
 
     def reset(self):
         for p in (self._pid_sway, self._pid_surge, self._pid_vert, self._pid_yaw):
             p.reset()
+        self._surge_out = 0.0
         self._hits = 0
 
     def step(self, x, y, z, yaw_deg=0.0, dt=0.1) -> PoseServoOutput:
@@ -264,6 +281,13 @@ class PoseServo:
 
         # Center dulu, baru maju — approach menyerong bikin gripper meleset payload.
         surge *= _approach_gate(max(abs(x), abs(y)) / self.tol_xy, self.approach_floor)
+        # Gerbang di atas dikali SETELAH PID, jadi peredam laju DI DALAM PID tak
+        # pernah melihatnya: begitu error lateral masuk toleransi, gerbang
+        # melompat 0.15 -> 1.0 dan surge menyentak (terukur 297 %/s vs pagar 120
+        # %/s). Sentakan itu jatuh persis saat gripper paling dekat payload/hook.
+        # Karena itu keluaran akhir diredam sekali lagi.
+        surge = _slew_limit(self._surge_out, surge, self._surge_slew, dt)
+        self._surge_out = surge
 
         in_tol = (abs(x) < self.tol_xy and abs(y) < self.tol_xy and abs(ez) < self.tol_dist
                   and (not self.use_yaw or abs(yaw_deg) < self.tol_yaw))

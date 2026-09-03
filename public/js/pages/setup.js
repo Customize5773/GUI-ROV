@@ -353,6 +353,10 @@ export const setupPage = {
     /* CAMERA */
     const camResStatus = root.querySelector("#suCamResStatus");
     root.querySelector("#suApplyCam").onclick = () => {
+      // Kamera yang SEDANG tampil di Control tetap yang tampil setelah Apply.
+      // Dulu di-hardcode ke indeks 0 (BOTTOM) — itu melempar Control keluar dari
+      // CAM WALL dan mematikan overlay hook YOLO tanpa pesan apa pun.
+      const shown = Math.max(0, CONFIG.CAMERAS.findIndex((c) => c.url === CONFIG.CAMERA_URL));
       [0, 1].forEach((i) => {
         const url = root.querySelector(`#suCam${i}`).value.trim();
         const resolution = root.querySelector(`#suCamRes${i}`).value;
@@ -366,7 +370,7 @@ export const setupPage = {
           // top-level camera/resolution, sama seperti pola motor_test di atas.
           if (resChanged) wsSend({ type: "cmd", name: "camera_resolution", camera: i, resolution });
         }
-        if (i === 0) CONFIG.CAMERA_URL = url;
+        if (i === shown) CONFIG.CAMERA_URL = url;
       });
       saveSetup();
       // beri tahu halaman Control untuk mengarahkan ulang feed kamera-nya

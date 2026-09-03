@@ -402,12 +402,19 @@ class TestWiringDiRovAgent(unittest.TestCase):
     def test_yolo_laptop_diteruskan_ke_pi_dengan_watchdog(self):
         with open("server/server.js", encoding="utf-8") as fh:
             server = fh.read()
+        with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
+            bridge = fh.read()
         with open("autonomy/tools/hook_vision_worker.py", encoding="utf-8") as fh:
             worker = fh.read()
         self.assertIn('name: "hook_vision"', server)
+        self.assertIn('process.platform === "win32" ? "python" : "python3"', server)
         self.assertIn('elif name == "hook_vision"', self.src)
         self.assertIn('time.monotonic() - latest_hook_vision_received <= 1.0', self.src)
         self.assertIn("'frame_w': detection.get('frame_w')", worker)
+        self.assertIn('hook_enabled=False', bridge,
+                      "Pi tidak boleh menjalankan detector hook lokal saat YOLO berasal dari laptop")
+        self.assertIn('wall_cnn=False', bridge,
+                      "Pi tidak boleh memuat fallback CNN saat vision berat dipindah ke laptop")
 
     def test_validasi_yolo_menolak_bbox_di_luar_frame(self):
         node = next(n for n in self.tree.body

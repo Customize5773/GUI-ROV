@@ -555,6 +555,21 @@ def test_pid_slew_membatasi_lonjakan_command():
     assert tanpa_slew.step(1.0, 0.1) == pytest.approx(100.0)
 
 
+def test_gerbang_approach_tidak_menembus_peredam_laju():
+    """Saat error lateral tiba-tiba masuk toleransi, gerbang approach melompat
+    0.15 → 1.0. Gerbang itu dikalikan SETELAH PID, jadi tanpa peredam kedua
+    surge menyentak dari ~5 % ke 35 % dalam satu tick (297 %/s, terukur di
+    tools/hook_thruster_darat.py) — persis saat gripper paling dekat payload."""
+    servo = PoseServo(target_dist=0.30, tol_xy=0.05, kp_surge=140.0, slew=120.0)
+    for _ in range(6):
+        melenceng = servo.step(0.25, 0.0, 0.90, dt=0.1).surge   # jauh & menyerong
+    center = servo.step(0.00, 0.0, 0.90, dt=0.1).surge          # mendadak lurus
+    assert center - melenceng <= 120.0 * 0.1 + 1e-6
+    for _ in range(5):                                          # tetap sampai penuh
+        center = servo.step(0.00, 0.0, 0.90, dt=0.1).surge
+    assert center == pytest.approx(35.0)
+
+
 def test_surge_ditahan_selagi_masih_melenceng_lateral():
     """Maju sambil melenceng = gripper datang menyerong & meleset dari payload.
     Surge saat off-center harus jauh lebih kecil drpd surge saat sudah center,

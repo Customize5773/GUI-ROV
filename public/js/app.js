@@ -30,7 +30,7 @@ const els = {
   identTeam: $("identTeam"), identUni: $("identUni"),
   clockDate: $("clockDate"), clockTime: $("clockTime"),
   hudHeading: $("hudHeading"), hudRoll: $("hudRoll"), hudPitch: $("hudPitch"),
-  hudDrift: $("hudDrift"),
+  hudGain: $("hudGain"), hudDrift: $("hudDrift"),
   miniInstruments: $("miniInstruments"),
   miniCompass: $("miniCompass"), miniCompassDial: $("miniCompassDial"),
   miniCompassStatus: $("miniCompassStatus"), miniCompassBug: $("miniCompassBug"),
@@ -286,10 +286,13 @@ function applyTelemetry(d) {
   els.roll.textContent = num(d.roll, 1);
   els.pitch.textContent = num(d.pitch, 1);
   els.temp.textContent = num(d.temp, 1);
-  els.volt.textContent = num(d.voltage, 1);
+  // Nilai sub-3 V tidak mungkin merupakan baterai utama 4S saat FC masih
+  // hidup; itu biasanya ADC/battery monitor yang belum valid. Tampilkan kosong
+  // dan jangan picu alarm palsu, tetapi pertahankan alarm untuk data yang valid.
+  const v = Number.isFinite(d.voltage) && d.voltage >= 3 ? d.voltage : null;
+  els.volt.textContent = num(v, 1);
   // tegangan hanya berguna kalau kelihatan saat turun: kritis diberi kedip
   // yang sama dengan alarm kedalaman, waspada cukup warna. null -> netral.
-  const v = d.voltage;
   const vCrit = Number.isFinite(v) && v <= CONFIG.VOLT_CRIT;
   els.volt.classList.toggle("is-warn", Number.isFinite(v) && v <= CONFIG.VOLT_WARN && !vCrit);
   els.volt.parentElement.classList.toggle("readout--danger", vCrit);
@@ -426,6 +429,7 @@ function applyTelemetry(d) {
   }
 
   if (Number.isFinite(Number(d.thruster_gain))) {
+    els.hudGain.textContent = `GAIN ${Math.round(Number(d.thruster_gain))}%`;
     toPage("setup", "onThrusterGainTelemetry", d.thruster_gain);
   }
 
@@ -890,6 +894,12 @@ function connect() {
 
   if (msg.type === "telemetry") {
     applyTelemetry(msg.data);
+  }
+  else if (msg.type === "hook_vision") {
+    // Worker YOLO laptop punya kanalnya sendiri: overlay tetap hidup saat
+    // telemetri Pi mati/putus (uji darat kamera-saja), tidak menunggu hook_xy
+    // yang cuma ikut menumpang paket telemetry.
+    if (msg.data && msg.data.bbox) drawHookBbox({ ...msg.data, active_cam: "WALL" });
   }
   else if (msg.type === "pong") {
     setLatency(performance.now() - msg.t);
