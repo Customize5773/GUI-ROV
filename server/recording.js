@@ -197,10 +197,20 @@ function startSession(cameras, opts = {}) {
     dir,
     label: typeof opts.label === "string" ? opts.label.slice(0, 120) : "",
     startTime,
-    // Log kecil laju-rendah → append sinkron: durable bila server crash di
-    // tengah run, dan langsung terbaca (tanpa menunggu buffer stream ter-flush).
+    /* Tulis sinkron: durable bila server crash di tengah run, dan langsung
+       terbaca (tanpa menunggu buffer stream ter-flush).
+
+       Deskriptornya dibuka SEKALI, bukan appendFileSync per baris. Baris
+       trajectory memang cuma 10/detik, tapi commands.jsonl menerima keempat
+       axis joystick sampai ~240 baris/detik — dan appendFileSync membuka +
+       menutup file untuk SETIAP baris, di event loop yang sama yang
+       meneruskan command ke ROV. writeSync ke fd yang sudah terbuka
+       menghilangkan open/close itu tanpa mengurangi durabilitas (keduanya
+       sama-sama tidak fsync). */
     trajPath: path.join(dir, "trajectory.jsonl"),
     cmdPath: path.join(dir, "commands.jsonl"),
+    trajFd: openAppendFd(path.join(dir, "trajectory.jsonl")),
+    cmdFd: openAppendFd(path.join(dir, "commands.jsonl")),
     cams,
     telemCount: 0,
     cmdCount: 0,
@@ -227,11 +237,26 @@ function startSession(cameras, opts = {}) {
   return summary();
 }
 
+function openAppendFd(file) {
+  try { return fs.openSync(file, "a"); } catch { return null; }
+}
+
+function appendLine(fd, text) {
+  if (fd === null || fd === undefined) return;
+  try { fs.writeSync(fd, text); } catch {}
+}
+
 function stopSession(reason = "manual") {
   if (!active) return null;
   const s = active;
 
   if (s.timer) clearTimeout(s.timer);
+
+  for (const fd of [s.trajFd, s.cmdFd]) {
+    if (fd !== null && fd !== undefined) { try { fs.closeSync(fd); } catch {} }
+  }
+  s.trajFd = null;
+  s.cmdFd = null;
 
   // tutup semua stream kamera & file
   for (const role of Object.keys(s.cams)) {
@@ -277,13 +302,13 @@ function onTelemetry(data) {
     hook_offset_y: numOrNull(hook.offset_y),
     hook_reason: hook.reason ?? null,
   };
-  try { fs.appendFileSync(active.trajPath, JSON.stringify(line) + "\n"); } catch {}
+  appendLine(active.trajFd, JSON.stringify(line) + "\n");
   active.telemCount += 1;
 }
 
 function onCommand(name, value) {
   if (!active || !TRAJ_COMMANDS.has(name)) return;
-  try { fs.appendFileSync(active.cmdPath, JSON.stringify({ t: Date.now(), name, value }) + "\n"); } catch {}
+  appendLine(active.cmdFd, JSON.stringify({ t: Date.now(), name, value }) + "\n");
   active.cmdCount += 1;
 }
 

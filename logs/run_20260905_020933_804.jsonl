@@ -1,0 +1,3 @@
+{"t": 0.0, "t_iso": "2026-09-05T02:09:33.804", "kind": "config", "start_state": "CUSTOM", "bench_qr_dock": false, "motion_config": {"dive_mps": 0.12, "ascend_mps": 0.12, "surge_mps": 0.21, "yaw_dps": 22.5}}
+{"t": 0.01, "t_iso": "2026-09-05T02:09:33.814", "kind": "custom_case", "name": "X", "duration_ms": 20.0, "motion": [0, 0, 0, null, "hold"]}
+{"t": 0.08, "t_iso": "2026-09-05T02:09:33.885", "kind": "end", "durasi_s": 0.08, "alasan": "selesai", "state_akhir": "COMPLETE"}

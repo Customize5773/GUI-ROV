@@ -147,6 +147,9 @@ def _battery_voltage(raw_mv):
 
 state = {
     "heading": 0.0,
+    # Bearing kompas mentah untuk lokalisasi map. `heading` boleh di-zero-kan
+    # saat AUTONOMOUS agar tabel MOTION memakai sudut relatif.
+    "heading_compass": 0.0,
     "depth": 0.0,       # sementara 0 dulu, nanti kita isi dari sensor depth
     "roll": 0.0,
     "pitch": 0.0,
@@ -623,6 +626,7 @@ def normalize_heading(deg):
         deg += 360.0
     return deg % 360.0
 
+
 def send_arm_disarm(arm):
     """Arm/disarm lewat MAV_CMD_COMPONENT_ARM_DISARM (satu jalur untuk keduanya).
 
@@ -794,7 +798,12 @@ def command_listener():
 
                 if requested == "autonomous":
 
-                    heading_zero = latest_yaw
+                    # Arah fisik saat tombol diklik menjadi 0 derajat. Update
+                    # state langsung agar tick pertama MOTION tidak sempat
+                    # membaca heading lama sebelum ATTITUDE berikutnya tiba.
+                    heading_zero = float(latest_yaw)
+                    state["heading_compass"] = heading_zero
+                    state["heading"] = 0.0
                     print(f"[HEADING] AUTONOMOUS -> zero = {heading_zero:.2f}°")
 
                     # Axis FSM dinolkan DULU: sisa setpoint dari sesi
@@ -1751,6 +1760,7 @@ def setup_mission5_runner():
         "calib_bottom": os.environ.get("M5_CALIB_BOTTOM", M5_CALIB_BOTTOM_DEFAULT),
         "calib_wall": os.environ.get("M5_CALIB_WALL", M5_CALIB_WALL_DEFAULT),
         "hook_map": os.environ.get("M5_HOOK_MAP") or None,
+        "require_hook_map": True,
         "bench_qr_dock": os.environ.get("M5_BENCH_QR_DOCK", "0") == "1",
         "start_state": os.environ.get("M5_START_STATE", "M5_YOLO_SEARCH"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
@@ -2182,6 +2192,7 @@ def main():
             state["pitch"] = pitch_f
 
             latest_yaw = yaw_f
+            state["heading_compass"] = yaw_f
 
             if heading_zero is None:
                 state["heading"] = yaw_f

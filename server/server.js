@@ -46,6 +46,13 @@ const HOOK_VISION_MODEL = path.resolve(REPO_ROOT, process.env.HOOK_VISION_MODEL 
 const HOOK_VISION_MAP = path.resolve(REPO_ROOT, process.env.HOOK_VISION_MAP || path.join(AUTONOMY, "config", "hook_map.pool.yaml"));
 const HOOK_VISION_CALIB = path.resolve(REPO_ROOT, process.env.HOOK_VISION_CALIB || path.join(AUTONOMY, "vision", "calibration", "wall.npz"));
 const HOOK_VISION_DEFAULT_URL = process.env.HOOK_CAMERA_URL || "http://192.168.2.2:8080/stream";
+/* Laju deteksi YOLO. Worker sekarang selalu memakai frame TERBARU (lihat
+   LatestFrame di hook_vision_worker.py), jadi angka ini murni menentukan
+   seberapa sering observasi hook diperbarui — bukan lagi seberapa cepat
+   frame basi terkuras. Naikkan bila GPU sanggup (CUDA=True saat start-gui);
+   di CPU biarkan 10 supaya inferensi tidak saling menumpuk. */
+const HOOK_VISION_FPS = Number(process.env.HOOK_VISION_FPS) > 0
+  ? String(Number(process.env.HOOK_VISION_FPS)) : "10";
 const DEFAULT_PYTHON = process.platform === "win32" ? "python" : "python3";
 const AUTONOMOUS_LOG_DIR = path.join(AUTONOMY, "logs");
 fs.mkdirSync(AUTONOMOUS_LOG_DIR, { recursive: true });
@@ -209,13 +216,14 @@ function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
   const processRef = spawn(python, [HOOK_VISION_WORKER,
     "--camera", cameraUrl, "--model", HOOK_VISION_MODEL,
     "--map", HOOK_VISION_MAP, "--calib", HOOK_VISION_CALIB,
+    "--fps", HOOK_VISION_FPS,
   ], {
     cwd: REPO_ROOT,
     env: { ...process.env, PYTHONPATH: envPath },
     stdio: ["pipe", "pipe", "pipe"],
   });
   hookVisionProcess = processRef;
-  console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl} | model: ${HOOK_VISION_MODEL}`);
+  console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl} | model: ${HOOK_VISION_MODEL} | ${HOOK_VISION_FPS} fps`);
 
   const lines = readline.createInterface({ input: processRef.stdout });
   lines.on("line", (line) => {
@@ -275,26 +283,66 @@ const camStreams = new Map(); // key -> { clients: Set<res>, statusCode, headers
    di batas frame supaya yang dibuang selalu frame UTUH (newest-wins). */
 const CAM_BACKLOG_LIMIT = 1 << 20;   // 1 MB antre = klien ini ketinggalan, lewati frame
 
-/* Pemotong multipart/x-mixed-replace. Menahan byte sampai delimiter berikutnya
-   terlihat, lalu menyerahkan satu part utuh (header + JPEG). Sengaja tidak
-   mem-parse JPEG-nya: batas multipart sudah cukup dan jauh lebih murah. */
+
+/* Pemotong multipart/x-mixed-replace: menyerahkan satu part utuh
+   (header + JPEG) ke fanout.
+
+   Jalur cepat memakai Content-Length yang dikirim mjpg-streamer, sehingga
+   sebuah frame diteruskan BEGITU byte terakhirnya tiba. Versi lama menunggu
+   delimiter part BERIKUTNYA muncul dulu — artinya setiap frame ditahan di
+   server selama satu interval frame penuh (33 ms @30 fps, 100 ms @10 fps)
+   sebelum sampai ke browser. Itu latensi murni, tanpa manfaat.
+
+   Kamera yang tidak mengirim Content-Length tetap dilayani jalur delimiter
+   lama. Setiap part yang diserahkan selalu diawali delimiter-nya sendiri,
+   jadi klien yang ketinggalan tetap boleh membuang satu part utuh tanpa
+   merusak sinkronisasi multipart. */
 function camSplitter(contentType, onPart) {
   const m = /boundary=(?:"([^"]+)"|([^;\s]+))/i.exec(contentType || "");
   if (!m) return null;                       // bukan multipart -> pakai jalur byte biasa
+  const MAX_PART = 32 << 20;                 // Content-Length di atas ini = header ngawur
   const delim = Buffer.from("--" + (m[1] || m[2]));
+  const HDR_END = Buffer.from("\r\n\r\n");
   let buf = Buffer.alloc(0);
+  let need = 0;   // total byte part berjalan (header + body); 0 = header belum terbaca
+
   return (chunk) => {
     buf = buf.length ? Buffer.concat([buf, chunk]) : chunk;
-    // mulai cari dari 1 supaya delimiter di posisi 0 (awal part berjalan) tidak
-    // langsung memotong part kosong
-    let idx;
-    while ((idx = buf.indexOf(delim, 1)) !== -1) {
-      onPart(buf.subarray(0, idx));
-      buf = buf.subarray(idx);
+
+    for (;;) {
+      if (!need) {
+        const h = buf.indexOf(HDR_END);
+        if (h === -1) break;                 // header part belum lengkap
+        const cl = /content-length:[ \t]*(\d+)/i.exec(buf.subarray(0, h).toString("latin1"));
+        if (!cl) {
+          // Tanpa Content-Length: kembali ke jalur delimiter (menunggu part
+          // berikutnya). Cari dari 1 supaya delimiter di posisi 0 tidak
+          // langsung memotong part kosong.
+          const idx = buf.indexOf(delim, 1);
+          if (idx === -1) break;
+          onPart(buf.subarray(0, idx));
+          buf = buf.subarray(idx);
+          continue;
+        }
+        const total = h + HDR_END.length + Number(cl[1]);
+        if (!Number.isFinite(total) || total <= 0 || total > MAX_PART) {
+          const idx = buf.indexOf(delim, 1);
+          if (idx === -1) break;
+          onPart(buf.subarray(0, idx));
+          buf = buf.subarray(idx);
+          continue;
+        }
+        need = total;
+      }
+      if (buf.length < need) break;          // body frame belum lengkap
+      onPart(buf.subarray(0, need));
+      buf = buf.subarray(need);              // sisa "\r\n" jadi awal part berikutnya
+      need = 0;
     }
+
     /* Jaring pengaman: kamera yang tidak pernah mengirim delimiter lagi (atau
        content-type bohong) tidak boleh membuat buffer tumbuh tanpa batas. */
-    if (buf.length > 8 << 20) { onPart(buf); buf = Buffer.alloc(0); }
+    if (!need && buf.length > 8 << 20) { onPart(buf); buf = Buffer.alloc(0); }
   };
 }
 
@@ -423,6 +471,11 @@ const httpServer = http.createServer((req, res) => {
       return res.end("host kamera tidak diizinkan");
     }
 
+    /* Nagle menahan byte kecil sampai ~40 ms menunggu paket berikutnya, dan
+       header multipart tiap frame adalah byte kecil. Untuk umpan video LAN
+       yang dikejar latensinya itu murni penundaan. */
+    if (res.socket) res.socket.setNoDelay(true);
+
     const key = camStreamKey(target);
     let entry = camStreams.get(key);
 
@@ -438,6 +491,8 @@ const httpServer = http.createServer((req, res) => {
 
       const mod = t.protocol === "https:" ? https : http;
       entry.up = mod.get(target, (upRes) => {
+        // sama seperti sisi klien: jangan biarkan Nagle menumpuk frame
+        if (upRes.socket) upRes.socket.setNoDelay(true);
         entry.statusCode = upRes.statusCode || 502;
         entry.headers = upRes.headers;
         for (const c of entry.clients) if (!c.writableEnded) c.writeHead(entry.statusCode, entry.headers);

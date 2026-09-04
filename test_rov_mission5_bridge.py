@@ -271,7 +271,6 @@ class TestCustomCaseMotion(unittest.TestCase):
                                    "custom_cases": cases,
                                    "run_log_dir": tempfile.gettempdir()},
                            log=lambda *_: None)
-        r._cfg["read_mark"] = lambda: (90.0, 0.5)
         chained = []
         r._start_fsm = lambda *a, **kw: chained.append((a, kw)) or True
 
@@ -283,18 +282,34 @@ class TestCustomCaseMotion(unittest.TestCase):
         # CASE tuntas -> serah terima ke FSM untuk langkah 3-8
         self.assertEqual(len(chained), 1, "CASE COMPLETE harus merantai ke FSM")
         self.assertEqual(chained[0][0][0], "M5_YOLO_SEARCH")
-        # heading CASE adalah target kompas absolut; MARK tetap wajib sebagai gate.
+        # Heading 90 relatif terhadap arah saat AUTONOMOUS diklik.
         self.assertAlmostEqual(chained[0][1]["heading_hold"], 90.0)
 
-    def test_custom_case_wajib_mark(self):
-        """Heading absolut tetap tidak boleh memulai misi tanpa MARK operator."""
-        cases = [{"name": "X", "duration_ms": 20, "motion": (0, 0, 0, 0.4, "hold")}]
+    def test_custom_case_tidak_memerlukan_mark(self):
+        """Heading/depth berasal dari bridge; alur terbaru tidak memakai MARK."""
+        cases = [{"name": "X", "duration_ms": 20, "motion": (0, 0, 0, None, "hold")}]
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {"heading": 0}),
                            config={"custom_motion_enabled": True, "custom_cases": cases,
                                    "read_mark": lambda: (None, None)},
                            log=lambda *_: None)
+        chained = []
+        r._start_fsm = lambda *args, **kwargs: chained.append((args, kwargs)) or True
+        self.assertTrue(r.start())
+        r._thread.join(timeout=1)
+        self.assertIsNone(r.last_error)
+        self.assertEqual(chained[0][0][0], "M5_YOLO_SEARCH")
+
+    def test_custom_case_produksi_wajib_hook_map_yang_ada(self):
+        cases = [{"name": "X", "duration_ms": 20,
+                  "motion": (0, 0, 0, 0.4, "hold")}]
+        r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {"heading": 0}),
+                           config={"custom_motion_enabled": True, "custom_cases": cases,
+                                   "read_mark": lambda: (90.0, 0.4),
+                                   "require_hook_map": True,
+                                   "hook_map": "file-map-yang-tidak-ada.yaml"},
+                           log=lambda *_: None)
         self.assertFalse(r.start())
-        self.assertIn("MARK", r.last_error)
+        self.assertIn("hook map", r.last_error)
 
     def test_custom_case_dibatalkan_tidak_merantai_ke_fsm(self):
         """Kill-switch yang menyala di batas serah terima tak boleh memulai FSM."""
@@ -377,8 +392,19 @@ class TestWiringDiRovAgent(unittest.TestCase):
         # Langkah 1-2 = CASE MOTION; FSM mengambil alih dari langkah 3.
         self.assertIn('os.environ.get("M5_START_STATE", "M5_YOLO_SEARCH")', self.src)
 
+    def test_toggle_autonomous_me_zero_kan_heading_sebelum_runner_start(self):
+        branch = self.src.index('if requested == "autonomous":')
+        zero = self.src.index('state["heading"] = 0.0', branch)
+        start = self.src.index('mission5_runner.start()', zero)
+        self.assertLess(zero, start)
+        self.assertIn('state["heading_compass"] = yaw_f', self.src)
+        with open("autonomy/tools/hook_vision_worker.py", encoding="utf-8") as fh:
+            worker = fh.read()
+        self.assertIn("compass_heading = vehicle.get('heading_compass')", worker)
+
     def test_hook_map_produksi_opt_in(self):
         self.assertIn('"hook_map": os.environ.get("M5_HOOK_MAP") or None', self.src)
+        self.assertIn('"require_hook_map": True', self.src)
         with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
             bridge = fh.read()
         self.assertIn('hook_map_file=cfg.get("hook_map")', bridge)

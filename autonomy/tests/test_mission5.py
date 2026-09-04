@@ -181,6 +181,9 @@ def test_hook_tip_menolak_skeleton_lemah_atau_tidak_lengkap():
             'frame_w': 640, 'frame_h': 480}
     assert fsm._hook_tip(dict(base, keypoints=_hook_keypoints(155, 410, conf=0.1))) is None
     assert fsm._hook_tip(dict(base, keypoints=_hook_keypoints(155, 410)[:-1])) is None
+    clipped = _hook_keypoints(155, 410)
+    clipped[0]['y'] = 0
+    assert fsm._hook_tip(dict(base, keypoints=clipped)) is None
 
 
 def test_hook_align_target_luas_ikut_resolusi_frame():
@@ -293,8 +296,8 @@ def test_fallback_tidak_mengklaim_skor_penuh():
     assert 0 < fsm.score()['m5'] < 40
 
 
-def test_left_gagal_setelah_menghadap_dinding_degradasi_bukan_abort():
-    """Misi 40 poin: timeout YOLO jangan pulang dengan skor 0."""
+def test_left_gagal_visual_abort_bukan_fallback_buta():
+    """Timeout YOLO/QR harus failsafe; jangan grab buta demi skor."""
     for state, call in [
         (State.M5_YOLO_SEARCH, lambda f: f._state_m5_yolo_search({})),
         (State.M5_HOOK_ALIGN, lambda f: f._state_m5_hook_align({})),
@@ -304,16 +307,16 @@ def test_left_gagal_setelah_menghadap_dinding_degradasi_bukan_abort():
         fsm._state = state
         fsm._state_t = m5.time.time() - 1e6      # semua timeout terlampaui
         call(fsm)
-        assert fsm._state == State.M5_FALLBACK, state.name
+        assert fsm._state == State.ABORT, state.name
 
 
-def test_left_degradasi_dini_saat_jam_heat_hampir_habis():
+def test_left_abort_dini_saat_jam_heat_hampir_habis():
     fsm = _make_fsm()
     fsm._state = State.M5_QR_DOCK
     fsm._state_t = m5.time.time()
     fsm._mission_t0 = m5.time.time() - m5.TIME_BUDGET_TOTAL + 5.0   # sisa 5 s
     fsm._state_m5_qr_dock({})
-    assert fsm._state == State.M5_FALLBACK, "harus degradasi sebelum peluit, bukan ABORT"
+    assert fsm._state == State.ABORT, "sisa waktu tak cukup harus fail-safe"
 
 
 def test_left_grip_menyerahkan_mundur_ke_unhook_yang_mengangkat_dulu():

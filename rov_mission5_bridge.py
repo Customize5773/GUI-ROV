@@ -20,13 +20,13 @@ CUSTOM_MOTION_ENABLED = True
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
-# heading = target kompas absolut. MARK tetap wajib sebagai pagar keselamatan
-# bahwa lokasi gantungan sudah direkam operator sebelum AUTONOMOUS dimulai.
+# Saat AUTONOMOUS diklik, arah ROV saat itu otomatis menjadi heading 0 derajat.
+# Nilai heading dan depth setiap tahap diambil langsung dari tuple motion ini.
 CUSTOM_CASES = [
     # Langkah 1: turun ke kedalaman hook sambil maju sedikit + serong kanan.
     {"name": "CASE_M1", "duration_ms": 3000,
      "motion": (60, 80, 0, 0.40, "close")},
-    # Langkah 2: putar membelakangi arah MARK, tahan sampai heading mantap.
+    # Langkah 2: putar 180 derajat dari arah saat AUTONOMOUS diklik.
     {"name": "CASE_M2", "duration_ms": 5000,
      "motion": (0, 0, 180, 0.0, "close")},
     {"name": "CASE_M2", "duration_ms": 5000,
@@ -127,7 +127,7 @@ class Mission5Runner:
         self._thread = None
         self._lock = threading.Lock()
         self._custom_stop = threading.Event()
-        self._last_case_heading = None   # heading absolut CASE terakhir → FSM
+        self._last_case_heading = None   # heading relatif CASE terakhir → FSM
         self.bench_qr_dock = bool(self._cfg.get("bench_qr_dock", False))
         self.custom_enabled = (not self.bench_qr_dock and bool(self._cfg.get(
             "custom_motion_enabled", CUSTOM_MOTION_ENABLED)))
@@ -239,14 +239,12 @@ class Mission5Runner:
             self.last_error = str(exc)
             self._log(f"[CUSTOM] TIDAK BISA START — {exc}")
             return False
-        # Heading CASE adalah target kompas absolut. MARK tetap wajib sebagai
-        # konfirmasi operator bahwa gantungan dan kedalaman kerja sudah direkam.
-        marked_heading, _marked_depth = self._cfg.get(
-            "read_mark", lambda: (None, None))()
-        if marked_heading is None:
-            self.last_error = "MARK gantungan wajib sebelum AUTONOMOUS"
-            self._log("[CUSTOM] TIDAK BISA START - " + self.last_error)
-            return False
+        if self._cfg.get("require_hook_map", False):
+            hook_map = self._cfg.get("hook_map")
+            if not hook_map or not os.path.isfile(hook_map):
+                self.last_error = "hook map wajib dan file harus tersedia"
+                self._log("[CUSTOM] TIDAK BISA START - " + self.last_error)
+                return False
 
         self._cmd.stop_all()
         if not self._cmd.set_alt_hold():

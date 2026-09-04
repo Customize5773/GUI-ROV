@@ -1558,11 +1558,9 @@ class Mission5FSM:
     def _yolo_source_failed(det):
         return isinstance(det, dict) and str(det.get('status', '')).endswith('_error')
 
-    # FSM baru mengambil alih SETELAH CASE MOTION menghadapkan ROV ke dinding hook
-    # di kedalaman kerja — persis posisi yang diasumsikan M5_FALLBACK (maju timed →
-    # grip → angkat → tarik → naik). Jadi setiap state di sini boleh didegradasi
-    # dan tetap berskor, tak ada lagi fase "orientasi belum tentu benar" seperti
-    # saat langkah 1-2 masih dijalankan FSM.
+    # Tahap visual tidak boleh berubah menjadi gerak timed/buta ketika YOLO atau
+    # QR hilang. Fallback lama tetap tersedia untuk skenario legacy yang masuk
+    # M5_FALLBACK secara eksplisit, tetapi alur langkah 3-8 selalu fail-safe.
     LEFT_DEGRADABLE = (State.M5_YOLO_SEARCH, State.M5_HOOK_ALIGN, State.M5_QR_DOCK)
 
     def _left_abort(self, reason):
@@ -1570,20 +1568,11 @@ class Mission5FSM:
             log.error("[FSM] BENCH QR ABORT — %s", reason)
             self.abort()
             return
-        if self._state in self.LEFT_DEGRADABLE:
-            log.warning("[FSM] alur M5 sisi kiri gagal (%s) — degradasi ke fallback timed",
-                        reason)
-            self.cmd.stop_all()
-            self._transition(State.M5_FALLBACK)
-            return
         log.error("[FSM] alur M5 sisi kiri ABORT — %s", reason)
         self.abort()
 
     def _left_out_of_time(self) -> bool:
-        """Degradasi DINI bila sisa jam heat tak cukup lagi menuntaskan rantai.
-
-        Tanpa ini tiap state kiri menghabiskan timeout-nya sendiri dulu, dan
-        M5_FALLBACK (yang tetap memberi skor) bisa terpotong peluit."""
+        """Abort dini bila sisa jam heat tak cukup menuntaskan rantai dengan aman."""
         if self._time_left() >= self._min_time_needed_from(self._state):
             return False
         self._left_abort("sisa jam heat %.0fs < kebutuhan minimum" % self._time_left())
@@ -1629,9 +1618,11 @@ class Mission5FSM:
                 if confidence is None or float(confidence) < HOOK_KEYPOINT_CONF:
                     return None
                 x, y = float(item['x']), float(item['y'])
+                frame_w, frame_h = float(det['frame_w']), float(det['frame_h'])
+                edge_margin = max(2.0, 0.005 * min(frame_w, frame_h))
                 if (not math.isfinite(x) or not math.isfinite(y)
-                        or x < 0 or y < 0
-                        or x > float(det['frame_w']) or y > float(det['frame_h'])):
+                        or x < edge_margin or y < edge_margin
+                        or x > frame_w - edge_margin or y > frame_h - edge_margin):
                     return None
                 points[index] = (x, y)
         except (KeyError, TypeError, ValueError, OverflowError):

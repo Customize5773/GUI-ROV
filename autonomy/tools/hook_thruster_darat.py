@@ -111,7 +111,8 @@ def main():
         raw = det and {"status": "ok", "method": "yolov8",
                        "confidence": det["confidence"], "bbox": list(det["bbox"]),
                        "frame_w": det["frame_w"], "frame_h": det["frame_h"]}
-        # Persis yang dilihat Pi: validator membuang keypoint & field tak dipercaya.
+        # Persis yang dilihat Pi: validator mempertahankan enam keypoint pose,
+        # tetapi tetap membuang field jaringan yang tidak dipercaya.
         value = _validate_hook_vision(raw) if raw else None
         hits += value is not None
         fsm._yolo_source = lambda v=value: v

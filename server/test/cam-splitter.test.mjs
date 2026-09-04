@@ -80,6 +80,65 @@ test("stream tanpa delimiter tidak menumpuk buffer tanpa batas", () => {
   assert.ok(out.length > 0, "buffer harus di-flush, bukan tumbuh selamanya");
 });
 
+/* ---------- jalur cepat Content-Length (format mjpg-streamer asli) ----------
+   Ini yang menentukan latensi video: frame harus keluar begitu byte
+   terakhirnya tiba, TANPA menunggu delimiter frame berikutnya. Menunggu
+   delimiter berikutnya berarti setiap frame ditahan satu interval frame
+   penuh (33 ms @30 fps) di server. */
+const clPart = (n, body) => Buffer.from(
+  `--myboundary\r\nContent-Type: image/jpeg\r\nContent-Length: ${body.length}\r\n\r\n${body}\r\n`);
+
+test("Content-Length: frame keluar tanpa menunggu delimiter berikutnya", () => {
+  const out = [];
+  const feed = camSplitter(CT, (b) => out.push(b.toString()));
+  feed(clPart(1, "JPEG1"));
+  assert.strictEqual(out.length, 1, "frame lengkap harus langsung diteruskan");
+  assert.ok(out[0].includes("JPEG1"));
+});
+
+test("Content-Length: body belum lengkap tetap ditahan", () => {
+  const out = [];
+  const feed = camSplitter(CT, (b) => out.push(b.toString()));
+  const whole = clPart(1, "JPEGBESAR");
+  feed(whole.subarray(0, whole.length - 5));
+  assert.strictEqual(out.length, 0, "frame separuh tidak boleh diteruskan");
+  feed(whole.subarray(whole.length - 5));
+  assert.strictEqual(out.length, 1);
+  assert.ok(out[0].includes("JPEGBESAR"));
+});
+
+test("Content-Length: tiap part tetap diawali delimiter (aman untuk di-drop)", () => {
+  const out = [];
+  const feed = camSplitter(CT, (b) => out.push(b.toString()));
+  feed(Buffer.concat([clPart(1, "AAA"), clPart(2, "BBB"), clPart(3, "CCC")]));
+  assert.strictEqual(out.length, 3, "ketiganya lengkap, ketiganya harus keluar");
+  // part pertama mulai di delimiter; berikutnya membawa CRLF penutup part
+  // sebelumnya di depan delimiter-nya — keduanya tetap sinkron bila di-drop.
+  assert.ok(out[0].startsWith("--myboundary"));
+  assert.ok(out.slice(1).every((s) => s.startsWith("\r\n--myboundary")));
+  assert.deepStrictEqual(out.map((s) => s.slice(-3)), ["AAA", "BBB", "CCC"]);
+});
+
+test("Content-Length: byte per byte sama dengan satu chunk besar", () => {
+  const whole = [], drip = [];
+  const a = camSplitter(CT, (b) => whole.push(b.toString()));
+  const b = camSplitter(CT, (x) => drip.push(x.toString()));
+  const all = Buffer.concat([clPart(1, "AAA"), clPart(2, "BBB")]);
+  a(all);
+  for (const byte of all) b(Buffer.from([byte]));
+  assert.deepStrictEqual(drip, whole);
+});
+
+test("Content-Length ngawur jatuh ke jalur delimiter, bukan menggantung", () => {
+  const out = [];
+  const feed = camSplitter(CT, (b) => out.push(b.toString()));
+  const bogus = Buffer.from(
+    "--myboundary\r\nContent-Length: 999999999999\r\n\r\nJPEG1\r\n");
+  feed(Buffer.concat([bogus, Buffer.from("--myboundary\r\n\r\nJPEG2\r\n")]));
+  assert.strictEqual(out.length, 1);
+  assert.ok(out[0].includes("JPEG1"));
+});
+
 let failed = 0;
 for (const { name, fn } of tests) {
   try { fn(); console.log(`  ok  ${name}`); }
