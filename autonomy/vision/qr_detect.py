@@ -530,6 +530,11 @@ class VisionPipeline:
         self._last_hook: Optional[dict] = None    # deteksi hook terakhir (HANG misi 3b + DOCK misi 4)
         self._last_wall_hint: Optional[dict] = None   # tebakan CNN saat decode GAGAL (opt-in)
         self._frame_buf = deque(maxlen=STACK_N)   # buffer utk jenjang-7 median-stack (lawan riak)
+        # Buffer TERPISAH per kamera. Saat dual-camera aktif (QR dibaca dari
+        # BOTTOM dan WALL sekaligus), satu buffer bersama akan mencampur dua
+        # pemandangan berbeda ke dalam satu median — hasilnya bukan menekan
+        # riak melainkan menghancurkan modul QR di kedua frame.
+        self._frame_buf_qr = deque(maxlen=STACK_N)
 
         # ── Dual-camera (BOTTOM utk QR, WALL utk hook) ─────────────────────────
         qr_src = qr_url if qr_url is not None else qr_device
@@ -902,7 +907,7 @@ class VisionPipeline:
             frame = self._undistort(frame, K, dist, self._undist_cache_qr)
             dets = self._decode_qr_frame(frame)
             if not dets:
-                dets = self._decode_stacked(frame)   # jenjang-7: median antar-frame
+                dets = self._decode_stacked(frame, self._frame_buf_qr)   # jenjang-7: median antar-frame
             if not dets:
                 self._try_wall_fallback(frame)
             elif self._wall_voter is not None:
@@ -1015,16 +1020,22 @@ class VisionPipeline:
             return None
         return r
 
-    def _decode_stacked(self, frame):
+    def _decode_stacked(self, frame, buf=None):
         """Jenjang-7: decode_qr() gagal di semua jenjangnya → coba median dari
         STACK_N frame terakhir. Riak berubah tiap frame, QR+ROV relatif diam
         saat SCAN_QR/hover, jadi median menekan distorsi transien yang jadi
         penyebab dominan gagal decode di air (lihat catatan lapangan riak)."""
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-        self._frame_buf.append(gray)
-        if len(self._frame_buf) < self._frame_buf.maxlen:
+        if buf is None:
+            buf = self._frame_buf
+        buf.append(gray)
+        if len(buf) < buf.maxlen:
             return []
-        stacked = np.median(np.stack(self._frame_buf), axis=0).astype(np.uint8)
+        # Resolusi bisa berbeda antar kamera; stack hanya sah bila seragam.
+        if len({f.shape for f in buf}) != 1:
+            buf.clear()
+            return []
+        stacked = np.median(np.stack(buf), axis=0).astype(np.uint8)
         return decode_qr(stacked, enhance=True)
 
     def _try_wall_fallback(self, frame):

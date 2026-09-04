@@ -432,7 +432,14 @@ class Mission5Runner:
                 # sebelumnya bottom_url/calib_bottom sudah dikonfigurasi agent
                 # tetapi tidak pernah dipakai oleh bridge.
                 qr_url=cfg.get("bottom_url"),
-                hook_url=None,
+                # QR 4x4 cm (spesifikasi KKI, tak bisa diperbesar) hanya ~3 px
+                # per modul dari jarak kerja gripper — satu kamera sering gagal
+                # decode di air keruh. VisionPipeline menjalankan decode QR di
+                # KEDUA loop kamera, jadi CAM WALL dipasang sebagai sumber QR
+                # kedua: sudut & jaraknya berbeda, siapa pun yang lolos duluan
+                # dipakai. hook_enabled=False tetap berlaku — CAM WALL di sini
+                # murni pembaca QR, deteksi hook tetap milik worker YOLO laptop.
+                hook_url=cfg.get("wall_url"),
                 calib_file=cfg.get("calib_bottom"),
                 qr_length=cfg.get("qr_size", mission5_module.QR_SIDE_M),
                 hook_hsv_range=mission5_module.HOOK_COLOR_HSV_RANGE,

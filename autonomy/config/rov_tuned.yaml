@@ -80,18 +80,23 @@ m5_mechanics:
 left_flow:
   # Langkah 1-2 diatur CUSTOM_CASES di rov_mission5_bridge.py, bukan di sini.
   advance_max_t: 15.0    # pagar JARAK maju buta (detik x SEARCH_SPEED); skala per arena
-  align_t: 50.0       # approach jauh + align tip dipisah agar tetap lambat
+  align_t: 90.0       # approach jauh + align tip dipisah agar tetap lambat
   # Kolam uji berlatar putih dan hanya berisi hook. Gate bbox dibuat rendah
   # agar model yang belum sempurna tidak sering drop; keypoint kendali 2-5
   # tetap wajib lolos ambang 0.35 sebelum thruster boleh bergerak.
   yolo_conf: 0.10
-  yolo_area_frac: 0.08   # UKUR: preflight_check.py --hook-model di jarak gripper
+  # Run 03:38: align LULUS di area 0.08-0.11 lalu QR_DOCK timeout. Foto CAM
+  # BOTTOM menunjukkan QR payload memang ada tapi hanya ~60 px — terlalu kecil
+  # untuk zbar di air keruh (butuh ~100-150 px). Target diperbesar supaya ROV
+  # berhenti LEBIH DEKAT, sehingga QR cukup besar untuk di-decode.
+  yolo_area_frac: 0.18   # UKUR: preflight_check.py --hook-model di jarak gripper
   hook_tip_x_frac: 0.5   # titik bidik ujung "J" thd bbox: 0=kiri, 1=kanan
   hook_tip_y_frac: 0.9   # 0=atas, 1=bawah — ujung J ada di sisi BAWAH
   # Uji 5 Sep: pada kp 20 / cap 8 perintah yaw hanya ~4,5% dan ROV berputar
   # 0,075 derajat/detik — butuh >90 s untuk 7 derajat, jauh melewati align_t.
   # Dinaikkan agar konvergen dalam jendela waktu; tetap di bawah 30%.
-  hook_yaw_kp: 45.0      # point 5 kanan/kiri → arahkan hidung secara proporsional
+  # kp 20 terlalu lemah (tak konvergen), kp 45 overshoot -107 -> +180 px.
+  hook_yaw_kp: 28.0      # point 5 kanan/kiri → arahkan hidung secara proporsional
   hook_max_yaw: 20.0     # yaw approach dibatasi agar tidak menyentak
   qr_yaw_kp: 20.0
   qr_yaw_kp_deg: 1.0     # yaw dari kemiringan QR (PBVS); qr_yaw_kp hanya utk IBVS
@@ -103,7 +108,10 @@ left_flow:
   # Uji kolam: 12% tidak mengubah luas bbox; 30% adalah breakaway trial,
   # tetap dicapai perlahan oleh visual_slew 10%/detik.
   visual_max_surge: 30.0
-  visual_max_sway: 12.0
+  # Run 03:31: sway MENTOK di 12% sepanjang align sementara tip_x melenceng
+  # -107 -> +180 px. Menyejajarkan badan ke depan hook butuh translasi lateral,
+  # bukan cuma memutar hidung; cap dinaikkan (tetap < 30%).
+  visual_max_sway: 20.0
   visual_max_yaw: 25.0
   # Vertikal perlu melewati deadband/breakaway ketika ROV mulai dari dasar.
   # Cap sedikit lebih tinggi, tetapi ramp diperlambat agar tidak menyentak.
@@ -119,7 +127,20 @@ depth:
   # confidence jatuh ke 0.13-0.30 dan align tak pernah konvergen. Offset 300 px
   # pada FOV vertikal ~33 derajat ≈ 14 derajat; pada jarak ~1,2 m itu ≈ 0,29 m
   # di ATAS kamera. Target dinaikkan agar hook masuk ke tengah bidang pandang.
-  hook_depth: 0.22
+  # Run 03:31: pada depth 0.28-0.30 m tip_y_offset ≈ -22..+10 px (TEPAT center),
+  # jadi 0.22 m terlalu dangkal dan membuat hook lewat di bawah tengah frame.
+  # Alur penuh 3-8: 0,30 m menempatkan hook di TENGAH bidang pandang CAM WALL
+  # (pada 0,45 m hook terpotong di tepi atas, confidence jatuh ke 0,13-0,30).
+  # Catatan uji 6-8 terisolasi: bila operator menempatkan ROV jauh di bawah
+  # nilai ini, _left_hold memanjat 60% dan ROV melesat sebelum menggenggam —
+  # samakan hook_depth dgn kedalaman penempatan saat menguji tahap 6-8 saja.
+  hook_depth: 0.30
+
+# ── Batas waktu ───────────────────────────────────────────────────────────────
+timeouts:
+  # Run 03:38: QR_DOCK habis waktu 25 s sebelum QR sempat ter-decode. Dgn
+  # pendekatan yang kini lebih rapat, beri jendela lebih panjang untuk lock.
+  m5_dock: 45.0
 
 # ── Validasi payload QR ───────────────────────────────────────────────────────
 payload:
