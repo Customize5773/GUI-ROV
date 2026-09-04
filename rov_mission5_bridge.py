@@ -19,20 +19,20 @@ import time
 CUSTOM_MOTION_ENABLED = True
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
-# yaw_max (opsional, default 30) = batas % thruster saat memutar ke heading itu.
-#   Kecilkan kalau putarannya overshoot / terlalu kasar, besarkan kalau lambat.
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
-# heading = OFFSET derajat dari marked_heading (BUKAN kompas absolut), karena
-# pilot selalu bersandar di dinding yang di-MARK setelah misi 4. Tabel ini jadi
-# portabel antar arena: MARK diukur ulang, offsetnya tetap.
-#   0 = menghadap arah yang sama dgn saat MARK; 180 = membelakanginya.
+# heading = target kompas absolut. MARK tetap wajib sebagai pagar keselamatan
+# bahwa lokasi gantungan sudah direkam operator sebelum AUTONOMOUS dimulai.
 CUSTOM_CASES = [
     # Langkah 1: turun ke kedalaman hook sambil maju sedikit + serong kanan.
-    {"name": "CASE_PREP", "duration_ms": 3000,
-     "motion": (15, 10, 0, 0.40, "open")},
+    {"name": "CASE_M1", "duration_ms": 3000,
+     "motion": (60, 80, 0, 0.40, "close")},
     # Langkah 2: putar membelakangi arah MARK, tahan sampai heading mantap.
-    {"name": "CASE_TURN", "duration_ms": 6000, "yaw_max": 30,
-     "motion": (0, 0, 180, 0.40, "open")},
+    {"name": "CASE_M2", "duration_ms": 5000,
+     "motion": (0, 0, 180, 0.0, "close")},
+    {"name": "CASE_M2", "duration_ms": 5000,
+     "motion": (20, 0, 180, 0.0, "hold")},
+    # {"name": "CASE_M4", "duration_ms": 9000,
+    #  "motion": (-5, -100, 180, 0.40, "hold")},
 ]
 
 
@@ -200,10 +200,13 @@ class Mission5Runner:
         return dict(next_config)
 
     @staticmethod
-    def _heading_control(target, current, yaw_max=30):
+    def _heading_control(target, current):
         error = (float(target) - float(current) + 180.0) % 360.0 - 180.0
-        return (0 if abs(error) < 2.0
-                else max(-yaw_max, min(yaw_max, round(error * 3))))
+
+        if abs(error) < 2.0:
+            return 0
+
+        return max(-45, min(45, round(error * 3)))
 
     @staticmethod
     def _validate_custom_cases(cases):
@@ -228,9 +231,6 @@ class Mission5Runner:
                 raise ValueError(f"{case.get('name')}: depth harus 0..10 m atau None")
             if gripper not in ("open", "close", "hold"):
                 raise ValueError(f"{case.get('name')}: gripper tidak valid")
-            yaw_max = float(case.get("yaw_max", 30))
-            if not math.isfinite(yaw_max) or not 1 <= yaw_max <= 100:
-                raise ValueError(f"{case.get('name')}: yaw_max harus 1..100")
 
     def _start_custom(self):
         try:
@@ -239,14 +239,13 @@ class Mission5Runner:
             self.last_error = str(exc)
             self._log(f"[CUSTOM] TIDAK BISA START — {exc}")
             return False
-        # Heading tiap CASE ditulis RELATIF terhadap MARK: pilot selalu bersandar
-        # di dinding payload yang di-MARK setelah misi 4, jadi marked_heading itu
-        # acuan yang bisa dipercaya — dan tabel CASE jadi portabel antar arena
-        # tanpa ditulis ulang. Tanpa MARK, offset relatif tak punya arti.
-        marked_heading, _marked_depth = self._cfg.get("read_mark", lambda: (None, None))()
+        # Heading CASE adalah target kompas absolut. MARK tetap wajib sebagai
+        # konfirmasi operator bahwa gantungan dan kedalaman kerja sudah direkam.
+        marked_heading, _marked_depth = self._cfg.get(
+            "read_mark", lambda: (None, None))()
         if marked_heading is None:
             self.last_error = "MARK gantungan wajib sebelum AUTONOMOUS"
-            self._log(f"[CUSTOM] TIDAK BISA START — {self.last_error}")
+            self._log("[CUSTOM] TIDAK BISA START - " + self.last_error)
             return False
 
         self._cmd.stop_all()
@@ -275,11 +274,11 @@ class Mission5Runner:
                         self._custom_elapsed_ms = (time.monotonic() - started) * 1000.0
                         if self._custom_elapsed_ms >= duration_ms:
                             break
-                        abs_hdg = (marked_heading + float(self._custom_motion[2])) % 360.0
-                        self._last_case_heading = abs_hdg
+                        target_heading = float(self._custom_motion[2]) % 360.0
+                        self._last_case_heading = target_heading
+
                         heading = self._telem.get().get("heading", 0.0)
-                        yaw = self._heading_control(
-                            abs_hdg, heading, int(case.get("yaw_max", 30)))
+                        yaw = self._heading_control(target_heading, heading)
                         self._cmd.send_motion(self._custom_motion, yaw_command=yaw)
                         self._custom_stop.wait(0.05)
                 self._custom_state = "STOPPED" if self._custom_stop.is_set() else "COMPLETE"
@@ -412,11 +411,13 @@ class Mission5Runner:
             vision = VisionPipeline(
                 source=cfg.get("vision_source", "usb"),
                 device=cfg.get("vision_device", 0),
-                # Kamera WALL segaris dengan gripper: satu stream untuk QR
-                # docking sekaligus hook, tanpa membuka URL yang sama dua kali.
-                qr_url=cfg.get("wall_url"),
+                # YOLO hook tetap berasal dari CAM WALL lewat hook_vision laptop.
+                # QR docking wajib memakai CAM BOTTOM yang menghadap gripper;
+                # sebelumnya bottom_url/calib_bottom sudah dikonfigurasi agent
+                # tetapi tidak pernah dipakai oleh bridge.
+                qr_url=cfg.get("bottom_url"),
                 hook_url=None,
-                calib_file=cfg.get("calib_wall"),
+                calib_file=cfg.get("calib_bottom"),
                 qr_length=cfg.get("qr_size", mission5_module.QR_SIDE_M),
                 hook_hsv_range=mission5_module.HOOK_COLOR_HSV_RANGE,
                 hook_min_area=mission5_module.HOOK_MIN_AREA,

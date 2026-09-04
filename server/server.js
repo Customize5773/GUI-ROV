@@ -668,22 +668,20 @@ wss.on("connection", (ws, req) => {
   ws.send(JSON.stringify({ type: "record_status", data: recording.status() }));
 
   ws.on("message", (raw) => {
-
-
-    console.log("WS RAW =", raw.toString());
-
-
+    /* JANGAN log tiap pesan di sini tanpa gerbang DEBUG. Joystick mengirim 4
+       axis pada 15-60 Hz; satu console.log per pesan berarti ratusan tulisan
+       stdout per detik, dan stdout Node ke file/terminal Windows bersifat
+       SINKRON — ia memblokir event loop yang sama yang meneruskan command ke
+       UDP dan menyiarkan telemetry. Itulah yang terasa sebagai "GUI lag". */
     let msg;
     try {
         msg = JSON.parse(raw);
-
-        console.log("TYPE =", msg.type);
-        console.log("NAME =", msg.name);
-
     } catch (e) {
         console.error("JSON ERROR:", e);
         return;
     }
+
+    if (DEBUG) console.log("[WS]", msg.type, msg.name ?? "");
 
     // ================= PING =================
     if (msg.type === "ping") {
@@ -777,7 +775,6 @@ wss.on("connection", (ws, req) => {
     }
 
     // ================= COMMAND KE ROV =================
-    console.log("MASUK IF CMD");
     if (msg.type === "cmd") {
       /* ================= MANIPULATOR ================= */
 
@@ -785,9 +782,8 @@ wss.on("connection", (ws, req) => {
 
           const packet = Buffer.from(JSON.stringify(msg));
 
-          console.log("[MANIPULATOR]", msg);
-          console.log("KIRIM UDP =", msg);
-          
+          if (DEBUG) console.log("[MANIPULATOR]", msg);
+
           udp.send(packet, UDP_OUT, RPI_ADDR, (e) => {
               if (e) console.warn("[UDP] gagal kirim manipulator:", e.message);
           });

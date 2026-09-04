@@ -283,11 +283,11 @@ class TestCustomCaseMotion(unittest.TestCase):
         # CASE tuntas -> serah terima ke FSM untuk langkah 3-8
         self.assertEqual(len(chained), 1, "CASE COMPLETE harus merantai ke FSM")
         self.assertEqual(chained[0][0][0], "M5_YOLO_SEARCH")
-        # heading CASE 90 ditulis RELATIF thd MARK 90 -> absolut 180
-        self.assertAlmostEqual(chained[0][1]["heading_hold"], 180.0)
+        # heading CASE adalah target kompas absolut; MARK tetap wajib sebagai gate.
+        self.assertAlmostEqual(chained[0][1]["heading_hold"], 90.0)
 
     def test_custom_case_wajib_mark(self):
-        """heading CASE adalah offset dari MARK — tanpa MARK ia tak punya arti."""
+        """Heading absolut tetap tidak boleh memulai misi tanpa MARK operator."""
         cases = [{"name": "X", "duration_ms": 20, "motion": (0, 0, 0, 0.4, "hold")}]
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {"heading": 0}),
                            config={"custom_motion_enabled": True, "custom_cases": cases,
@@ -390,14 +390,14 @@ class TestWiringDiRovAgent(unittest.TestCase):
         self.assertIn('newX = this.hookPose.x', mission_ui)
         self.assertIn('else if (this.hookMapEnabled)', mission_ui)
 
-    def test_qr_docking_memakai_kamera_wall_dekat_gripper(self):
+    def test_qr_docking_memakai_kamera_bottom_dekat_gripper(self):
         with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
             bridge = fh.read()
         # True = CASE (langkah 1-2) lalu rantai ke FSM (langkah 3-8) — jalur lomba.
         self.assertIn('CUSTOM_MOTION_ENABLED = True', bridge)
-        self.assertIn('qr_url=cfg.get("wall_url")', bridge)
+        self.assertIn('qr_url=cfg.get("bottom_url")', bridge)
         self.assertIn('hook_url=None', bridge)
-        self.assertIn('calib_file=cfg.get("calib_wall")', bridge)
+        self.assertIn('calib_file=cfg.get("calib_bottom")', bridge)
 
     def test_yolo_laptop_diteruskan_ke_pi_dengan_watchdog(self):
         with open("server/server.js", encoding="utf-8") as fh:
@@ -426,6 +426,12 @@ class TestWiringDiRovAgent(unittest.TestCase):
                  "bbox": [10, 20, 100, 80], "frame_w": 640, "frame_h": 480}
         self.assertIsNotNone(validate(valid))
         self.assertIsNone(validate(dict(valid, bbox=[600, 20, 100, 80])))
+
+        points = [{"id": i, "x": 20 + i, "y": 30 + i, "confidence": 0.8}
+                  for i in range(6)]
+        clean = validate(dict(valid, keypoints=points))
+        self.assertEqual([p["id"] for p in clean["keypoints"]], list(range(6)))
+        self.assertIsNone(validate(dict(valid, keypoints=points[:-1])))
 
 
 if __name__ == "__main__":

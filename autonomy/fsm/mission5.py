@@ -231,6 +231,7 @@ LEFT_TIMEOUT_ALIGN    = 20.0   # detik max membidik ujung J sebelum degradasi
 LEFT_ADVANCE_MAX_T    = 15.0
 LEFT_YOLO_SOURCE_GRACE = 3.0
 LEFT_YOLO_CONF        = 0.35
+HOOK_KEYPOINT_CONF    = 0.35   # minimum confidence tiap titik pose 0..5
 LEFT_YOLO_AREA_FRAC   = 0.08   # bbox/frame saat jarak kerja; ukur lewat
                                # preflight_check.py --hook-model di jarak gripper.
                                # Dipakai sbg target_area hook_servo, DIKALIKAN luas
@@ -1610,13 +1611,46 @@ class Mission5FSM:
         yaw, _sampai = self._search_yaw_to(telem, self._heading_hold)
         return yaw
 
-    def _hook_tip(self, det):
-        """Piksel KEPALA UJUNG HOOK "J" — tempat payload tergantung — dari bbox YOLO.
+    @staticmethod
+    def _hook_skeleton(det):
+        """Validasi pose hook: 0..2 batang, 3..4 kepala, dan 5 tip J."""
+        raw = det.get('keypoints')
+        if not isinstance(raw, (list, tuple)):
+            return None
+        points = {}
+        try:
+            for item in raw:
+                if not isinstance(item, dict):
+                    return None
+                index = int(item['id'])
+                if index not in range(6) or index in points:
+                    return None
+                confidence = item.get('confidence')
+                if confidence is None or float(confidence) < HOOK_KEYPOINT_CONF:
+                    return None
+                x, y = float(item['x']), float(item['y'])
+                if (not math.isfinite(x) or not math.isfinite(y)
+                        or x < 0 or y < 0
+                        or x > float(det['frame_w']) or y > float(det['frame_h'])):
+                    return None
+                points[index] = (x, y)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if set(points) != set(range(6)):
+            return None
 
-        Bukan centroid: batang pipa mendominasi bbox sehingga centroid jatuh di
-        tengah batang, sementara gripper harus menuju lengkungan di sisi BAWAH."""
-        bx, by, bw, bh = det['bbox']
-        return (bx + bw * HOOK_TIP_X_FRAC, by + bh * HOOK_TIP_Y_FRAC)
+        # Tolak skeleton kolaps. Ketiga span membuat kelompok batang (0-2),
+        # kepala (3-4), dan sambungan ke tip J (4-5) ikut memvalidasi point 5.
+        span_min = max(2.0, 0.003 * max(float(det['frame_w']), float(det['frame_h'])))
+        spans = (math.dist(points[0], points[2]),
+                 math.dist(points[3], points[4]),
+                 math.dist(points[4], points[5]))
+        return points if all(span >= span_min for span in spans) else None
+
+    def _hook_tip(self, det):
+        """Piksel point 5: ujung J tempat payload tergantung."""
+        skeleton = self._hook_skeleton(det)
+        return skeleton[5] if skeleton is not None else None
 
     def _state_m5_yolo_search(self, telem):
         """3. Maju sampai hasil YOLO laptop yang segar terdeteksi."""
@@ -1700,9 +1734,15 @@ class Mission5FSM:
 
         self._align_target(det)
         bx, by, bw, bh = det['bbox']
-        # det disalin dangkal dgn center = ujung J, supaya _hook_servo_step yang
+        tip = self._hook_tip(det)
+        if tip is None:
+            # Jangan kembali ke centroid bbox: itu dapat mengarahkan gripper ke
+            # batang hook saat point 5 hilang atau confidence-nya lemah.
+            self.cmd.stop_all()
+            return
+        # det disalin dangkal dgn center = point 5, supaya _hook_servo_step yang
         # sudah ada (deadband/slew/D-filter/approach gate/tally) dipakai apa adanya.
-        aim = dict(det, center=self._hook_tip(det), area=float(bw * bh), pose=None)
+        aim = dict(det, center=tip, area=float(bw * bh), pose=None)
         out, _mode = self._hook_servo_step(aim)
         if out.aligned:
             self.cmd.stop_all()

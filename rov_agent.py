@@ -677,6 +677,40 @@ def _validate_hook_vision(value):
     x, y, w, h = bbox
     if x < 0 or y < 0 or x + w > frame_w + 1 or y + h > frame_h + 1:
         return None
+
+    # Pertahankan enam keypoint pose dari YOLO laptop sampai ke FSM Pi. Versi
+    # sebelumnya membuang field ini sehingga align masih menebak tip dari bbox.
+    keypoints = value.get("keypoints")
+    clean_keypoints = None
+    if keypoints is not None:
+        if not isinstance(keypoints, (list, tuple)):
+            return None
+        clean_keypoints = []
+        seen_ids = set()
+        try:
+            for item in keypoints:
+                if not isinstance(item, dict):
+                    return None
+                point_id = int(item["id"])
+                point_x = float(item["x"])
+                point_y = float(item["y"])
+                point_conf = item.get("confidence")
+                point_conf = None if point_conf is None else float(point_conf)
+                if (point_id not in range(6) or point_id in seen_ids
+                        or not math.isfinite(point_x) or not math.isfinite(point_y)
+                        or point_x < 0 or point_y < 0
+                        or point_x > frame_w or point_y > frame_h
+                        or (point_conf is not None and
+                            (not math.isfinite(point_conf) or not 0 <= point_conf <= 1))):
+                    return None
+                seen_ids.add(point_id)
+                clean_keypoints.append({"id": point_id, "x": point_x, "y": point_y,
+                                        "confidence": point_conf})
+        except (KeyError, TypeError, ValueError, OverflowError):
+            return None
+        if seen_ids != set(range(6)):
+            return None
+
     return {
         "status": status,
         "method": "yolov8",
@@ -684,6 +718,7 @@ def _validate_hook_vision(value):
         "bbox": [x, y, w, h],
         "frame_w": frame_w,
         "frame_h": frame_h,
+        "keypoints": clean_keypoints,
     }
 
 

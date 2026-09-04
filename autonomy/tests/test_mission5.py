@@ -111,12 +111,24 @@ def test_payload_validation_accepts_legacy_non_json():
 
 
 # ── Alur Misi 5 langkah 3-8 (langkah 1-2 = CASE MOTION di bridge) ───────────
+def _hook_keypoints(tip_x, tip_y, conf=0.9):
+    """Skeleton fixture: 0..2 batang, 3..4 kepala, point 5 tip J."""
+    coords = [(tip_x, tip_y - 60), (tip_x, tip_y - 45),
+              (tip_x, tip_y - 30), (tip_x - 12, tip_y - 22),
+              (tip_x - 8, tip_y - 10), (tip_x, tip_y)]
+    return [{'id': index, 'x': x, 'y': y, 'confidence': conf}
+            for index, (x, y) in enumerate(coords)]
+
+
 def _yolo_at_area_fraction(frac, conf=0.9):
     frame_w, frame_h = 640, 480
     width = 192.0
     height = frac * frame_w * frame_h / width
+    bbox = [100.0, 100.0, width, height]
+    tip = (bbox[0] + width * m5.HOOK_TIP_X_FRAC,
+           bbox[1] + height * m5.HOOK_TIP_Y_FRAC)
     return {'status': 'relative_only', 'method': 'yolov8', 'confidence': conf,
-            'bbox': [100.0, 100.0, width, height],
+            'bbox': bbox, 'keypoints': _hook_keypoints(*tip),
             'frame_w': frame_w, 'frame_h': frame_h}
 
 
@@ -133,6 +145,10 @@ def test_hook_align_vert_servo_menang_atas_asumsi_kedalaman():
     det = {'status': 'ok', 'method': 'yolov8', 'confidence': 0.9,
            'frame_w': frame_w, 'frame_h': frame_h,
            'bbox': [frame_w / 2 - side / 2, frame_h - side, side, side]}
+    bbox = det['bbox']
+    det['keypoints'] = _hook_keypoints(
+        bbox[0] + bbox[2] * m5.HOOK_TIP_X_FRAC,
+        bbox[1] + bbox[3] * m5.HOOK_TIP_Y_FRAC)
     fsm._yolo_source = lambda: det
     fsm._state_m5_hook_align(dangkal)
     assert fsm.cmd.plant._in['vert'] != 0
@@ -142,21 +158,29 @@ def test_hook_align_vert_servo_menang_atas_asumsi_kedalaman():
     fsm2._transition(State.M5_HOOK_ALIGN)
     by = frame_h / 2 - side * m5.HOOK_TIP_Y_FRAC
     det2 = dict(det, bbox=[frame_w / 2 - side * m5.HOOK_TIP_X_FRAC, by, side, side])
+    det2['keypoints'] = _hook_keypoints(frame_w / 2, frame_h / 2)
     fsm2._yolo_source = lambda: det2
     fsm2._state_m5_hook_align(dangkal)
     assert fsm2.cmd.plant._in['vert'] < 0, "dangkal → _left_hold menyuruh menyelam"
 
 
-def test_hook_tip_dibidik_di_sisi_bawah_bbox():
-    """Batang pipa mendominasi bbox, jadi centroid jatuh di tengah batang —
-    gripper harus menuju lengkungan J di sisi BAWAH."""
+def test_hook_tip_memakai_keypoint_5_bukan_centroid_bbox():
+    """Point 5 adalah ujung J; bbox hanya dipakai untuk estimasi jarak."""
     fsm = _make_fsm()
-    det = {'bbox': [100.0, 200.0, 60.0, 400.0]}
+    det = {'bbox': [100.0, 20.0, 60.0, 400.0], 'frame_w': 640, 'frame_h': 480,
+           'keypoints': _hook_keypoints(155.0, 410.0)}
     tip_x, tip_y = fsm._hook_tip(det)
-    centroid_y = 200.0 + 400.0 / 2
+    centroid_y = 20.0 + 400.0 / 2
     assert tip_y > centroid_y, "ujung J di bawah centroid"
-    assert tip_y <= 200.0 + 400.0, "tetap di dalam bbox"
-    assert tip_x == 100.0 + 60.0 * m5.HOOK_TIP_X_FRAC
+    assert (tip_x, tip_y) == (155.0, 410.0)
+
+
+def test_hook_tip_menolak_skeleton_lemah_atau_tidak_lengkap():
+    fsm = _make_fsm()
+    base = {'bbox': [100.0, 20.0, 60.0, 400.0],
+            'frame_w': 640, 'frame_h': 480}
+    assert fsm._hook_tip(dict(base, keypoints=_hook_keypoints(155, 410, conf=0.1))) is None
+    assert fsm._hook_tip(dict(base, keypoints=_hook_keypoints(155, 410)[:-1])) is None
 
 
 def test_hook_align_target_luas_ikut_resolusi_frame():
@@ -177,7 +201,8 @@ def test_hook_align_konvergen_lalu_ke_qr_dock():
     bx = frame_w / 2 - side * m5.HOOK_TIP_X_FRAC
     by = frame_h / 2 - side * m5.HOOK_TIP_Y_FRAC
     det = {'status': 'ok', 'method': 'yolov8', 'confidence': 0.9,
-           'bbox': [bx, by, side, side], 'frame_w': frame_w, 'frame_h': frame_h}
+           'bbox': [bx, by, side, side], 'frame_w': frame_w, 'frame_h': frame_h,
+           'keypoints': _hook_keypoints(frame_w / 2, frame_h / 2)}
     fsm._yolo_source = lambda: det
     for _ in range(fsm.hook_servo.aligned_frames + 2):
         if fsm._state != State.M5_HOOK_ALIGN:
