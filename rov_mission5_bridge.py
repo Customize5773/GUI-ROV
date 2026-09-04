@@ -19,6 +19,8 @@ import time
 CUSTOM_MOTION_ENABLED = True
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
+# yaw_max (opsional, default 30) = batas % thruster saat memutar ke heading itu.
+#   Kecilkan kalau putarannya overshoot / terlalu kasar, besarkan kalau lambat.
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
 # heading = OFFSET derajat dari marked_heading (BUKAN kompas absolut), karena
 # pilot selalu bersandar di dinding yang di-MARK setelah misi 4. Tabel ini jadi
@@ -29,7 +31,7 @@ CUSTOM_CASES = [
     {"name": "CASE_PREP", "duration_ms": 3000,
      "motion": (15, 10, 0, 0.40, "open")},
     # Langkah 2: putar membelakangi arah MARK, tahan sampai heading mantap.
-    {"name": "CASE_TURN", "duration_ms": 6000,
+    {"name": "CASE_TURN", "duration_ms": 6000, "yaw_max": 30,
      "motion": (0, 0, 180, 0.40, "open")},
 ]
 
@@ -198,9 +200,10 @@ class Mission5Runner:
         return dict(next_config)
 
     @staticmethod
-    def _heading_control(target, current):
+    def _heading_control(target, current, yaw_max=30):
         error = (float(target) - float(current) + 180.0) % 360.0 - 180.0
-        return 0 if abs(error) < 2.0 else max(-30, min(30, round(error * 3)))
+        return (0 if abs(error) < 2.0
+                else max(-yaw_max, min(yaw_max, round(error * 3))))
 
     @staticmethod
     def _validate_custom_cases(cases):
@@ -225,6 +228,9 @@ class Mission5Runner:
                 raise ValueError(f"{case.get('name')}: depth harus 0..10 m atau None")
             if gripper not in ("open", "close", "hold"):
                 raise ValueError(f"{case.get('name')}: gripper tidak valid")
+            yaw_max = float(case.get("yaw_max", 30))
+            if not math.isfinite(yaw_max) or not 1 <= yaw_max <= 100:
+                raise ValueError(f"{case.get('name')}: yaw_max harus 1..100")
 
     def _start_custom(self):
         try:
@@ -272,7 +278,8 @@ class Mission5Runner:
                         abs_hdg = (marked_heading + float(self._custom_motion[2])) % 360.0
                         self._last_case_heading = abs_hdg
                         heading = self._telem.get().get("heading", 0.0)
-                        yaw = self._heading_control(abs_hdg, heading)
+                        yaw = self._heading_control(
+                            abs_hdg, heading, int(case.get("yaw_max", 30)))
                         self._cmd.send_motion(self._custom_motion, yaw_command=yaw)
                         self._custom_stop.wait(0.05)
                 self._custom_state = "STOPPED" if self._custom_stop.is_set() else "COMPLETE"

@@ -2136,13 +2136,6 @@ $("btnSetSurface").onclick = () => {
   sendCmd("set_surface", true);
 };
 
-/* MARK gantungan — ditekan di MISI 3, tepat setelah payload tersangkut di hook.
-   Backend merekam heading+depth saat itu dan mengonfirmasi lewat event, jadi log
-   di sini tidak optimis di sisi klien (pola sama btnSetSurface). */
-$("btnMarkHook").onclick = () => {
-  sendCmd("mark_hook", true);
-};
-
 /* Counter trial Misi 2/3 — Control HANYA indikator (readout diisi lewat
    applyMissionCounter). Tombol aksinya ada di Setup, bukan di sini, supaya
    tidak tersenggol pilot saat pegang stik. */

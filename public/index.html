@@ -390,15 +390,9 @@
                   id="btnSetSurface">
                   Set Surface Level &amp; Depth = 0
                 </button>
-                <!-- MARK gantungan: ditekan saat MISI 3, tepat setelah payload
-                     tersangkut di hook dinding. Merekam heading + depth saat itu
-                     supaya misi 5 autonomous tahu ARAH untuk kembali.
-                     Bukan koordinat x/y: wahana tak punya estimasi posisi
-                     horizontal (tak ada GPS/DVL/optical flow di bawah air).
-                     Tanpa MARK, M5_REDIVE hanya menyapu pelan sampai timeout. -->
-                <button class="btn-wide" id="btnMarkHook">MARK Gantungan (tekan di misi 3)</button>
-                <!-- Badge status MARK & depth-hold sekarang di HUD (overlay
-                     .stage), bukan di sini — lihat #markBadge/#depthHoldBadge. -->
+                <!-- Tombol MARK gantungan dihapus: mark_hook kini otomatis
+                     dari motion mode autonomous (rov_mission5_bridge.py).
+                     Badge status MARK tetap di HUD — lihat #markBadge. -->
               </div>
             </section>
 
