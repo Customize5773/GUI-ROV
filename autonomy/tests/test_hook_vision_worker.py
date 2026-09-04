@@ -98,3 +98,55 @@ def test_stop_menghentikan_thread_grabber():
     settled = cap.n
     time.sleep(0.1)
     assert cap.n == settled, "grabber masih membaca setelah stop()"
+
+
+class DeadCap:
+    """Simulasi soket MJPEG yang sudah mati: read() gagal terus-menerus,
+    persis seperti cv2.VideoCapture yang stream-nya putus di sisi server."""
+
+    def __init__(self):
+        self.reads = 0
+        self.released = False
+
+    def read(self):
+        self.reads += 1
+        return False, None
+
+    def release(self):
+        self.released = True
+
+
+def test_reconnect_otomatis_setelah_gagal_beruntun():
+    # Tanpa reconnect, worker akan macet di camera_error selamanya walau
+    # URL kameranya sendiri tetap hidup (gejala yang dilaporkan di lapangan).
+    dead = DeadCap()
+    fresh = FakeCap(delay=0.001)
+    opened = []
+
+    def opener():
+        opened.append(True)
+        return fresh
+
+    camera = LatestFrame(dead, opener=opener, reconnect_after=3,
+                          reconnect_backoff=0.01).start()
+    try:
+        assert _wait(lambda: len(opened) >= 1), \
+            "harus mencoba membuka ulang koneksi setelah gagal beruntun"
+        assert dead.released, "capture lama harus dilepas sebelum reconnect"
+        assert _wait(lambda: camera.take(0)[1] is not None), \
+            "frame harus mengalir lagi lewat capture baru setelah reconnect"
+        _seq, frame, _at, failed = camera.take(0)
+        assert not failed and frame is not None
+    finally:
+        camera.stop()
+
+
+def test_tanpa_opener_tidak_reconnect_failed_tetap_true():
+    camera = LatestFrame(FakeCap(fail_after=0)).start()
+    try:
+        assert _wait(lambda: camera.take(0)[3] is True)
+        time.sleep(0.2)
+        _seq, frame, _at, failed = camera.take(0)
+        assert frame is None and failed is True
+    finally:
+        camera.stop()

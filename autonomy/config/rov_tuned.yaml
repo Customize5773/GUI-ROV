@@ -80,16 +80,19 @@ m5_mechanics:
 left_flow:
   # Langkah 1-2 diatur CUSTOM_CASES di rov_mission5_bridge.py, bukan di sini.
   advance_max_t: 15.0    # pagar JARAK maju buta (detik x SEARCH_SPEED); skala per arena
-  align_t: 35.0       # approach jauh + align tip dipisah agar tetap lambat
+  align_t: 50.0       # approach jauh + align tip dipisah agar tetap lambat
   # Kolam uji berlatar putih dan hanya berisi hook. Gate bbox dibuat rendah
   # agar model yang belum sempurna tidak sering drop; keypoint kendali 2-5
   # tetap wajib lolos ambang 0.35 sebelum thruster boleh bergerak.
-  yolo_conf: 0.20
+  yolo_conf: 0.10
   yolo_area_frac: 0.08   # UKUR: preflight_check.py --hook-model di jarak gripper
   hook_tip_x_frac: 0.5   # titik bidik ujung "J" thd bbox: 0=kiri, 1=kanan
   hook_tip_y_frac: 0.9   # 0=atas, 1=bawah — ujung J ada di sisi BAWAH
-  hook_yaw_kp: 20.0      # point 5 kanan/kiri → arahkan hidung secara proporsional
-  hook_max_yaw: 8.0      # yaw approach dibatasi agar tidak menyentak
+  # Uji 5 Sep: pada kp 20 / cap 8 perintah yaw hanya ~4,5% dan ROV berputar
+  # 0,075 derajat/detik — butuh >90 s untuk 7 derajat, jauh melewati align_t.
+  # Dinaikkan agar konvergen dalam jendela waktu; tetap di bawah 30%.
+  hook_yaw_kp: 45.0      # point 5 kanan/kiri → arahkan hidung secara proporsional
+  hook_max_yaw: 20.0     # yaw approach dibatasi agar tidak menyentak
   qr_yaw_kp: 20.0
   qr_yaw_kp_deg: 1.0     # yaw dari kemiringan QR (PBVS); qr_yaw_kp hanya utk IBVS
   qr_yaw_tol_deg: 8.0
@@ -101,7 +104,7 @@ left_flow:
   # tetap dicapai perlahan oleh visual_slew 10%/detik.
   visual_max_surge: 30.0
   visual_max_sway: 12.0
-  visual_max_yaw: 10.0
+  visual_max_yaw: 25.0
   # Vertikal perlu melewati deadband/breakaway ketika ROV mulai dari dasar.
   # Cap sedikit lebih tinggi, tetapi ramp diperlambat agar tidak menyentak.
   visual_max_vert: 20.0
@@ -111,6 +114,12 @@ left_flow:
 depth:
   tolerance: 0.05
   target_surface: 0.05
+  # Uji 5 Sep: dgn HOOK_DEPTH 0.45 m ROV menahan 0.48-0.50 m dan hook selalu
+  # TERPOTONG di tepi ATAS frame (bbox y=0, offset_y ~ -300 px) sehingga
+  # confidence jatuh ke 0.13-0.30 dan align tak pernah konvergen. Offset 300 px
+  # pada FOV vertikal ~33 derajat ≈ 14 derajat; pada jarak ~1,2 m itu ≈ 0,29 m
+  # di ATAS kamera. Target dinaikkan agar hook masuk ke tengah bidang pandang.
+  hook_depth: 0.22
 
 # ── Validasi payload QR ───────────────────────────────────────────────────────
 payload:

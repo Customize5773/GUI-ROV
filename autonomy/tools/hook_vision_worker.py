@@ -30,8 +30,16 @@ class LatestFrame:
     paling baru dan usianya terbatas pada satu interval frame.
     """
 
-    def __init__(self, cap):
+    def __init__(self, cap, opener=None, reconnect_after=10, reconnect_backoff=0.5):
+        """`opener` (opsional): callable tanpa argumen yang mengembalikan
+        cv2.VideoCapture BARU. Tanpa opener, kelas berperilaku persis seperti
+        sebelumnya (dipakai test dengan capture palsu) — read() gagal hanya
+        dilaporkan lewat `failed`, tidak pernah mencoba menyambung ulang.
+        """
         self._cap = cap
+        self._opener = opener
+        self._reconnect_after = max(1, reconnect_after)
+        self._reconnect_backoff = reconnect_backoff
         self._lock = threading.Lock()
         self._frame = None
         self._captured_at = 0.0
@@ -44,16 +52,48 @@ class LatestFrame:
         self._thread.start()
         return self
 
+    def _reconnect(self):
+        """Stream MJPEG-over-HTTP putus TIDAK sembuh sendiri lewat read()
+        yang diulang-ulang pada VideoCapture yang sama — soket lamanya sudah
+        mati. Lepas capture lama, tunggu sebentar, lalu buka koneksi baru
+        lewat `opener`. `_frame`/`_captured_at` sengaja tidak disentuh di
+        sini: sampai ada bacaan sukses BARU, `take()` tetap melaporkan
+        `failed=True` sehingga age_ms tak pernah dibaca seolah segar dari
+        frame basi sebelum putus.
+        """
+        old_cap = self._cap
+        try:
+            old_cap.release()
+        except Exception:
+            pass
+        self._stop.wait(self._reconnect_backoff)
+        if self._stop.is_set():
+            return
+        try:
+            new_cap = self._opener()
+        except Exception:
+            new_cap = None
+        if new_cap is not None:
+            with self._lock:
+                self._cap = new_cap
+
     def _run(self):
+        consecutive_failures = 0
         while not self._stop.is_set():
             ok, frame = self._cap.read()
             if not ok:
                 with self._lock:
                     self._failed = True
+                consecutive_failures += 1
+                if self._opener is not None and consecutive_failures >= self._reconnect_after:
+                    self._reconnect()
+                    consecutive_failures = 0
+                    continue
                 # Jangan sibuk-menunggu saat stream putus; loop utama yang
                 # melaporkan camera_error ke GUI.
                 self._stop.wait(0.05)
                 continue
+            consecutive_failures = 0
             now = time.time()
             with self._lock:
                 self._frame = frame
@@ -72,6 +112,14 @@ class LatestFrame:
 
     def stop(self):
         self._stop.set()
+
+    def release(self):
+        with self._lock:
+            cap = self._cap
+        try:
+            cap.release()
+        except Exception:
+            pass
 
 
 def telemetry_reader(state, lock):
@@ -92,7 +140,10 @@ def main():
     ap.add_argument('--model', required=True)
     ap.add_argument('--map', required=True)
     ap.add_argument('--calib', required=True)
-    ap.add_argument('--conf', type=float, default=0.20)
+    # Kolam uji berlatar putih dan hanya berisi hook. Bbox detector boleh
+    # masuk sejak confidence rendah agar rangka 2..5 tetap dapat divalidasi
+    # oleh FSM; ini bukan izin bergerak tanpa keypoint yang kuat.
+    ap.add_argument('--conf', type=float, default=0.10)
     ap.add_argument('--imgsz', type=int, default=640)
     ap.add_argument('--fps', type=float, default=10.0)
     ap.add_argument('--no-tta', action='store_true', help='matikan test-time augmentation')
@@ -117,22 +168,26 @@ def main():
         emit({'status': 'worker_error', 'reason': str(exc), 'timestamp': time.time()})
         return 2
 
-    cap = cv2.VideoCapture(args.camera)
+    def _open_camera():
+        new_cap = cv2.VideoCapture(args.camera)
+        # Minta backend menyimpan satu frame saja. Tidak semua backend
+        # menurutinya (karena itu LatestFrame tetap perlu), tapi kalau
+        # dituruti, buffer-nya hilang di sumbernya.
+        try:
+            new_cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        except Exception:
+            pass
+        return new_cap
+
+    cap = _open_camera()
     if not cap.isOpened():
         emit({'status': 'camera_error', 'reason': f'tidak bisa membuka {args.camera}',
               'timestamp': time.time()})
         return 3
-    # Minta backend menyimpan satu frame saja. Tidak semua backend menurutinya
-    # (karena itu LatestFrame tetap perlu), tapi kalau dituruti, buffer-nya
-    # hilang di sumbernya.
-    try:
-        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-    except Exception:
-        pass
 
     state, lock = {}, threading.Lock()
     threading.Thread(target=telemetry_reader, args=(state, lock), daemon=True).start()
-    camera = LatestFrame(cap).start()
+    camera = LatestFrame(cap, opener=_open_camera).start()
     tracker = HookTracker()
     interval = 1.0 / max(0.1, args.fps)
     last_status = None
@@ -204,7 +259,7 @@ def main():
         return 0
     finally:
         camera.stop()
-        cap.release()
+        camera.release()
 
 
 if __name__ == '__main__':
