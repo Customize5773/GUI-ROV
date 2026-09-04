@@ -19,6 +19,43 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1        # node + python + 
 powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yolo  # + ultralytics/torch (~2,5 GB)
 ```
 
+Untuk laptop operator dengan NVIDIA (mis. RTX 2050), output terakhir wajib
+menunjukkan `CUDA=True` dan nama GPU. `start-gui.ps1` otomatis memakai Python
+dari `.venv`; jangan menjalankan worker YOLO sendiri.
+
+### Pindah ke laptop teman untuk uji kolam
+
+1. Salin/clone repo ini lengkap, termasuk `autonomy/vision/best_pose.pt` dan
+   `autonomy/vision/calibration/wall.npz`. Jangan salin `.venv` atau
+   `server/node_modules` dari laptop lain.
+2. Hubungkan Ethernet ke ROV dan set IPv4 laptop ke `192.168.2.1`, subnet mask
+   `255.255.255.0`; Raspberry Pi tetap `192.168.2.2`.
+3. Jalankan sekali:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\install.ps1 -Yolo
+   ```
+
+4. Pastikan hasilnya `CUDA=True; GPU=NVIDIA GeForce RTX 2050`. Jika tidak,
+   perbaiki driver NVIDIA/Torch CUDA dahulu; CPU fallback terlalu lambat untuk
+   trial vision bergerak.
+5. Nyalakan Pi/Pixhawk/kamera, lalu jalankan:
+
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\start-gui.ps1
+   ```
+
+6. Izinkan Node.js pada Windows Firewall untuk jaringan **Private**. Browser
+   terbuka di `http://localhost:8080`; terminal harus menampilkan `[RPI] ONLINE`
+   dan `[VISION] CUDA=True`.
+
+Pre-flight di halaman Control: link `ONLINE`, CAM WALL `LIVE`, voltage invalid
+ditampilkan `—` (bukan alarm merah), gain sesuai pilihan operator, dan status
+YOLO berubah dari `no_detection` ketika hook masuk frame. Mulai dari MANUAL +
+DISARM, cek STOP/failsafe, lalu ARM/ALT_HOLD hanya setelah ROV terendam dan area
+thruster steril. Global X/Y belum dianggap valid bila status lokalisasi bukan
+`ok` atau hook map/MARK belum tersedia.
+
 **Linux/manual:**
 
 ```bash

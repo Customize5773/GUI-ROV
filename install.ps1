@@ -56,5 +56,15 @@ sys.exit(0 if ok else 1)
 "@
 if ($LASTEXITCODE -ne 0) { Write-Host "`nAda impor yang gagal, lihat pesan di atas." -ForegroundColor Yellow; exit 1 }
 
+if ($Yolo) {
+    Write-Host "`n[VISION] Cek YOLO + GPU" -ForegroundColor Cyan
+    $GpuInfo = & $Py -c "import torch, ultralytics; print('torch=' + torch.__version__ + '; CUDA=' + str(torch.cuda.is_available()) + '; GPU=' + (torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'))" 2>&1
+    if ($LASTEXITCODE -ne 0) { Write-Host "[X] YOLO gagal diimpor: $GpuInfo" -ForegroundColor Red; exit 1 }
+    Write-Host $GpuInfo -ForegroundColor $(if ("$GpuInfo" -match 'CUDA=True') { "Green" } else { "Yellow" })
+    if ("$GpuInfo" -notmatch 'CUDA=True') {
+        Write-Warning "Torch tidak melihat NVIDIA GPU. Jangan lanjut uji vision kolam sebelum driver NVIDIA/Torch CUDA benar."
+    }
+}
+
 Write-Host "`nSelesai. Jalankan GUI:  .\start-gui.ps1" -ForegroundColor Green
 Write-Host "Script Python autonomy:  .venv\Scripts\python.exe autonomy\..." -ForegroundColor DarkGray
