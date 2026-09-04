@@ -1787,8 +1787,18 @@ class Mission5FSM:
             return
         det = self._fresh_external_yolo(raw)
         if det is None:
-            self.cmd.stop_all()  # data hilang/basi: jangan terus maju buta
+            # Horizontal WAJIB nol — tanpa lock, maju/berputar = gerak buta.
+            # Tapi vertikal TIDAK boleh ikut mati: stop_all() mematikan juga
+            # depth-hold, sehingga ROV mengendap di kedalaman saat lock hilang.
+            # Bila di kedalaman itu hook berada di luar tepi ATAS frame, YOLO
+            # tak akan pernah melihatnya lagi dan state ini membeku sampai
+            # timeout — terukur 85 detik diam pada uji 04:38 (depth mandek
+            # 0,45-0,47 m padahal hook_depth 0,30 m). Menahan kedalaman hook
+            # memakai pola yang sama dengan M5_YOLO_SEARCH membuat pandangan
+            # pulih sendiri tanpa menambah satu pun gerak horizontal buta.
             self._left_visual_reset()
+            self._left_visual_send(surge=0, sway=0, yaw=0,
+                                   vert=self._left_hold(telem), gripper=0)
             return
 
         self._align_target(det)
@@ -1797,8 +1807,11 @@ class Mission5FSM:
         if tip is None:
             # Jangan kembali ke centroid bbox: itu dapat mengarahkan gripper ke
             # batang hook saat point 5 hilang atau confidence-nya lemah.
-            self.cmd.stop_all()
+            # Sama seperti cabang det-None di atas: horizontal nol, kedalaman
+            # tetap ditahan agar tip bisa kembali masuk bidang pandang.
             self._left_visual_reset()
+            self._left_visual_send(surge=0, sway=0, yaw=0,
+                                   vert=self._left_hold(telem), gripper=0)
             return
         # det disalin dangkal dgn center = point 5, supaya _hook_servo_step yang
         # sudah ada (deadband/slew/D-filter/approach gate/tally) dipakai apa adanya.

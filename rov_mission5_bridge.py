@@ -27,10 +27,16 @@ CUSTOM_CASES = [
     {"name": "CASE_M1", "duration_ms": 3000,
      "motion": (60, 80, 0, 0.40, "close")},
     # Langkah 2: putar 180 derajat dari arah saat AUTONOMOUS diklik.
+    # PENTING: kolom depth adalah TARGET ABSOLUT (lihat send_motion) — 0.0
+    # berarti "naik ke PERMUKAAN", bukan "pertahankan kedalaman". Nilai 0.0 di
+    # sini dulu tak pernah terasa karena jalur CASE tidak pernah ARM sehingga
+    # ROV tak bergerak sama sekali; setelah ARM diperbaiki, ROV terukur melesat
+    # 0,45 -> 0,10 m di tengah putaran (uji 04:58). Tahan 0,40 m selama memutar
+    # dan mendekat, lalu FSM langkah 3-8 memakai hook_depth-nya sendiri.
     {"name": "CASE_M2", "duration_ms": 5000,
-     "motion": (0, 0, 180, 0.0, "close")},
+     "motion": (0, 0, 180, 0.40, "close")},
     {"name": "CASE_M2", "duration_ms": 5000,
-     "motion": (20, 0, 180, 0.0, "hold")},
+     "motion": (20, 0, 180, 0.40, "hold")},
     # {"name": "CASE_M4", "duration_ms": 9000,
     #  "motion": (-5, -100, 180, 0.40, "hold")},
 ]
@@ -264,6 +270,15 @@ class Mission5Runner:
             self.last_error = "ALT_HOLD gagal"
             self._log("[CUSTOM] ABORT — ALT_HOLD gagal")
             return False
+        # ARM WAJIB di sini. Tanpa ini seluruh langkah 1-2 berjalan disarmed:
+        # send_motion() tetap mengirim axis, tapi ArduSub menahan semua thruster
+        # di 1500 sehingga ROV DIAM total — terukur pada uji 04:51 (surge 60%,
+        # sway 80%, yaw 45% selama 13 detik, heading hanya bergerak 0,0 -> 0,2
+        # derajat dan PWM tak pernah lepas dari netral). FSM langkah 3-8 punya
+        # arm() sendiri; jalur CASE ini sebelumnya tak pernah memilikinya.
+        # Mission5CommandAdapter.arm() tak mengembalikan status (void), jadi
+        # keberhasilannya diverifikasi lewat telemetry `armed`, bukan nilai balik.
+        self._cmd.arm(True)
         runlog = self._new_runlog("CUSTOM")
         self._custom_stop.clear()
         self._custom_state = "STARTING"
@@ -299,6 +314,12 @@ class Mission5Runner:
                 self._log(f"[CUSTOM] ERROR: {exc}")
             finally:
                 self._cmd.stop_all()
+                # Sukses -> JANGAN disarm: FSM langkah 3-8 mengambil alih dalam
+                # hitungan detik dan akan arm sendiri; disarm di sini hanya
+                # menciptakan jeda mati di tengah serah terima. Batal/error ->
+                # wajib disarm, jangan tinggalkan wahana hidup tanpa pengendali.
+                if self._custom_state != "COMPLETE" or self._custom_stop.is_set():
+                    self._cmd.arm(False)
                 if runlog:
                     alasan = ("dibatalkan" if self._custom_stop.is_set() else
                               "error" if self._custom_state == "ERROR" else "selesai")
