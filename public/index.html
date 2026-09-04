@@ -433,6 +433,13 @@
                 <span class="panel__title">LIVE CAMERA</span>
                 <div class="pilot__head-actions">
                   <span class="panel__tag" id="camTag">RTSP / MJPEG</span>
+                  <!-- Popout = jendela telanjang khusus monitor tambahan (cam.html).
+                       Fullscreen yang di-drag ke monitor kedua membuat SATU jendela
+                       melayani dua display + menyalakan loop PiP/WebGL; itu yang
+                       bikin stream di laptop patah-patah. -->
+                  <button class="chip chip--ghost" id="btnCamPopout" title="Buka kamera di jendela terpisah (untuk monitor tambahan)">
+                    <span class="chip__ico">⧉</span><span>Popout</span>
+                  </button>
                   <button class="chip chip--ghost" id="btnCamFull" title="Toggle fullscreen kamera">
                     <span class="chip__ico">⛶</span><span id="camFullLabel">Full Screen</span>
                   </button>

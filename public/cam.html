@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Live Camera — HYDROSHIP</title>
+  <!-- Jendela popout untuk monitor tambahan: HANYA stream kamera.
+       Sengaja tanpa WebSocket/Three.js/canvas/QR — semua beban itulah yang
+       membuat stream di layar laptop patah-patah saat display di-extend.
+       Jendela terpisah juga berarti compositor terpisah per display. -->
+  <style>
+    html, body { margin: 0; height: 100%; background: #000; overflow: hidden; }
+    img { width: 100%; height: 100%; object-fit: contain; display: block; }
+    #msg {
+      position: fixed; inset: 0; display: none; place-content: center;
+      color: #8aa; font: 14px system-ui, sans-serif; text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <img id="cam" alt="Umpan kamera ROV" />
+  <div id="msg"></div>
+
+  <script type="module">
+    import { CONFIG } from "./js/config.js";
+    import { camProxy } from "./js/core.js";
+
+    const idx = Number(new URLSearchParams(location.search).get("cam")) || 0;
+    const cam = (CONFIG.CAMERAS || [])[idx];
+    const img = document.getElementById("cam");
+    const msg = document.getElementById("msg");
+
+    function fail(text) { msg.textContent = text; msg.style.display = "grid"; }
+
+    if (!cam || !cam.url) {
+      fail(`Kamera index ${idx} tidak ada di CONFIG.CAMERAS`);
+    } else {
+      document.title = `${cam.id} · ${cam.role} — HYDROSHIP`;
+      // Stream kamera bisa putus (Pi restart, kabel). Tanpa retry, monitor
+      // tinggal hitam sampai ada yang sadar dan menekan refresh manual.
+      let retry = null;
+      const attach = () => {
+        clearTimeout(retry);
+        msg.style.display = "none";
+        img.src = camProxy(cam.url + (cam.url.includes("?") ? "&" : "?") + "_t=" + Date.now());
+      };
+      img.onerror = () => {
+        fail(`${cam.id} terputus — menyambung ulang…`);
+        retry = setTimeout(attach, 2000);
+      };
+      attach();
+    }
+  </script>
+</body>
+</html>

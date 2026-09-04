@@ -125,6 +125,10 @@ function showPage(pageName) {
   // Store current page
   sessionStorage.setItem("current-page", pageName);
 
+  // Pasang/lepas feed kamera Control mengikuti halaman aktif — satu titik, jadi
+  // semua rute masuk/keluar Control ikut tertangani.
+  applyControlCamera();
+
   // Hentikan render-loop halaman sebelumnya, init lazy + tampilkan yang baru
   if (activeModule && activeModule.onHide) { try { activeModule.onHide(); } catch (e) {} }
   activeModule = null;
@@ -824,6 +828,7 @@ function renderFocusReadout(score) {
 
 async function scanControlQR() {
   if (currentPageName !== "control") return;
+  if (document.hidden) return;   // jendela GUI di belakang popout kamera
   if (!els.camImg || !els.camImg.naturalWidth) return;
   const now = performance.now();
   if (now - _lastQrScan < 200) return;
@@ -1095,6 +1100,13 @@ function syncControlCameraButton() {
 // awal dan setiap URL diubah (Setup/Camera) via event 'hydroship:camera-url'.
 function applyControlCamera() {
   const sources = getControlCameraSources();
+  // <img> yang masih punya src tetap mendekode MJPEG walau halamannya
+  // tersembunyi — beban dekode sia-sia yang berebut CPU dengan halaman lain
+  // (pola sama camera.js::_applyStreamSrc). Lepas saat Control tak aktif.
+  if (currentPageName !== "control") {
+    els.camImg.removeAttribute("src");
+    return;
+  }
   if (!sources.length) {
     els.camImg.removeAttribute("src");
     els.camNoSignal.style.display = "flex";
@@ -1129,6 +1141,16 @@ function cycleControlCamera(dir) {
 
 if (els.btnCamSwitch) {
   els.btnCamSwitch.onclick = () => cycleControlCamera(1);
+}
+
+/* Popout kamera ke jendela sendiri — untuk monitor tambahan. Proxy /cam berbagi
+   satu koneksi upstream, jadi penonton tambahan tidak menambah beban kamera. */
+const btnCamPopout = document.getElementById("btnCamPopout");
+if (btnCamPopout) {
+  btnCamPopout.onclick = () => {
+    window.open(`cam.html?cam=${controlCamIndex}`, `hydroship-cam-${controlCamIndex}`,
+                "width=1280,height=720");
+  };
 }
 
 applyControlCamera();
