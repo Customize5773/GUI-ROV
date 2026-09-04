@@ -224,6 +224,9 @@ function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
       const data = JSON.parse(line);
       latestHookVision = data;
       broadcast({ type: "hook_vision", data });
+      if (data.status === "worker_error" || data.status === "camera_error") {
+        console.warn(`[VISION] ${data.status}: ${data.reason || "alasan tidak tersedia"}`);
+      }
       // YOLO berjalan di laptop, sedangkan FSM berjalan di Pi. Teruskan hasil
       // observasi saja; Pi tetap melakukan validasi umur/confidence sebelum
       // hasil ini boleh memengaruhi command ROV.

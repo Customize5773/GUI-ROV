@@ -6,6 +6,12 @@ $BrowserUrl = "http://localhost:8080"
 $EnvFile = Join-Path $RepoRoot ".env"
 $VenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
 
+function Resolve-RepoFile($value, $default) {
+    $path = if ($value) { $value } else { $default }
+    if ([IO.Path]::IsPathRooted($path)) { return $path }
+    return Join-Path $RepoRoot $path
+}
+
 Write-Host "[GUI-ROV] Mulai..." -ForegroundColor Cyan
 
 # Samakan perilaku Windows dengan start-gui.sh: muat .env tanpa menimpa
@@ -31,14 +37,16 @@ if (-not $env:HOOK_VISION_PYTHON) {
     $env:HOOK_VISION_PYTHON = $VenvPython
 }
 
-foreach ($required in @(
-    (Join-Path $RepoRoot "autonomy\vision\best_pose.pt"),
-    (Join-Path $RepoRoot "autonomy\vision\calibration\wall.npz")
-)) {
+$ModelPath = Resolve-RepoFile $env:HOOK_VISION_MODEL "autonomy\vision\best_pose.pt"
+$CalibPath = Resolve-RepoFile $env:HOOK_VISION_CALIB "autonomy\vision\calibration\wall.npz"
+$MapPath = Resolve-RepoFile $env:HOOK_VISION_MAP "autonomy\config\hook_map.pool.yaml"
+foreach ($required in @($ModelPath, $CalibPath, $MapPath)) {
     if (-not (Test-Path $required)) { throw "File vision tidak ditemukan: $required" }
 }
 
-$VisionInfo = & $env:HOOK_VISION_PYTHON -c "import cv2, torch, ultralytics; print('CUDA=' + str(torch.cuda.is_available()) + '; GPU=' + (torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'))" 2>&1
+$AutonomyPath = Join-Path $RepoRoot "autonomy"
+$env:PYTHONPATH = @($AutonomyPath, $env:PYTHONPATH) -ne $null -join ";"
+$VisionInfo = & $env:HOOK_VISION_PYTHON -c "import sys, cv2, torch, ultralytics; from vision.hook_localization import load_calibration, load_hook_map; from vision.yolo_hook import YOLOHookDetector; YOLOHookDetector(sys.argv[1]); load_calibration(sys.argv[2]); load_hook_map(sys.argv[3]); print('READY; CUDA=' + str(torch.cuda.is_available()) + '; GPU=' + (torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'))" $ModelPath $CalibPath $MapPath 2>&1
 if ($LASTEXITCODE -ne 0) {
     throw "Dependency vision belum siap: $VisionInfo`nJalankan .\install.ps1 -Yolo"
 }
