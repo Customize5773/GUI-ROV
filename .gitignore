@@ -138,3 +138,13 @@ server/OPZ.log
 autonomy/vision/wall_cnn.npz
 hook 1.zip
 autonomy/HOOKv1.2.v6-v1.yolov8.zip
+server/out_8101.tmp.log
+server/out_8102.tmp.log
+.codex_hook_frame.jpg
+.codex-mission5-stage3.conf
+.codex_last_run.jsonl
+logs
+.codex_autonomous_live_test.js
+.codex_telemetry_snapshot.js
+.codex_vertical_step_test.js
+.codex_emergency_disarm.js

@@ -223,15 +223,15 @@ LEFT_TIMEOUT_YOLO     = 30.0   # jam ABORT — bukan jam maju, lihat LEFT_ADVANC
 LEFT_TIMEOUT_ALIGN    = 20.0   # detik max membidik ujung J sebelum degradasi
 # PAGAR JARAK maju buta di M5_YOLO_SEARCH. ROV tak punya sensor jarak depan, jadi
 # satu-satunya rem sebelum menabrak dinding adalah detik × kecepatan (pola sama
-# SEARCH_SPAN_MAX_T). Memakai SEARCH_SPEED yang SUDAH dikalibrasi (~0,222 m/s @ 20%,
-# trial 25 Agu) alih-alih SURGE_SPEED 35% yang tak pernah diukur:
-#   15 s × 0,222 ≈ 3,3 m — muat di arena Trial 5×5 m dgn sisa ruang pengereman.
+# SEARCH_SPAN_MAX_T). Perintah SEARCH_SPEED masih menjadi target, tetapi limiter
+# visual di bawah membatasi output aktual ke LEFT_VISUAL_MAX_SURGE. Jarak aktual
+# wajib diukur lagi di kolam setelah perubahan cap/slew ini.
 # Habis budget → berhenti maju tapi TETAP melihat sampai LEFT_TIMEOUT_YOLO.
 # ⚠ SKALAKAN per arena (pool_kki_running.yaml 10×10 m sudah di-override).
 LEFT_ADVANCE_MAX_T    = 15.0
 LEFT_YOLO_SOURCE_GRACE = 3.0
 LEFT_YOLO_CONF        = 0.35
-HOOK_KEYPOINT_CONF    = 0.35   # minimum confidence tiap titik pose 0..5
+HOOK_KEYPOINT_CONF    = 0.35   # minimum confidence titik kontrol kritis 2..5
 LEFT_YOLO_AREA_FRAC   = 0.08   # bbox/frame saat jarak kerja; ukur lewat
                                # preflight_check.py --hook-model di jarak gripper.
                                # Dipakai sbg target_area hook_servo, DIKALIKAN luas
@@ -244,6 +244,8 @@ LEFT_YOLO_LOCK_FRAMES = 5
 # payload. 0.9 masih tebakan awal.
 HOOK_TIP_X_FRAC       = 0.5    # 0=kiri bbox, 1=kanan bbox
 HOOK_TIP_Y_FRAC       = 0.9    # 0=atas bbox, 1=bawah bbox
+LEFT_HOOK_YAW_KP      = 20.0   # % yaw per error-X ternormalisasi point 5
+LEFT_HOOK_MAX_YAW     = 8.0    # approach hook lebih pelan daripada QR final
 LEFT_QR_YAW_KP        = 20.0   # dipakai HANYA bila pose QR tak ada (IBVS, tanpa kalibrasi)
 # Sumber error yaw saat pose tersedia: KEMIRINGAN bidang QR (solvePnP yaw_deg),
 # bukan lenceng lateral. Dulu yaw dan sway sama-sama digerakkan oleh ex sehingga
@@ -255,6 +257,14 @@ LEFT_QR_YAW_KP_DEG    = 1.0    # % yaw per derajat kemiringan (20° → cap 20%)
 LEFT_QR_YAW_TOL_DEG   = 8.0    # derajat — seordo SEARCH_YAW_TOL
 LEFT_QR_MAX_YAW       = 20.0
 LEFT_GRIP_T           = 2.0
+# Limiter khusus alur visual langkah 3-5. Servo umum tetap punya tuning lama;
+# mendekati hook/payload dibatasi lebih rendah agar ROV tidak meluncur saat
+# deteksi pertama muncul atau ketika error QR berubah antar-frame.
+LEFT_VISUAL_MAX_SURGE = 12.0    # % maju/mundur
+LEFT_VISUAL_MAX_SWAY  = 12.0    # % geser lateral
+LEFT_VISUAL_MAX_YAW   = 10.0    # % putar
+LEFT_VISUAL_MAX_VERT  = 10.0    # % koreksi tinggi
+LEFT_VISUAL_SLEW      = 20.0    # %/detik; 0 -> 10% memerlukan sekitar 0,5 s
 
 
 # ── State machine states ───────────────────────────────────────────────────────
@@ -492,6 +502,9 @@ class Mission5FSM:
         self._left_depth = None   # target depth alur kiri (marked_depth / HOOK_DEPTH)
         self._left_search_hits = 0
         self._align_target_set = False  # target_area hook_servo sudah diskalakan ke frame?
+        self._left_visual_t = None
+        self._left_visual_cmd = {"surge": 0.0, "sway": 0.0,
+                                 "yaw": 0.0, "vert": 0.0}
 
         # Telemetri live untuk GUI (dibaca rov_link.py, diteruskan sbg field "mission5").
         self.telemetry_out = {
@@ -1600,13 +1613,46 @@ class Mission5FSM:
         yaw, _sampai = self._search_yaw_to(telem, self._heading_hold)
         return yaw
 
+    def _left_visual_reset(self):
+        self._left_visual_t = None
+        self._left_visual_cmd.update(surge=0.0, sway=0.0, yaw=0.0, vert=0.0)
+
+    def _left_visual_send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
+        """Kirim axis visual melalui cap + slew agar docking lambat dan mulus."""
+        now = time.monotonic()
+        if self._left_visual_t is None:
+            dt = 0.1
+        else:
+            dt = max(0.02, min(0.25, now - self._left_visual_t))
+        self._left_visual_t = now
+        caps = {"surge": LEFT_VISUAL_MAX_SURGE, "sway": LEFT_VISUAL_MAX_SWAY,
+                "yaw": LEFT_VISUAL_MAX_YAW, "vert": LEFT_VISUAL_MAX_VERT}
+        requested = {"surge": surge, "sway": sway, "yaw": yaw, "vert": vert}
+        step = LEFT_VISUAL_SLEW * dt
+        output = {}
+        for axis, cap in caps.items():
+            target = max(-cap, min(cap, float(requested[axis] or 0.0)))
+            previous = self._left_visual_cmd[axis]
+            value = max(previous - step, min(previous + step, target))
+            output[axis] = 0.0 if abs(value) < 0.05 else value
+        self._left_visual_cmd.update(output)
+        self.cmd.send(**output, gripper=gripper)
+
     @staticmethod
     def _hook_skeleton(det):
-        """Validasi pose hook: 0..2 batang, 3..4 kepala, dan 5 tip J."""
+        """Validasi bagian hook yang diperlukan untuk membidik tip J.
+
+        Model tetap mengirim 0..2 untuk batang, 3..4 untuk kepala, dan 5 untuk
+        tip. Pada hook kolam, batang dapat berlanjut keluar frame sehingga 0/1
+        sah menjadi low-confidence/clipped walaupun kepala dan tip terlihat
+        jelas. Kontrol karena itu mewajibkan 2..5; 0/1 tetap diteruskan untuk
+        overlay/diagnostik tetapi tidak boleh memblokir point 5 yang valid.
+        """
         raw = det.get('keypoints')
         if not isinstance(raw, (list, tuple)):
             return None
         points = {}
+        confidences = {}
         try:
             for item in raw:
                 if not isinstance(item, dict):
@@ -1615,25 +1661,33 @@ class Mission5FSM:
                 if index not in range(6) or index in points:
                     return None
                 confidence = item.get('confidence')
-                if confidence is None or float(confidence) < HOOK_KEYPOINT_CONF:
+                if confidence is None or not math.isfinite(float(confidence)):
                     return None
                 x, y = float(item['x']), float(item['y'])
                 frame_w, frame_h = float(det['frame_w']), float(det['frame_h'])
-                edge_margin = max(2.0, 0.005 * min(frame_w, frame_h))
                 if (not math.isfinite(x) or not math.isfinite(y)
-                        or x < edge_margin or y < edge_margin
-                        or x > frame_w - edge_margin or y > frame_h - edge_margin):
+                        or x < 0 or y < 0 or x > frame_w or y > frame_h):
                     return None
                 points[index] = (x, y)
+                confidences[index] = float(confidence)
         except (KeyError, TypeError, ValueError, OverflowError):
             return None
         if set(points) != set(range(6)):
             return None
 
-        # Tolak skeleton kolaps. Ketiga span membuat kelompok batang (0-2),
-        # kepala (3-4), dan sambungan ke tip J (4-5) ikut memvalidasi point 5.
+        required = (2, 3, 4, 5)
+        edge_margin = max(2.0, 0.005 * min(frame_w, frame_h))
+        for index in required:
+            x, y = points[index]
+            if (confidences[index] < HOOK_KEYPOINT_CONF
+                    or x < edge_margin or y < edge_margin
+                    or x > frame_w - edge_margin or y > frame_h - edge_margin):
+                return None
+
+        # Tolak skeleton kolaps. Span 2→3 memvalidasi pangkal kepala, 3→4
+        # lengkungan, dan 4→5 sambungan ke tip yang benar-benar dibidik.
         span_min = max(2.0, 0.003 * max(float(det['frame_w']), float(det['frame_h'])))
-        spans = (math.dist(points[0], points[2]),
+        spans = (math.dist(points[2], points[3]),
                  math.dist(points[3], points[4]),
                  math.dist(points[4], points[5]))
         return points if all(span >= span_min for span in spans) else None
@@ -1656,22 +1710,30 @@ class Mission5FSM:
             return
         if raw is None:
             self.cmd.stop_all()
+            self._left_visual_reset()
             if self._elapsed() > LEFT_YOLO_SOURCE_GRACE:
                 self._left_abort("stream YOLO tidak tersedia atau basi")
             return
         det = self._fresh_external_yolo(raw)
-        if det is not None:
+        if det is not None and self._hook_tip(det) is not None:
             # Voting spt M5_HOOK_ALIGN di bawah — SATU frame tak cukup. Model ini
             # sesekali menyatakan "Hook" pada frame tanpa hook (uji 40 frame CAM
             # WALL: 1 lolos gate di conf 0,41), dan latch palsu menghentikan ROV
             # jauh dari dinding. Berhenti maju selagi mengonfirmasi: kalau memang
             # hook, ~1 detik tak hilang; kalau hantu, ROV tak terlanjur berhenti.
             self._left_search_hits += 1
-            self.cmd.send(vert=self._left_hold(telem),
-                          yaw=self._left_yaw_hold(telem), gripper=0)
+            self._left_visual_send(vert=self._left_hold(telem),
+                                   yaw=self._left_yaw_hold(telem), gripper=0)
             if self._left_search_hits >= LEFT_YOLO_LOCK_FRAMES:
                 self.cmd.stop_all()
                 self._transition(State.M5_HOOK_ALIGN)
+            return
+        if det is not None:
+            # Bbox yakin tetapi titik kontrol 2..5 belum valid: jangan terus
+            # mendekat hanya karena classifier melihat hook. Tunggu pose pulih.
+            self._left_search_hits = 0
+            self.cmd.stop_all()
+            self._left_visual_reset()
             return
         self._left_search_hits = max(0, self._left_search_hits - 1)
         # Budget jarak habis: berhenti maju (tanpa sensor jarak, terus merangsek =
@@ -1681,11 +1743,14 @@ class Mission5FSM:
         # SENGAJA menang atas heading hold: mencari > menahan.
         if self._elapsed() > LEFT_ADVANCE_MAX_T:
             fase = int((self._elapsed() - LEFT_ADVANCE_MAX_T) / SCAN_SWEEP_T)
-            self.cmd.send(yaw=YAW_SPEED if fase % 2 == 0 else -YAW_SPEED,
-                          vert=self._left_hold(telem), gripper=0)
+            # Budget maju adalah pagar keras: jangan biarkan ramp-down masih
+            # membawa ROV mendekati dinding setelah waktunya habis.
+            self._left_visual_cmd["surge"] = 0.0
+            self._left_visual_send(yaw=YAW_SPEED if fase % 2 == 0 else -YAW_SPEED,
+                                   vert=self._left_hold(telem), gripper=0)
             return
-        self.cmd.send(surge=SEARCH_SPEED, vert=self._left_hold(telem),
-                      yaw=self._left_yaw_hold(telem), gripper=0)
+        self._left_visual_send(surge=SEARCH_SPEED, vert=self._left_hold(telem),
+                               yaw=self._left_yaw_hold(telem), gripper=0)
 
     def _align_target(self, det):
         """Skalakan target jarak hook_servo ke resolusi frame YANG SEBENARNYA.
@@ -1706,9 +1771,11 @@ class Mission5FSM:
     def _state_m5_hook_align(self, telem):
         """4. Bidik kepala ujung hook "J" — tempat payload digantungkan.
 
-        Servo memakai TITIK UJUNG J, bukan centroid bbox, dan keluarannya dipakai
-        utuh: hook_servo sudah menggerbang surge sampai terpusat ("center dulu,
-        baru maju") lalu menyatakan out.aligned setelah 3 sumbu stabil."""
+        Servo memakai TITIK UJUNG J, bukan centroid bbox. Skeleton 2→3 (batang),
+        3→4 (kepala), dan 4→5 (ujung J) wajib valid. Saat mendekat, error-X
+        point 5 mengarahkan yaw; QR kemudian mengoreksi sudut docking akhir.
+        hook_servo menggerbang surge sampai terpusat ("center dulu, baru maju")
+        lalu menyatakan out.aligned setelah 3 sumbu stabil."""
         if self._elapsed() > LEFT_TIMEOUT_ALIGN:
             self._left_abort("ujung hook tidak tersejajarkan")
             return
@@ -1721,6 +1788,7 @@ class Mission5FSM:
         det = self._fresh_external_yolo(raw)
         if det is None:
             self.cmd.stop_all()  # data hilang/basi: jangan terus maju buta
+            self._left_visual_reset()
             return
 
         self._align_target(det)
@@ -1730,17 +1798,32 @@ class Mission5FSM:
             # Jangan kembali ke centroid bbox: itu dapat mengarahkan gripper ke
             # batang hook saat point 5 hilang atau confidence-nya lemah.
             self.cmd.stop_all()
+            self._left_visual_reset()
             return
         # det disalin dangkal dgn center = point 5, supaya _hook_servo_step yang
         # sudah ada (deadband/slew/D-filter/approach gate/tally) dipakai apa adanya.
-        aim = dict(det, center=tip, area=float(bw * bh), pose=None)
+        area = float(bw * bh)
+        area_frac = area / max(1.0, float(det['frame_w']) * float(det['frame_h']))
+        # Tahap 3: saat hook masih jauh, jangan biarkan error Y point 5 yang
+        # besar mengecilkan surge sampai ROV diam. Depth hook berasal dari
+        # bridge/ALT_HOLD, bukan piksel Y. YOLO mengurus arah horizontal:
+        # far = yaw hidung ke point 5, near = tambah sway untuk centering akhir.
+        far_approach = area_frac < LEFT_YOLO_AREA_FRAC * 0.75
+        center = (tip[0], det['frame_h'] / 2.0)
+        aim = dict(det, center=center, area=area, pose=None)
         out, _mode = self._hook_servo_step(aim)
+        hook_yaw = max(-LEFT_HOOK_MAX_YAW,
+                       min(LEFT_HOOK_MAX_YAW, LEFT_HOOK_YAW_KP * out.ex))
+        if far_approach:
+            self._left_visual_send(surge=out.surge, sway=0, yaw=hook_yaw,
+                                   vert=self._left_hold(telem), gripper=0)
+            return
         if out.aligned:
             self.cmd.stop_all()
             self._transition(State.M5_QR_DOCK)
             return
-        self.cmd.send(surge=out.surge, sway=out.sway,
-                      vert=out.vert or self._left_hold(telem), gripper=0)
+        self._left_visual_send(surge=out.surge, sway=out.sway,
+                               yaw=hook_yaw, vert=self._left_hold(telem), gripper=0)
 
     def _state_m5_qr_dock(self, telem):
         """5. Pusatkan QR memakai yaw+sway; jarak/depth dipertahankan."""
@@ -1754,11 +1837,12 @@ class Mission5FSM:
             since = time.time() - self._m5_last_det_t
             if since < M5_LOCK_GRACE_T:
                 self.cmd.stop_all()
+                self._left_visual_reset()
             elif self._bench_qr_dock:
                 self._left_abort("QR hilang/basi")
             else:
-                self.cmd.send(yaw=YAW_SPEED * self._m5_search_dir,
-                              vert=self._left_hold(telem), gripper=0)
+                self._left_visual_send(yaw=YAW_SPEED * self._m5_search_dir,
+                                       vert=self._left_hold(telem), gripper=0)
             return
 
         self._note_detection(det)
@@ -1785,7 +1869,13 @@ class Mission5FSM:
         # Bench QR memberi seluruh 4-DOF ke visual servo. Di jalur lomba,
         # depth-hold lama tetap menjadi fallback saat error vertikal tepat nol.
         vert = out.vert if self._bench_qr_dock else out.vert or self._left_hold(telem)
-        self.cmd.send(surge=surge, sway=sway, yaw=yaw, vert=vert, gripper=0)
+        if self._bench_qr_dock:
+            # Bench punya profil otoritas tersendiri dan sudah dihaluskan oleh
+            # VisualServo. Limiter rendah ini hanya untuk alur misi di air.
+            self.cmd.send(surge=surge, sway=sway, yaw=yaw, vert=vert, gripper=0)
+        else:
+            self._left_visual_send(surge=surge, sway=sway, yaw=yaw,
+                                   vert=vert, gripper=0)
         if out.aligned and square:
             self.cmd.stop_all()
             self._transition(State.M5_GRIP)
@@ -1858,10 +1948,13 @@ class Mission5FSM:
             self._unhook_pull_t = None
         if new_state == State.M5_YOLO_SEARCH:
             self._left_search_hits = 0
+            self._left_visual_reset()
         elif new_state == State.M5_HOOK_ALIGN:
+            self._left_visual_reset()
             self.hook_servo.reset()
             self.hook_pose_servo.reset()
         elif new_state == State.M5_QR_DOCK:
+            self._left_visual_reset()
             self.servo.reset()
             self.pose_servo.reset()
         # Ladder pencarian selalu mulai dari nol tiap kali masuk M5_SEARCH

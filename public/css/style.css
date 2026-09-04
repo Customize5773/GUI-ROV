@@ -1253,6 +1253,34 @@ body.pseudo-fs-lock { overflow: hidden; }
    SNAPSHOT/REC/HUD (.cam__bar di kiri-bawah); overlay resolusi ada di kanan-atas. */
 #ctrlCamPip { left: 18px; top: 18px; right: auto; bottom: auto; }
 
+/* Link Pi<->Pixhawk putus: agent tetap mengirim telemetry (thread terpisah di
+   rov_agent.telemetry_sender), tapi angka turunan FC di dalamnya adalah nilai
+   TERAKHIR yang diketahui. Ditandai redup + miring supaya pilot tidak salah
+   membacanya sebagai bacaan hidup.
+
+   Sengaja memakai id, bukan kelas baru: elemen-elemen ini sudah punya id yang
+   dipakai app.js, jadi tidak ada nama kelas kembar yang harus dijaga sinkron.
+   Yang TIDAK ikut diredupkan: CPU/suhu Pi, cmd_link, state misi, dan DRIFT —
+   semuanya masih hidup saat FC putus, dan drift sudah punya penanda sendiri
+   lewat data-stale. */
+body.fc-down #vHeading,
+body.fc-down #vDepth,
+body.fc-down #vAlt,
+body.fc-down #vRoll,
+body.fc-down #vPitch,
+body.fc-down #vTemp,
+body.fc-down #vVolt,
+body.fc-down #hudHeading,
+body.fc-down #hudRoll,
+body.fc-down #hudPitch,
+body.fc-down #miniCompass,
+body.fc-down #miniAI,
+body.fc-down #tape,
+body.fc-down #tapeVal {
+  opacity: 0.45;
+  font-style: italic;
+}
+
 /* depth tape */
 .tape { flex: 1; position: relative; overflow: hidden; }
 .tape__needle {

@@ -132,16 +132,15 @@ def _yolo_at_area_fraction(frac, conf=0.9):
             'frame_w': frame_w, 'frame_h': frame_h}
 
 
-def test_hook_align_vert_servo_menang_atas_asumsi_kedalaman():
-    """Kamera melihat ujung J langsung — itu acuan vertikal yang lebih baik
-    daripada HOOK_DEPTH. _left_hold hanya mengisi saat servo tak berpendapat."""
+def test_hook_align_depth_bridge_menang_atas_y_point5():
+    """YOLO mengatur horizontal; depth hook tetap berasal dari bridge/ALT_HOLD."""
     fsm = _make_fsm()
     fsm._transition(State.M5_HOOK_ALIGN)
     frame_w, frame_h = 640, 480
     side = (m5.LEFT_YOLO_AREA_FRAC * frame_w * frame_h) ** 0.5
     dangkal = {'depth': m5.HOOK_DEPTH - 0.30}
 
-    # ujung J jauh DI BAWAH tengah frame → servo minta turun, bukan _left_hold
+    # Posisi Y point 5 tidak boleh mengalahkan target depth bridge.
     det = {'status': 'ok', 'method': 'yolov8', 'confidence': 0.9,
            'frame_w': frame_w, 'frame_h': frame_h,
            'bbox': [frame_w / 2 - side / 2, frame_h - side, side, side]}
@@ -151,9 +150,9 @@ def test_hook_align_vert_servo_menang_atas_asumsi_kedalaman():
         bbox[1] + bbox[3] * m5.HOOK_TIP_Y_FRAC)
     fsm._yolo_source = lambda: det
     fsm._state_m5_hook_align(dangkal)
-    assert fsm.cmd.plant._in['vert'] != 0
+    assert fsm.cmd.plant._in['vert'] < 0, "dangkal → depth bridge menyuruh turun"
 
-    # ujung J tepat di tengah vertikal → servo diam, depth hold mengambil alih
+    # Ubah point 5 ke tengah; keputusan depth harus tetap sama.
     fsm2 = _make_fsm()
     fsm2._transition(State.M5_HOOK_ALIGN)
     by = frame_h / 2 - side * m5.HOOK_TIP_Y_FRAC
@@ -175,7 +174,7 @@ def test_hook_tip_memakai_keypoint_5_bukan_centroid_bbox():
     assert (tip_x, tip_y) == (155.0, 410.0)
 
 
-def test_hook_tip_menolak_skeleton_lemah_atau_tidak_lengkap():
+def test_hook_tip_menerima_batang_atas_clipped_tapi_tolak_titik_kritis_lemah():
     fsm = _make_fsm()
     base = {'bbox': [100.0, 20.0, 60.0, 400.0],
             'frame_w': 640, 'frame_h': 480}
@@ -183,7 +182,28 @@ def test_hook_tip_menolak_skeleton_lemah_atau_tidak_lengkap():
     assert fsm._hook_tip(dict(base, keypoints=_hook_keypoints(155, 410)[:-1])) is None
     clipped = _hook_keypoints(155, 410)
     clipped[0]['y'] = 0
-    assert fsm._hook_tip(dict(base, keypoints=clipped)) is None
+    clipped[0]['confidence'] = 0.01
+    clipped[1]['confidence'] = 0.10
+    assert fsm._hook_tip(dict(base, keypoints=clipped)) == (155.0, 410.0)
+
+    critical_clipped = _hook_keypoints(155, 410)
+    critical_clipped[2]['y'] = 0
+    assert fsm._hook_tip(dict(base, keypoints=critical_clipped)) is None
+
+    critical_weak = _hook_keypoints(155, 410)
+    critical_weak[5]['confidence'] = 0.1
+    assert fsm._hook_tip(dict(base, keypoints=critical_weak)) is None
+
+
+def test_yolo_search_bbox_valid_tapi_pose_kritis_invalid_tetap_berhenti():
+    fsm = _make_fsm()
+    det = _yolo_at_area_fraction(0.02)
+    det['keypoints'][5]['confidence'] = 0.1
+    fsm._yolo_source = lambda: det
+    fsm._transition(State.M5_YOLO_SEARCH)
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm._left_search_hits == 0
+    assert fsm.cmd.plant._in['surge'] == 0
 
 
 def test_hook_align_target_luas_ikut_resolusi_frame():
@@ -193,6 +213,20 @@ def test_hook_align_target_luas_ikut_resolusi_frame():
     det.update(frame_w=1280, frame_h=736)
     fsm._align_target(det)
     assert fsm.hook_servo.target_area == m5.LEFT_YOLO_AREA_FRAC * 1280 * 736
+
+
+def test_hook_align_jauh_mendekat_dulu_tanpa_mengejar_y_point5():
+    fsm = _make_fsm()
+    fsm._heading_hold = 0.0
+    fsm._transition(State.M5_HOOK_ALIGN)
+    det = _yolo_at_area_fraction(0.02)
+    # Point 5 sengaja tinggi; saat masih jauh error ini tidak boleh mematikan
+    # surge atau memaksa perubahan depth sebelum tahap alignment dekat.
+    det['keypoints'] = _hook_keypoints(det['frame_w'] * 0.58, 80.0)
+    fsm._yolo_source = lambda: det
+    fsm._state_m5_hook_align({'depth': m5.HOOK_DEPTH, 'heading': 0.0})
+    assert fsm.cmd.plant._in['surge'] > 0
+    assert fsm.cmd.plant._in['vert'] == 0
 
 
 def test_hook_align_konvergen_lalu_ke_qr_dock():
@@ -222,6 +256,35 @@ def test_hook_align_stop_saat_data_hilang():
     assert fsm.cmd.plant._in['surge'] == 0
 
 
+def test_hook_align_yolo_mengoreksi_yaw_dari_point5_saat_mendekat():
+    fsm = _make_fsm()
+    fsm._transition(State.M5_HOOK_ALIGN)
+    det = _yolo_at_area_fraction(0.02)
+    det['keypoints'] = _hook_keypoints(det['frame_w'] * 0.65, 80.0)
+    fsm._yolo_source = lambda: det
+    fsm._state_m5_hook_align({'depth': m5.HOOK_DEPTH, 'heading': 0.0})
+    assert fsm.cmd.plant._in['yaw'] > 0, "point 5 kanan harus memutar hidung ke kanan"
+
+
+def test_left_visual_limiter_ramp_pelan_dan_membatasi_semua_axis(monkeypatch):
+    fsm = _make_fsm()
+    clock = [100.0]
+    monkeypatch.setattr(m5.time, 'monotonic', lambda: clock[0])
+    samples = []
+    for _ in range(12):
+        fsm._left_visual_send(surge=100, sway=-100, yaw=100, vert=-100)
+        samples.append(dict(fsm.cmd.plant._in))
+        clock[0] += 0.1
+
+    assert samples[0]['surge'] <= 2.01
+    assert max(abs(row['surge']) for row in samples) <= m5.LEFT_VISUAL_MAX_SURGE
+    assert max(abs(row['sway']) for row in samples) <= m5.LEFT_VISUAL_MAX_SWAY
+    assert max(abs(row['yaw']) for row in samples) <= m5.LEFT_VISUAL_MAX_YAW
+    assert max(abs(row['vert']) for row in samples) <= m5.LEFT_VISUAL_MAX_VERT
+    surge_steps = [abs(b['surge'] - a['surge']) for a, b in zip(samples, samples[1:])]
+    assert max(surge_steps) <= m5.LEFT_VISUAL_SLEW * 0.1 + 0.01
+
+
 def test_left_yolo_search_butuh_voting_bukan_satu_frame():
     """best.pt sesekali menyatakan Hook pada frame tanpa hook — satu frame palsu
     tak boleh menghentikan ROV jauh dari dinding."""
@@ -249,7 +312,7 @@ def test_left_yolo_search_deteksi_sekejap_tidak_mengunci():
     fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
     assert fsm._left_search_hits == 0
     assert fsm._state == State.M5_YOLO_SEARCH
-    assert fsm.cmd.plant._in['surge'] == m5.SEARCH_SPEED
+    assert 0 < fsm.cmd.plant._in['surge'] <= m5.LEFT_VISUAL_MAX_SURGE
 
 
 def test_left_yolo_search_berhenti_maju_setelah_budget_jarak():
@@ -260,7 +323,7 @@ def test_left_yolo_search_berhenti_maju_setelah_budget_jarak():
     fsm._state = State.M5_YOLO_SEARCH
     fsm._state_t = m5.time.time()
     fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
-    assert fsm.cmd.plant._in['surge'] == m5.SEARCH_SPEED, "pakai kecepatan terkalibrasi"
+    assert 0 < fsm.cmd.plant._in['surge'] <= m5.LEFT_VISUAL_MAX_SURGE
 
     fsm._state_t = m5.time.time() - m5.LEFT_ADVANCE_MAX_T - 0.1
     fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
@@ -381,24 +444,31 @@ def test_qr_dock_tidak_selesai_selagi_masih_miring():
     assert fsm._state == State.M5_GRIP
 
 
-def test_qr_dock_center_dulu_baru_maju():
+def test_qr_dock_center_dulu_baru_maju(monkeypatch):
     """Servo menggerbang surge sampai terpusat — merapat menyerong bikin gripper
     meleset. Dulu FSM membuang out.surge dan membalik urutan itu."""
+    clock = [100.0]
+    monkeypatch.setattr(m5.time, 'monotonic', lambda: clock[0])
     fsm = _make_fsm()
     jauh = m5.SERVO_TARGET_AREA * 0.4          # masih jauh → ingin maju
     det = {'center': (400, 240), 'area': jauh,  # tapi melenceng lateral
            'frame_w': 640, 'frame_h': 480, 'pose': None, 'payload': None}
     fsm._fresh_payload = lambda _age=0.5: det
     fsm._transition(State.M5_QR_DOCK)
-    fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    for _ in range(8):
+        fsm._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+        clock[0] += 0.1
     melenceng = fsm.cmd.plant._in['surge']
     assert fsm.cmd.plant._in['sway'] != 0, "lateral dikoreksi lebih dulu"
 
     det['center'] = (320, 240)                 # sudah terpusat
+    clock[0] = 200.0
     fsm2 = _make_fsm()
     fsm2._fresh_payload = lambda _age=0.5: det
     fsm2._transition(State.M5_QR_DOCK)
-    fsm2._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+    for _ in range(8):
+        fsm2._state_m5_qr_dock({'depth': m5.HOOK_DEPTH})
+        clock[0] += 0.1
     assert fsm2.cmd.plant._in['surge'] > melenceng, "terpusat → boleh maju penuh"
 
 

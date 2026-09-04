@@ -187,11 +187,42 @@ function log(msg, level = "") {
 /*  state UI  */
 const state = { light: false, armed: false, hud: true, recording: false };
 
+/* Badge LINK. Idempoten: dipanggil tiap paket telemetry, tapi hanya menyentuh
+   DOM saat statusnya benar-benar berubah. */
+let lastLinkMode = null;
 function setLink(mode) {
+  if (mode === lastLinkMode) return;
+  lastLinkMode = mode;
   els.link.dataset.state = mode;
   els.linkLabel.textContent =
     mode === "on" ? "ONLINE" : mode === "demo" ? "SIMULASI"
-    : mode === "stale" ? "SINYAL HILANG" : "OFFLINE";
+    : mode === "stale" ? "SINYAL HILANG"
+    : mode === "fc-down" ? "PIXHAWK PUTUS" : "OFFLINE";
+}
+
+/* Tiga link yang bisa putus sendiri-sendiri, dan dulu ketiganya tampil sebagai
+   satu pesan yang sama:
+     - Pi -> GUI  (telemetry berhenti sampai)     -> watchdog 2,5 detik
+     - Pi -> Pixhawk (fc_link dari agent)         -> di sini
+     - GUI -> Pi  (cmd_link)                      -> applyCmdLink
+   Sejak agent mengirim telemetry dari thread sendiri, putusnya link Pixhawk
+   TIDAK lagi menghentikan telemetry — jadi GUI masih menerima paket berisi
+   angka attitude/depth TERAKHIR. Nilai itu tidak boleh tampil seolah hidup. */
+let fcLinkDown = false;
+function applyFcLink(d) {
+  // Agent lama tidak mengirim fc_link — jangan mengarang status untuk mereka.
+  if (typeof d.fc_link !== "string") return;
+  const down = d.fc_link === "down";
+  if (down !== fcLinkDown) {
+    fcLinkDown = down;
+    log(down
+      ? "Link Pixhawk putus — attitude/depth membeku di nilai terakhir"
+      : "Link Pixhawk pulih", down ? "err" : "ok");
+  }
+  /* Penanda di body, bukan di satu elemen: yang membeku saat FC putus adalah
+     SEMUA bacaan turunan FC (heading, depth, roll, pitch, kompas, horizon),
+     dan CSS bisa menandai seluruhnya sekaligus tanpa daftar elemen di JS. */
+  document.body.classList.toggle("fc-down", down);
 }
 
 function setTheme(name) {
@@ -223,6 +254,16 @@ function num(v, d = 1) {
 /*  depth tape — skala mengikuti kedalaman kolam (CONFIG.POOL_DEPTH) supaya
     berguna baik di kolam dangkal KKI (~0.9 m) maupun kolam uji yang lebih dalam. */
 let TAPE;
+/* Tinggi viewport tape hanya berubah saat window/layout berubah, bukan tiap
+   paket telemetri. Dulu updateTape() membaca clientHeight 10x/detik TEPAT
+   sesudah applyTelemetry menulis puluhan style — pola baca-sesudah-tulis yang
+   memaksa browser me-reflow secara sinkron di tengah handler pesan, sehingga
+   pesan berikutnya (termasuk pong pengukur LAT) harus antre di belakangnya.
+   0 = perlu dibaca ulang. Dideklarasikan SEBELUM buildTape() dipanggil di
+   bawah, karena buildTape me-reset-nya. */
+let tapeHeight = 0;
+window.addEventListener("resize", () => { tapeHeight = 0; });
+
 function computeTape() {
   const d = CONFIG.POOL_DEPTH || 3;
   if (d <= 2) return { min: -0.2, max: d + 0.3, minor: 0.1, major: 0.5, px: 200 };
@@ -240,20 +281,27 @@ function buildTape() {
     const mark = document.createElement("div");
     mark.className = "tape__mark" + (isMajor ? " tape__mark--major" : "");
     mark.dataset.m = m;
+    /* Posisi tiap mark relatif terhadap skala ditulis SEKALI di sini. Yang
+       bergerak saat kedalaman berubah cuma satu hal: seluruh skalanya. */
+    mark.style.top = ((m - TAPE.min) * TAPE.px) + "px";
     mark.textContent = (isMajor && m >= 0) ? m.toFixed(TAPE.minor < 1 ? 1 : 0) + " m" : "";
     frag.appendChild(mark);
   }
   els.tapeScale.appendChild(frag);
+  tapeHeight = 0;   // tinggi lama tak berlaku untuk skala baru
 }
 buildTape();
 // rescale saat pool depth diubah di halaman Setup
 window.addEventListener("hydroship:pool-depth", buildTape);
+
 function updateTape(depth) {
-  const h = els.tapeScale.parentElement.clientHeight;
-  els.tapeScale.querySelectorAll(".tape__mark").forEach((el) => {
-    const m = parseFloat(el.dataset.m);
-    el.style.top = (h / 2 + (m - depth) * TAPE.px) + "px";
-  });
+  if (!tapeHeight) tapeHeight = els.tapeScale.parentElement.clientHeight;
+  /* Semua mark bergeser dengan delta yang sama, jadi satu transform pada
+     kontainer setara dengan menulis `top` di tiap mark — tapi hanya satu
+     properti, dan transform ditangani compositor (CSS .tape__scale memang
+     sudah menyiapkan will-change: transform). */
+  els.tapeScale.style.transform =
+    `translateY(${tapeHeight / 2 - (depth - TAPE.min) * TAPE.px}px)`;
   els.tapeVal.textContent = num(depth, 2) + " m";
 }
 
@@ -271,9 +319,14 @@ function applyTelemetry(d) {
   // pulih dari kondisi "stale" (telemetri sempat berhenti lalu masuk lagi)
   if (linkStale) {
     linkStale = false;
-    if (!isDemo && !demo) { setLink("on"); log("Telemetri pulih", "ok"); }
+    if (!isDemo && !demo) log("Telemetri pulih", "ok");
   }
   lastTelemetry = performance.now();
+  applyFcLink(d);
+  /* Badge diturunkan dari kedua kondisi sekaligus. Kalau ditulis berurutan
+     (telemetry pulih -> "on", lalu fc down -> "stale"), pemulihan telemetry
+     saat Pixhawk MASIH putus akan meninggalkan badge di "ONLINE". */
+  if (!isDemo && !demo) setLink(fcLinkDown ? "fc-down" : "on");
   // d.depth sudah ditare backend (lihat command `set_surface`, rov_agent.py) —
   // tare dua kali di sini akan memotong depth yang sama dua kali lipat.
   els.heading.textContent = num(d.heading, 0);
@@ -492,13 +545,36 @@ function applyCmdLink(d) {
    tambah kepercayaan pilot saat autonomous, tak cuma angka offset/distance
    sebagai teks. #camImg pakai object-fit:cover jadi skala harus max(sx,sy)
    + centering letterbox, BUKAN stretch naif seperti buffer scanControlQR. */
+/* Ukuran tampil #camImg di-cache. drawHookBbox dipanggil sampai 20x/detik
+   (tiap paket telemetry yang membawa hook_xy + tiap pesan hook_vision), dan
+   getBoundingClientRect() memaksa reflow sinkron setiap kali — di dalam
+   handler pesan WebSocket, jadi pesan berikutnya ikut tertahan. Ukurannya
+   sendiri hanya berubah saat layout berubah, dan ResizeObserver melaporkan
+   itu tepat waktu (ganti halaman, fullscreen, resize window) tanpa polling. */
+let camImgBox = { w: 0, h: 0 };
+if (els.camImg && typeof ResizeObserver === "function") {
+  new ResizeObserver((entries) => {
+    const r = entries[entries.length - 1].contentRect;
+    camImgBox = { w: r.width, h: r.height };
+  }).observe(els.camImg);
+}
+
+function camImgSize() {
+  // Fallback (browser tanpa ResizeObserver, atau sebelum callback pertama):
+  // baca langsung — benar, sekadar tidak gratis.
+  if (camImgBox.w && camImgBox.h) return camImgBox;
+  if (!els.camImg) return { w: 0, h: 0 };
+  const r = els.camImg.getBoundingClientRect();
+  return { w: r.width, h: r.height };
+}
+
 function drawHookBbox(m5) {
   const cv = els.hookBboxCanvas;
   if (!cv) return;
   const ctx = cv.getContext("2d");
-  const rect = els.camImg.getBoundingClientRect();
-  if (cv.width !== rect.width) cv.width = rect.width;
-  if (cv.height !== rect.height) cv.height = rect.height;
+  const rect = camImgSize();
+  if (cv.width !== rect.w) cv.width = rect.w;
+  if (cv.height !== rect.h) cv.height = rect.h;
   ctx.clearRect(0, 0, cv.width, cv.height);
 
   const bbox = m5 && m5.bbox, conf = m5 && m5.confidence;
@@ -885,6 +961,9 @@ function connect() {
     if (!estopLatched) log("Koneksi putus — joystick dikunci sampai ARM ulang", "warn");
     estopLatched = true;
     neutralizeGamepadAxes();
+    // Median dari sesi yang sudah putus bukan latensi apa pun — kosongkan,
+    // jangan biarkan angka lama tertinggal seolah link masih terukur.
+    resetLatency();
     scheduleReconnect();
     maybeDemo();
   };
@@ -1011,10 +1090,38 @@ function sendPacket(packet, quiet = false) {
 
 // sediakan log, sendCmd & send (WS mentah) untuk modul halaman
 setServices({ log, sendCmd, send });
-function setLatency(ms) { els.lat.textContent = Math.round(ms); }
+/* Pembacaan LATENCY.
+
+   Dulu: satu ping per detik, dan ANGKA MENTAH sampel itu yang ditampilkan.
+   Satu sampel per detik adalah penaksir yang buruk — kalau pong-nya kebetulan
+   tiba saat main thread sedang menggambar satu frame, angkanya melonjak,
+   padahal link-nya sendiri tidak berubah. Yang terbaca operator jadi loncat-
+   loncat antara ~1 dan belasan ms tanpa sebab yang bisa ditindaklanjuti.
+
+   Sekarang: ping 5 Hz, tampilkan MEDIAN 10 sampel terakhir (jendela ~2 detik)
+   — cara baku `ping` melaporkan latensi link. Median tahan terhadap satu
+   pencilan tapi tetap naik begitu latensi sungguhan naik. */
+const LAT_WINDOW = 10;
+const latSamples = [];
+
+function setLatency(ms) {
+  latSamples.push(ms);
+  if (latSamples.length > LAT_WINDOW) latSamples.shift();
+  const sorted = [...latSamples].sort((a, b) => a - b);
+  const median = sorted[sorted.length >> 1];
+  // Di LAN lokal nilainya pecahan milidetik; membulatkannya ke 0 menyembunyikan
+  // perbedaan antara "0,4 ms" dan "4 ms" yang justru ingin dilihat.
+  els.lat.textContent = median < 10 ? median.toFixed(1) : String(Math.round(median));
+}
+
+function resetLatency() {
+  latSamples.length = 0;
+  els.lat.textContent = "—";
+}
 
 // ping berkala untuk ukur latency
-setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) sendPing(); }, 1000);
+const PING_INTERVAL_MS = 200;
+setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) sendPing(); }, PING_INTERVAL_MS);
 function sendPing() { pingT = performance.now(); send({ type: "ping", t: pingT }); }
 
 // deteksi link mati (telemetri berhenti) walau WS masih open.
@@ -1057,6 +1164,9 @@ function startDemo() {
 function stopDemo() {
   if (!demo) return;
   clearInterval(demo); demo = null;
+  // Buang sampel latensi buatan simulator supaya median tidak tercampur
+  // dengan pengukuran link sungguhan yang baru saja masuk.
+  resetLatency();
 }
 function maybeDemo() { if (CONFIG.DEMO_ON_START && !demo) startDemo(); }
 

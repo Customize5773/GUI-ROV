@@ -51,6 +51,47 @@ class TestSkalaDanNamaAxis(unittest.TestCase):
         self.assertNotIn("vert", sink, "axis harus bernama 'heave', bukan 'vert'")
         self.assertEqual(sink["heave"], -300)
 
+    def test_vert_dapat_dibalik_untuk_instalasi_hardware(self):
+        sink = {}
+        adapter = Mission5CommandAdapter(
+            set_axis=lambda **kw: sink.update(kw),
+            set_gripper=lambda _c: None,
+            arm=lambda _o: None,
+            emergency_stop=lambda: None,
+            invert_vert=True,
+        )
+        adapter.send(vert=10)
+        self.assertEqual(sink["heave"], -100)
+        adapter.send(vert=-10)
+        self.assertEqual(sink["heave"], 100)
+
+    def test_yaw_dapat_dibalik_tanpa_mengubah_axis_lain(self):
+        sink = {}
+        adapter = Mission5CommandAdapter(
+            set_axis=lambda **kw: sink.update(kw),
+            set_gripper=lambda _c: None,
+            arm=lambda _o: None,
+            emergency_stop=lambda: None,
+            invert_yaw=True,
+        )
+        adapter.send(surge=12, sway=-3, yaw=8, vert=4)
+        self.assertEqual(sink, {
+            "surge": 120, "sway": -30, "yaw": -80, "heave": 40,
+        })
+
+    def test_yaw_motion_lama_mengikuti_kalibrasi_hardware(self):
+        sink = {}
+        adapter = Mission5CommandAdapter(
+            set_axis=lambda **kw: sink.update(kw),
+            set_gripper=lambda _c: None,
+            arm=lambda _o: None,
+            emergency_stop=lambda: None,
+            set_depth_target=lambda _d: True,
+            invert_yaw=True,
+        )
+        adapter.send_motion((0, 0, 90, 0.5, "open"), yaw_command=-7)
+        self.assertEqual(sink["yaw"], 70)
+
     def test_skala_penuh_tidak_terpotong(self):
         # 100% FSM harus jadi 1000 (skala penuh GUI), bukan 100.
         sink = {}
@@ -254,6 +295,18 @@ class TestAutonomousMotionConfig(unittest.TestCase):
 
 
 class TestCustomCaseMotion(unittest.TestCase):
+    def test_start_langsung_tahap_3_menahan_heading_nol(self):
+        r = Mission5Runner(
+            _adapter({}), Mission5TelemetryAdapter(lambda: {"heading": 0}),
+            config={"custom_motion_enabled": False,
+                    "start_state": "M5_YOLO_SEARCH"},
+            log=lambda *_: None,
+        )
+        started = []
+        r._start_fsm = lambda *args, **kwargs: started.append((args, kwargs)) or True
+        self.assertTrue(r.start())
+        self.assertEqual(started[0][1]["heading_hold"], 0.0)
+
     def test_custom_case_bisa_diedit_tanpa_import_fsm_besar(self):
         sink, history = {}, []
         cases = [{"name": "COBA_MAJU", "duration_ms": 30,
@@ -377,6 +430,14 @@ class TestWiringDiRovAgent(unittest.TestCase):
         self.assertIn("KILL_SWITCH_DEADZONE", self.src)
         self.assertIn("KILL-SWITCH", self.src)
 
+    def test_stop_memutus_autonomous_dan_nolkan_axis_fsm_tanpa_memblokir(self):
+        start = self.src.index('elif name == "stop":')
+        end = self.src.index('elif name == "light":', start)
+        branch = self.src[start:end]
+        self.assertIn("fsm_axes.update(AXIS_NEUTRAL)", branch)
+        self.assertIn('current_control_mode = "manual"', branch)
+        self.assertIn("threading.Thread(target=mission5_runner.stop", branch)
+
     def test_axis_fsm_terpisah_dari_axis_operator(self):
         # Kalau FSM menulis ke dict `joystick` yang sama, perintahnya akan
         # tertimpa fail-safe idle / input operator secara acak.
@@ -398,6 +459,12 @@ class TestWiringDiRovAgent(unittest.TestCase):
         start = self.src.index('mission5_runner.start()', zero)
         self.assertLess(zero, start)
         self.assertIn('state["heading_compass"] = yaw_f', self.src)
+        main_fn = next(node for node in self.tree.body
+                       if isinstance(node, ast.FunctionDef) and node.name == "main")
+        main_globals = {name for node in main_fn.body if isinstance(node, ast.Global)
+                        for name in node.names}
+        self.assertIn("latest_yaw", main_globals,
+                      "main() harus memperbarui yaw global yang dibaca saat AUTONOMOUS")
         with open("autonomy/tools/hook_vision_worker.py", encoding="utf-8") as fh:
             worker = fh.read()
         self.assertIn("compass_heading = vehicle.get('heading_compass')", worker)

@@ -56,25 +56,38 @@ MOTION_CALIBRATION = {
 
 class Mission5CommandAdapter:
     def __init__(self, set_axis, set_gripper, arm, emergency_stop,
-                 set_alt_hold=None, set_depth_target=None):
+                 set_alt_hold=None, set_depth_target=None, invert_vert=False,
+                 invert_yaw=False):
         self._set_axis = set_axis
         self._set_gripper = set_gripper
         self._arm = arm
         self._emergency_stop = emergency_stop
         self._set_alt_hold = set_alt_hold
         self._set_depth_target = set_depth_target
+        # Konvensi FSM: vert positif = naik. Beberapa instalasi ArduSub/wiring
+        # memakai tanda heave kebalikan; balikkan hanya di batas FSM agar semua
+        # tahap (align, unhook, surface) konsisten tanpa mengubah kontrol manual.
+        self._invert_vert = bool(invert_vert)
+        # Sama untuk yaw: konvensi FSM positif = target/putaran ke kanan. Pada
+        # instalasi kolam ini uji live menunjukkan tanda MANUAL_CONTROL.r fisik
+        # terbalik, jadi kalibrasi dilakukan di satu batas dan tidak mengubah
+        # arah joystick operator.
+        self._invert_yaw = bool(invert_yaw)
 
     def send(self, surge=0, sway=0, yaw=0, vert=0, gripper=None):
+        mapped_vert = -vert if self._invert_vert else vert
+        mapped_yaw = -yaw if self._invert_yaw else yaw
         self._set_axis(surge=int(surge * 10), sway=int(sway * 10),
-                       yaw=int(yaw * 10), heave=int(vert * 10))
+                       yaw=int(mapped_yaw * 10), heave=int(mapped_vert * 10))
         if gripper is not None:
             self._set_gripper(bool(gripper))
 
     def send_motion(self, motion, yaw_command=0):
         """Kirim format CASE lama: (surge, sway, heading, depth, gripper)."""
         surge, sway, _heading, depth, gripper = motion
+        mapped_yaw = -yaw_command if self._invert_yaw else yaw_command
         self._set_axis(surge=int(surge * 10), sway=int(sway * 10),
-                       yaw=int(yaw_command * 10), heave=0)
+                       yaw=int(mapped_yaw * 10), heave=0)
         if depth is not None:
             if self._set_depth_target is None:
                 raise RuntimeError("callback set_depth_target belum dipasang")
@@ -375,7 +388,12 @@ class Mission5Runner:
         # (lihat _start_custom.run) — bukan lagi jalur alternatif yang buntu.
         if self.custom_enabled:
             return self._start_custom()
-        return self._start_fsm()
+        start_state = self._cfg.get("start_state", "M5_REDIVE")
+        # rov_agent me-zero-kan heading tepat saat AUTONOMOUS dipilih. Pada uji
+        # langsung tahap 3, tahan arah hadap awal itu sebagai 0 derajat supaya
+        # ROV tidak datang menyerong ketika point 5 sedang dikejar.
+        heading_hold = 0.0 if start_state in ("M5_YOLO_SEARCH", "M5_HOOK_ALIGN") else None
+        return self._start_fsm(heading_hold=heading_hold)
 
     def _start_fsm(self, start_state_name=None, heading_hold=None):
         """Jalankan Mission5FSM. Dipanggil start() (langsung) DAN rantai CASE."""
@@ -457,8 +475,11 @@ class Mission5Runner:
             names = (
                 "LEFT_ADVANCE_MAX_T", "LEFT_TIMEOUT_ALIGN", "LEFT_YOLO_CONF",
                 "LEFT_YOLO_AREA_FRAC", "HOOK_TIP_X_FRAC", "HOOK_TIP_Y_FRAC",
+                "LEFT_HOOK_YAW_KP", "LEFT_HOOK_MAX_YAW",
                 "LEFT_QR_YAW_KP", "LEFT_QR_YAW_KP_DEG", "LEFT_QR_YAW_TOL_DEG",
-                "LEFT_QR_MAX_YAW", "LEFT_GRIP_T",
+                "LEFT_QR_MAX_YAW", "LEFT_GRIP_T", "LEFT_VISUAL_MAX_SURGE",
+                "LEFT_VISUAL_MAX_SWAY", "LEFT_VISUAL_MAX_YAW",
+                "LEFT_VISUAL_MAX_VERT", "LEFT_VISUAL_SLEW",
             )
             runlog.event("left_flow_config", heading_hold=heading_hold,
                          values={name: getattr(mission5_module, name) for name in names})

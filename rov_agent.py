@@ -197,6 +197,13 @@ state = {
     # membedakan "belum ada data" dari "posisi 0,0" dan jatuh ke fallback.
     "pos_n": None,
     "pos_e": None,
+    # Kesehatan link Pi<->Pixhawk: "ok" | "down". BERBEDA dari `cmd_link`
+    # (GUI->Pi) dan dari sampainya telemetry (Pi->GUI). Tiga link berbeda,
+    # tiga penanda berbeda — dulu putusnya link Pixhawk muncul di GUI sebagai
+    # "telemetri terputus", yang menunjuk ke umbilical/laptop padahal yang
+    # bermasalah kabel/serial FC. Saat "down", nilai attitude/depth di bawah
+    # adalah nilai TERAKHIR yang diketahui, bukan bacaan hidup.
+    "fc_link": "down",
     "mission_counter": {"m2_fails": 0, "m2_score": 15, "m3_fails": 0, "m3_score": 15},
 }
 
@@ -541,6 +548,13 @@ def send_to_gui(obj):
         # seluruh loop RX.
         print("[UDP] gagal serialisasi pesan ke GUI:", e)
         return
+    except RuntimeError as e:
+        # "dictionary changed size during iteration": thread lain menambah key
+        # ke dict yang sedang di-serialisasi. Sejak telemetry punya thread
+        # sendiri, pengirim dan penulis state bukan lagi thread yang sama, jadi
+        # ini harus ditangani — bukan dibiarkan membunuh thread pengirim.
+        print("[UDP] state berubah saat serialisasi, paket dilewati:", e)
+        return
 
     try:
         telem_sock.sendto(payload, (LAPTOP_IP, UDP_TELEM_PORT))
@@ -607,6 +621,12 @@ def send_telemetry():
         if mission5_runner is not None
         else None
     )
+    # Axis aktual yang terakhir ditulis Mission5FSM. Ini read-only untuk
+    # dashboard/monitor kolam dan penting untuk membedakan "FSM diam" dari
+    # perintah yang memang dikirim tetapi ROV tertahan tether/dasar/mixing.
+    # Salin di bawah lock agar satu paket tidak memuat campuran dua tick.
+    with fsm_axes_lock:
+        state["mission5_axes"] = dict(fsm_axes)
     now = time.time()
     global _last_pistat, _pi_snapshot
     if now - _last_pistat >= 1.0:
@@ -904,10 +924,16 @@ def command_listener():
                 print("====================================")
 
             elif name == "stop":
-                # Failsafe sederhana: netralkan axis lalu disarm
+                # Failsafe: putus otoritas autonomous dan netralkan KEDUA
+                # sumber axis sebelum meminta DISARM. Dahulu hanya joystick
+                # operator yang dinolkan; saat autonomous, sender justru membaca
+                # fsm_axes sehingga PWM dapat bertahan beberapa detik sesudah STOP.
                 print("[MAV] STOP -> DISARM")
                 with joystick_lock:
                     joystick.update(AXIS_NEUTRAL)
+                with fsm_axes_lock:
+                    fsm_axes.update(AXIS_NEUTRAL)
+                current_control_mode = "manual"
 
                 # E-Stop tidak boleh meninggalkan overlay yang masih menulis ke
                 # r: axis dinetralkan di sini, dan koreksi heading akan
@@ -921,6 +947,12 @@ def command_listener():
                 with depth_lock:
                     depth_hold_enabled = False
                 send_arm_disarm(False)
+                # vision.stop() dapat menunggu read kamera sampai 3 detik. Jangan
+                # blokir listener command: STOP/ARM berikutnya harus tetap dapat
+                # diproses segera selama teardown FSM berlangsung.
+                if mission5_runner is not None:
+                    threading.Thread(target=mission5_runner.stop, daemon=True,
+                                     name="Mission5Stop").start()
 
             elif name == "light":
                 # Belum dihubungkan ke hardware lampu, simpan status saja
@@ -1750,6 +1782,17 @@ def setup_mission5_runner():
         emergency_stop=_fsm_emergency_stop,
         set_alt_hold=_fsm_set_alt_hold,
         set_depth_target=send_native_depth_target,
+        # Konvensi FSM adalah vert positif = naik. Aktifkan bila uji arah
+        # kendaraan menunjukkan tanda heave ArduSub terbalik. Hanya keluaran
+        # Mission5FSM yang dibalik; kontrol MANUAL tidak berubah.
+        invert_vert=os.environ.get(
+            "M5_FSM_INVERT_VERT", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
+        # Uji kolam 5 Sep: command yaw FSM negatif menaikkan heading dan
+        # menjauhkan tip hook ke kiri. Kalibrasi ini hanya memengaruhi Mission 5.
+        invert_yaw=os.environ.get(
+            "M5_FSM_INVERT_YAW", "0").strip().lower()
+            in ("1", "true", "yes", "on"),
     )
     
     telem = Mission5TelemetryAdapter(read_state=_fsm_read_state)
@@ -1762,6 +1805,12 @@ def setup_mission5_runner():
         "hook_map": os.environ.get("M5_HOOK_MAP") or None,
         "require_hook_map": True,
         "bench_qr_dock": os.environ.get("M5_BENCH_QR_DOCK", "0") == "1",
+        # Default tetap menjalankan CASE MOTION langkah 1-2. Untuk uji kolam
+        # yang ROV-nya sudah berada di dasar dan menghadap hook, set 0 agar
+        # toggle AUTONOMOUS mulai langsung dari M5_START_STATE (langkah 3).
+        "custom_motion_enabled": os.environ.get(
+            "M5_CUSTOM_MOTION_ENABLED", "1").strip().lower()
+            not in ("0", "false", "no", "off"),
         "start_state": os.environ.get("M5_START_STATE", "M5_YOLO_SEARCH"),
         # Geometri kolam + tuning. WAJIB diisi bila kedalaman kolam bukan 0,9 m
         # (lihat Mission5Runner._apply_configs). Arena lomba:
@@ -1862,6 +1911,34 @@ def send_native_depth_target(target_depth):
     except Exception as e:
         print(f"[DEPTH NATIVE] gagal kirim target: {e}")
         return False
+
+TELEM_SEND_INTERVAL = 0.1   # 10 Hz
+
+
+def telemetry_sender():
+    """Kirim state ke GUI 10 Hz, TERLEPAS dari kondisi link Pixhawk.
+
+    Dulu send_telemetry() adalah pernyataan TERAKHIR di loop RX MAVLink, jadi
+    setiap `continue` sebelumnya ikut membatalkan telemetry — termasuk cabang
+    `msg is None` dan, yang paling parah, jalur sambung-ulang yang memanggil
+    connect_pixhawk() dengan wait_heartbeat(timeout=30). Satu gangguan kabel
+    FC karena itu memadamkan dashboard sampai 30 detik, dan operator membaca
+    "Telemetri terputus" — menunjuk ke umbilical/laptop yang justru sehat.
+
+    Sekarang laju telemetry ditentukan timer, bukan kedatangan pesan MAVLink.
+    Saat link FC putus, GUI tetap menerima paket dan melihat fc_link="down",
+    jadi ia bisa menandai attitude/depth sebagai beku alih-alih gelap total.
+    """
+    while True:
+        started = time.monotonic()
+        try:
+            send_telemetry()
+        except Exception as e:
+            # Thread ini tidak boleh mati: kalau ia berhenti, GUI benar-benar
+            # kehilangan telemetry dan kita kembali ke gejala yang diperbaiki.
+            print("[TELEM] gagal kirim telemetry:", e)
+        time.sleep(max(0.0, TELEM_SEND_INTERVAL - (time.monotonic() - started)))
+
 
 def joystick_sender():
     """Kirim MANUAL_CONTROL 20 Hz.
@@ -1986,6 +2063,7 @@ def connect_pixhawk():
     print(f"[MAV] System {link.target_system}, Component {link.target_component}")
 
     master = link
+    state["fc_link"] = "ok"
     gripper = GripperController(master)
     print("[GRIPPER] Controller initialized")
 
@@ -2069,6 +2147,7 @@ def drop_link(reason):
     # Jangan tampilkan status basi di GUI.
     state["armed"] = False
     state["mode"] = "unknown"
+    state["fc_link"] = "down"
 
     # Daftar param yang setengah terkirim tidak boleh disambung ke daftar
     # berikutnya, dan throttle Inspector harus lupa timestamp lama supaya
@@ -2098,6 +2177,7 @@ def main():
     global prev_attitude_ts
     global _raw_depth
     global heading_zero
+    global latest_yaw
 
     connect_pixhawk()
 
@@ -2105,8 +2185,8 @@ def main():
     threading.Thread(target=command_listener, daemon=True).start()
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=qgc_command_receiver, daemon=True).start()
+    threading.Thread(target=telemetry_sender, daemon=True).start()
 
-    last_send = 0
     last_hb = 0
     last_rx = time.time()
 
@@ -2339,10 +2419,10 @@ def main():
             if requested_mode is not None and state["mode"] == requested_mode:
                 globals()["requested_mode"] = None
 
-        # Kirim telemetry periodik ke laptop
-        if now - last_send >= 0.1:  # 10 Hz
-            send_telemetry()
-            last_send = now
+        # Telemetry TIDAK dikirim dari sini lagi — lihat telemetry_sender().
+        # Menaruhnya di ekor loop ini membuatnya ikut dibatalkan oleh setiap
+        # `continue` di atas, dan lajunya mengikuti kedatangan pesan MAVLink
+        # (terukur 9,02 Hz, bukan 10) alih-alih timer.
 
 if __name__ == "__main__":
     try:
