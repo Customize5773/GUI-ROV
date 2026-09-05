@@ -53,7 +53,14 @@ const HOOK_VISION_DEFAULT_URL = process.env.HOOK_CAMERA_URL || "http://192.168.2
    di CPU biarkan 10 supaya inferensi tidak saling menumpuk. */
 const HOOK_VISION_FPS = Number(process.env.HOOK_VISION_FPS) > 0
   ? String(Number(process.env.HOOK_VISION_FPS)) : "10";
-const DEFAULT_PYTHON = process.platform === "win32" ? "python" : "python3";
+/* Pilih interpreter: utamakan venv repo (.venv) karena di situlah cv2 +
+   ultralytics terpasang; kalau tidak ada, jatuh ke python sistem. */
+const VENV_PYTHON = path.join(REPO_ROOT, ".venv",
+  process.platform === "win32" ? "Scripts" : "bin",
+  process.platform === "win32" ? "python.exe" : "python");
+const DEFAULT_PYTHON = fs.existsSync(VENV_PYTHON)
+  ? VENV_PYTHON
+  : (process.platform === "win32" ? "python" : "python3");
 const AUTONOMOUS_LOG_DIR = path.join(AUTONOMY, "logs");
 fs.mkdirSync(AUTONOMOUS_LOG_DIR, { recursive: true });
 
@@ -574,7 +581,7 @@ const httpServer = http.createServer((req, res) => {
   // supaya angka di panel GUI persis sama dgn laporan CLI yang dibaca saat analisis
   // trial. Run jarang & filenya kecil, jadi spawn per-request cukup murah.
   if (urlPath === "/api/runs") {
-    const runAnalyze = () => execFile("python3",
+    const runAnalyze = () => execFile(DEFAULT_PYTHON,
       [path.join(AUTONOMY, "tools", "analyze_run.py"),
        path.join(AUTONOMY, "logs", "*.jsonl"), "--json"],
       { maxBuffer: 8 * 1024 * 1024 },
