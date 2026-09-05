@@ -1845,7 +1845,10 @@ class Mission5FSM:
 
     def _state_m5_qr_dock(self, telem):
         """5. Pusatkan QR memakai yaw+sway; jarak/depth dipertahankan."""
-        if self._elapsed() > TIMEOUT_M5_DOCK:
+        # QR-direct dipakai saat payload sudah berada di area mulut gripper.
+        # Jangan auto-abort/disarm hanya karena decode sempat hilang atau waktu
+        # docking habis; tahan netral dan tunggu observasi fresh berikutnya.
+        if not self._bench_qr_dock and self._elapsed() > TIMEOUT_M5_DOCK:
             self._left_abort("QR docking timeout")
             return
         if self._left_out_of_time():
@@ -1857,7 +1860,8 @@ class Mission5FSM:
                 self.cmd.stop_all()
                 self._left_visual_reset()
             elif self._bench_qr_dock:
-                self._left_abort("QR hilang/basi")
+                self.cmd.stop_all()
+                self._left_visual_reset()
             else:
                 self._left_visual_send(yaw=YAW_SPEED * self._m5_search_dir,
                                        vert=self._left_hold(telem), gripper=0)
@@ -1905,7 +1909,6 @@ class Mission5FSM:
         if self._elapsed() >= LEFT_GRIP_T:
             self.cmd.stop_all()
             if self._bench_qr_dock:
-                self.cmd.arm(False)
                 self._transition(State.DONE)
             else:
                 self._transition(State.M5_UNHOOK)

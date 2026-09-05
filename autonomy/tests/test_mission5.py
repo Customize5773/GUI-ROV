@@ -489,10 +489,11 @@ def test_bench_qr_target_mulut_gripper_align_dan_berhenti_setelah_grip(monkeypat
     assert fsm._state == State.M5_GRIP
     assert fsm.cmd.plant._in['vert'] == 0
 
+    fsm.cmd.plant.s.armed = True
     fsm._state_t = m5.time.time() - m5.LEFT_GRIP_T - 0.1
     fsm._state_m5_grip({'depth': 0.0})
     assert fsm._state == State.DONE
-    assert not fsm.cmd.plant.s.armed
+    assert fsm.cmd.plant.s.armed
 
 
 def test_bench_qr_start_menunggu_decode_sebelum_auto_arm(monkeypatch):
@@ -514,7 +515,7 @@ def test_bench_qr_start_menunggu_decode_sebelum_auto_arm(monkeypatch):
     assert sleeps == [0.1, 0.1]
 
 
-def test_bench_qr_otoritas_penuh_tetap_mulus_dan_qr_hilang_abort(monkeypatch):
+def test_bench_qr_otoritas_penuh_tetap_mulus_dan_qr_hilang_tahan_netral(monkeypatch):
     monkeypatch.setattr(m5, 'SERVO_MAX_SPEED', 100.0)
     monkeypatch.setattr(m5, 'SERVO_KP_YAW', 1.0)
     monkeypatch.setattr(m5, 'SERVO_SLEW', 60.0)
@@ -550,7 +551,8 @@ def test_bench_qr_otoritas_penuh_tetap_mulus_dan_qr_hilang_abort(monkeypatch):
     fsm._fresh_payload = lambda _age=0.5: None
     fsm._m5_last_det_t = m5.time.time() - m5.M5_LOCK_GRACE_T - 0.1
     fsm._state_m5_qr_dock({'depth': 0.0})
-    assert fsm._state == State.ABORT
+    assert fsm._state == State.M5_QR_DOCK
+    assert all(fsm.cmd.plant._in[k] == 0 for k in ('surge', 'sway', 'yaw', 'vert'))
 
 
 def test_alur_kiri_menahan_kedalaman_di_tiap_state():
