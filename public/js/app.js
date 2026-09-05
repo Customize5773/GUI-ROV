@@ -1174,7 +1174,6 @@ function maybeDemo() { if (CONFIG.DEMO_ON_START && !demo) startDemo(); }
 // Feed diambil lewat proxy same-origin (camProxy), jadi snapshot/record (canvas)
 // tidak ter-taint tanpa perlu crossOrigin. onload/onerror dipasang sekali di sini.
 els.camImg.onload = () => {
-  camSwitchPending = false;
   els.camNoSignal.style.display = "none";
   els.camTag.textContent = "LIVE";
   try {
@@ -1183,17 +1182,9 @@ els.camImg.onload = () => {
     if (els.camRes) els.camRes.textContent = `${w}×${h}`;
   } catch (e) {}
 };
-els.camImg.onerror = () => {
-  camSwitchPending = false;
-  els.camNoSignal.style.display = "flex";
-  els.camTag.textContent = "RTSP / MJPEG";
-};
+els.camImg.onerror = () => { els.camNoSignal.style.display = "flex"; els.camTag.textContent = "RTSP / MJPEG"; };
 
 let controlCamIndex = 0;
-// true selagi menunggu frame pertama dari switch kamera terakhir (lihat
-// applyControlCamera/onload/onerror) — cegah dpad cam_prev/next dobel-tekan
-// membalikkan index sebelum switch sebelumnya sempat terlihat di layar.
-let camSwitchPending = false;
 
 function getControlCameraSources() {
   const urls = [];
@@ -1241,8 +1232,7 @@ function applyControlCamera() {
 
   const url = sources[controlCamIndex] || sources[0];
   CONFIG.CAMERA_URL = url;
-  camSwitchPending = true;
-  els.camTag.textContent = "SWITCHING…";
+  els.camTag.textContent = `CAM ${controlCamIndex + 1}`;
 
   // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
   const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
@@ -1251,7 +1241,6 @@ function applyControlCamera() {
 }
 
 function cycleControlCamera(dir) {
-  if (camSwitchPending) return;
   const sources = getControlCameraSources();
   if (sources.length < 2) return;
   controlCamIndex = (controlCamIndex + dir + sources.length) % sources.length;
