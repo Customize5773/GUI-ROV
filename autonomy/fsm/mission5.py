@@ -2023,10 +2023,7 @@ class Mission5FSM:
         terima — pola yang sama dengan hook_vision.
         """
         det = self._qr_source()
-        if not isinstance(det, dict) or det.get('method') != 'yolo_qr':
-            return None
-        # Region QR ketemu tapi belum ter-decode: bukan payload, jangan servo.
-        return det if det.get('data') else None
+        return det if isinstance(det, dict) and det.get('method') == 'yolo_qr' else None
 
     def _fresh_payload(self, max_age=0.5):
         """latest_qr yang TERVALIDASI sebagai payload target (else None) — dipakai

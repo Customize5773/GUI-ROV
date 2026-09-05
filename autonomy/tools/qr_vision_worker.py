@@ -111,47 +111,43 @@ def main():
             else:
                 h, w = frame.shape[:2]
                 detection = detector.detect(frame)
-                if detection is None:
+                decoded = (_decode_tracked_roi(frame,
+                                               _quad_from_bbox(detection['bbox']),
+                                               full_cascade=True)
+                           if detection is not None else None)
+                if not decoded:
+                    # Region tanpa decode tidak dilaporkan: tanpa teks QR, FSM
+                    # tak boleh menggerakkan apa pun, jadi hasilnya sama saja
+                    # dengan tidak ada deteksi.
                     result = {'status': 'no_detection', 'timestamp': time.time()}
                 else:
-                    bbox = [float(v) for v in detection['bbox']]
-                    decoded = _decode_tracked_roi(frame, _quad_from_bbox(bbox),
-                                                  full_cascade=True)
+                    det = decoded[0]
+                    pts = np.asarray(det['pts'], dtype=np.float32).reshape(-1, 2)
+                    data = det['data']
+                    ordered = _order_quad_points(pts)
+                    pose = (estimate_pose_pts(ordered, args.qr_size, K, dist)
+                            if ordered is not None else None)
                     result = {
-                        # Region ketemu tapi QR belum terbaca: lazim saat QR
-                        # masih ~60 px. Dilaporkan untuk tuning/overlay; FSM
-                        # tidak menggerakkan apa pun tanpa 'data'.
-                        'status': 'qr_undecoded',
-                        'data': None, 'payload': None, 'wall': None,
-                        'center': None, 'area': None, 'pts': None, 'pose': None,
+                        'status': 'ok',
+                        'data': data,
+                        'payload': parse_payload(data),
+                        'wall': wall_from_qr(data),
+                        'center': [float(pts[:, 0].mean()), float(pts[:, 1].mean())],
+                        'area': float(cv2.contourArea(pts.astype(np.int32))),
+                        'pts': _jsonable(pts),
+                        'pose': _jsonable(pose) if pose else None,
                         'confidence': detection.get('confidence'),
-                        'bbox': bbox, 'frame_w': w, 'frame_h': h,
+                        'bbox': [float(v) for v in detection['bbox']],
+                        'frame_w': w, 'frame_h': h,
                         'timestamp': time.time(),
+                        'capture_ts': captured_at,
+                        # Umur frame saat hasil ini dibuat: antrean kamera +
+                        # inferensi + decode. Pi membuang yang basi sebelum
+                        # boleh menggerakkan ROV.
+                        'age_ms': round((time.time() - captured_at) * 1000.0, 1),
+                        'method': 'yolo_qr',
+                        'active_cam': 'BOTTOM',
                     }
-                    if decoded:
-                        det = decoded[0]
-                        pts = np.asarray(det['pts'], dtype=np.float32).reshape(-1, 2)
-                        data = det['data']
-                        ordered = _order_quad_points(pts)
-                        pose = (estimate_pose_pts(ordered, args.qr_size, K, dist)
-                                if ordered is not None else None)
-                        result.update({
-                            'status': 'ok',
-                            'data': data,
-                            'payload': parse_payload(data),
-                            'wall': wall_from_qr(data),
-                            'center': [float(pts[:, 0].mean()),
-                                       float(pts[:, 1].mean())],
-                            'area': float(cv2.contourArea(pts.astype(np.int32))),
-                            'pts': _jsonable(pts),
-                            'pose': _jsonable(pose) if pose else None,
-                        })
-                    result['capture_ts'] = captured_at
-                    # Umur frame saat hasil ini dibuat: antrean kamera + inferensi
-                    # + decode. Pi membuang yang basi sebelum boleh menggerakkan ROV.
-                    result['age_ms'] = round((time.time() - captured_at) * 1000.0, 1)
-                    result['method'] = 'yolo_qr'
-                    result['active_cam'] = 'BOTTOM'
 
             now = time.time()
             # Setiap decode sukses dikirim: servo docking butuh geometri tiap

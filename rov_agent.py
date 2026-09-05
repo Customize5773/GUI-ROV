@@ -697,45 +697,34 @@ def _validate_qr_vision(value):
     geometri (center/area/pose), sedangkan teksnya hanya melewati gate
     {mission, type} di _is_target_payload.
     """
-    if not isinstance(value, dict):
+    if not isinstance(value, dict) or value.get("method") != "yolo_qr":
         return None
     status = str(value.get("status", ""))[:40]
-    if value.get("method") != "yolo_qr":
-        return {"status": status} if status else None
+    data = value.get("data")
+    if not isinstance(data, str) or not data or len(data) > QR_DATA_MAX_LEN:
+        return None
     try:
         confidence = float(value["confidence"])
         frame_w = int(value["frame_w"])
         frame_h = int(value["frame_h"])
-    except (KeyError, TypeError, ValueError):
+        cx, cy = float(value["center"][0]), float(value["center"][1])
+        area = float(value["area"])
+    except (KeyError, TypeError, ValueError, IndexError):
         return None
     if (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
-            or frame_w <= 0 or frame_h <= 0):
+            or frame_w <= 0 or frame_h <= 0
+            or not math.isfinite(cx) or not math.isfinite(cy)
+            or not math.isfinite(area) or area <= 0
+            or not 0 <= cx <= frame_w or not 0 <= cy <= frame_h):
         return None
+    center = [cx, cy]
 
-    data = value.get("data")
-    if data is not None and (not isinstance(data, str) or len(data) > QR_DATA_MAX_LEN):
-        return None
     payload = value.get("payload")
     if payload is not None and not isinstance(payload, dict):
         return None
     wall = value.get("wall")
     if wall is not None and (not isinstance(wall, str) or wall not in ("A", "B", "C", "D")):
         return None
-
-    center = value.get("center")
-    area = value.get("area")
-    if data is not None:
-        # Ada teks QR berarti FSM boleh menggerakkan ROV dari deteksi ini —
-        # geometrinya wajib lengkap dan masuk akal, bukan sekadar ada.
-        try:
-            cx, cy = (float(center[0]), float(center[1]))
-            area = float(area)
-        except (TypeError, ValueError, IndexError):
-            return None
-        if (not math.isfinite(cx) or not math.isfinite(cy) or not math.isfinite(area)
-                or area <= 0 or not 0 <= cx <= frame_w or not 0 <= cy <= frame_h):
-            return None
-        center = [cx, cy]
 
     pose = value.get("pose")
     clean_pose = None
