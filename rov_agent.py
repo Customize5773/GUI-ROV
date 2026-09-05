@@ -269,6 +269,8 @@ marked_depth = None
 # bukan timestamp laptop, supaya clock drift/NTP tidak bisa meloloskan data basi.
 latest_hook_vision = None
 latest_hook_vision_received = 0.0
+latest_qr_vision = None
+latest_qr_vision_received = 0.0
 
 # Hitungan trial gagal Misi 2 (grab) & Misi 3 (hang), command `mission_counter`.
 # Skor 15/10/5 per Guidebook KKI 2026 §4.7.4 ditentukan dari jumlah trial —
@@ -680,6 +682,91 @@ def send_gcs_heartbeat():
 # =========================
 # Command handler dari laptop
 # =========================
+QR_DATA_MAX_LEN = 512
+# Umur maksimum hasil worker QR laptop sebelum FSM tak boleh memakainya.
+# Ukur age_ms di lapangan; naikkan dengan SADAR bila tether memang selambat itu.
+QR_VISION_MAX_AGE = 0.5
+
+
+def _validate_qr_vision(value):
+    """Validasi hasil worker QR laptop pada batas jaringan laptop -> Pi.
+
+    Teks QR datang dari luar dan berakhir di telemetry/GUI, jadi panjangnya
+    dibatasi dan isinya diperlakukan murni sebagai data — tidak pernah
+    dieksekusi atau dipakai membentuk perintah. Yang menggerakkan ROV adalah
+    geometri (center/area/pose), sedangkan teksnya hanya melewati gate
+    {mission, type} di _is_target_payload.
+    """
+    if not isinstance(value, dict):
+        return None
+    status = str(value.get("status", ""))[:40]
+    if value.get("method") != "yolo_qr":
+        return {"status": status} if status else None
+    try:
+        confidence = float(value["confidence"])
+        frame_w = int(value["frame_w"])
+        frame_h = int(value["frame_h"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
+            or frame_w <= 0 or frame_h <= 0):
+        return None
+
+    data = value.get("data")
+    if data is not None and (not isinstance(data, str) or len(data) > QR_DATA_MAX_LEN):
+        return None
+    payload = value.get("payload")
+    if payload is not None and not isinstance(payload, dict):
+        return None
+    wall = value.get("wall")
+    if wall is not None and (not isinstance(wall, str) or wall not in ("A", "B", "C", "D")):
+        return None
+
+    center = value.get("center")
+    area = value.get("area")
+    if data is not None:
+        # Ada teks QR berarti FSM boleh menggerakkan ROV dari deteksi ini —
+        # geometrinya wajib lengkap dan masuk akal, bukan sekadar ada.
+        try:
+            cx, cy = (float(center[0]), float(center[1]))
+            area = float(area)
+        except (TypeError, ValueError, IndexError):
+            return None
+        if (not math.isfinite(cx) or not math.isfinite(cy) or not math.isfinite(area)
+                or area <= 0 or not 0 <= cx <= frame_w or not 0 <= cy <= frame_h):
+            return None
+        center = [cx, cy]
+
+    pose = value.get("pose")
+    clean_pose = None
+    if pose is not None:
+        if not isinstance(pose, dict):
+            return None
+        clean_pose = {}
+        try:
+            for key in ("x", "y", "z", "dist", "yaw_deg"):
+                number = float(pose[key])
+                if not math.isfinite(number):
+                    return None
+                clean_pose[key] = number
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    return {
+        "status": status,
+        "method": "yolo_qr",
+        "data": data,
+        "payload": payload,
+        "wall": wall,
+        "center": center,
+        "area": area,
+        "confidence": confidence,
+        "frame_w": frame_w,
+        "frame_h": frame_h,
+        "pose": clean_pose,
+    }
+
+
 def _validate_hook_vision(value):
     """Validasi observasi YOLO pada batas jaringan laptop -> Pi."""
     if not isinstance(value, dict):
@@ -765,6 +852,8 @@ def command_listener():
     global heading_zero
     global latest_hook_vision
     global latest_hook_vision_received
+    global latest_qr_vision
+    global latest_qr_vision_received
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -788,7 +877,7 @@ def command_listener():
         # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console.
         # Gripper analog (nilai angka dari axis gamepad) juga bisa datang cepat;
         # open/close diskrit dari tombol/keyboard tetap di-log.
-        quiet = name in AXIS_RANGE or name == "hook_vision" or (
+        quiet = name in AXIS_RANGE or name in ("hook_vision", "qr_vision") or (
             name == "gripper" and isinstance(value, (int, float))
             and not isinstance(value, bool)
         )
@@ -879,6 +968,10 @@ def command_listener():
             elif name == "hook_vision":
                 latest_hook_vision = _validate_hook_vision(value)
                 latest_hook_vision_received = time.monotonic()
+
+            elif name == "qr_vision":
+                latest_qr_vision = _validate_qr_vision(value)
+                latest_qr_vision_received = time.monotonic()
 
             elif name == "pilot_mode":
 
@@ -1722,6 +1815,16 @@ def _fsm_read_state():
         dict(latest_hook_vision)
         if latest_hook_vision is not None
         and time.monotonic() - latest_hook_vision_received <= 1.0
+        else None
+    )
+    # Kesegaran QR dijaga di SINI memakai waktu terima Pi, bukan `timestamp`
+    # bawaan worker: jam laptop tidak tersinkron dengan Pi. Jendelanya sengaja
+    # 0,5 s — sama dengan kontrak _fresh_payload lama, karena hasil ini
+    # menggerakkan servo docking.
+    data["qr_vision"] = (
+        dict(latest_qr_vision)
+        if latest_qr_vision is not None
+        and time.monotonic() - latest_qr_vision_received <= QR_VISION_MAX_AGE
         else None
     )
     return data

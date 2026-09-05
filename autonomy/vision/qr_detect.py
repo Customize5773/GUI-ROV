@@ -229,6 +229,34 @@ def _order_quad_points(pts):
               np.argmax(sums), np.argmax(diffs)]]
 
 
+def estimate_pose_pts(img_pts, side, K, dist=None) -> Optional[dict]:
+    """Pose fiducial persegi via solvePnP dari 4 sudut TERURUT (TL,TR,BR,BL) + sisi (m).
+
+    Camera frame OpenCV: +x kanan, +y bawah, +z depan. → {x,y,z,dist (m), yaw_deg}.
+    Level modul supaya worker QR sisi-laptop memakai implementasi YANG SAMA
+    dengan VisionPipeline — pose ini menggerbang `square` di M5_QR_DOCK, jadi
+    dua salinan yang bisa menyimpang bukan risiko yang layak diambil.
+    """
+    if K is None or not CV2_OK:
+        return None
+    L = side
+    objp = np.array([[-L / 2, L / 2, 0], [L / 2, L / 2, 0],
+                     [L / 2, -L / 2, 0], [-L / 2, -L / 2, 0]], dtype=np.float32)
+    img = np.asarray(img_pts, dtype=np.float32).reshape(4, 2)
+    flags = getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', cv2.SOLVEPNP_ITERATIVE)
+    ok, rvec, tvec = cv2.solvePnP(objp, img, K, dist, flags=flags)
+    if not ok:
+        return None
+    tvec = np.asarray(tvec, dtype=float).ravel()   # (3,1) → (3,); aman di numpy 2.x
+    x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
+    R, _ = cv2.Rodrigues(rvec)
+    # yaw = skew fiducial thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.
+    yaw_deg = normalize_plane_yaw(
+        math.degrees(math.atan2(R[0, 2], R[2, 2])))
+    return {'x': x, 'y': y, 'z': z, 'dist': math.sqrt(x * x + y * y + z * z),
+            'yaw_deg': yaw_deg}
+
+
 def _decode_rectified(frame, gray):
     """Cari quad QR, luruskan dengan perspective warp, lalu decode ulang."""
     if not hasattr(cv2, 'QRCodeDetector'):
@@ -389,13 +417,18 @@ def decode_qr(frame, enhance=True):
     return []
 
 
-def _decode_tracked_roi(frame, pts):
+def _decode_tracked_roi(frame, pts, full_cascade=False):
     """Decode ulang area QR terakhir setelah decode penuh gagal.
 
     Payload yang diam sering tetap berada di area yang sama, sementara caustics
     membuat decoder global gagal secara selang-seling. Crop lokal memperbesar QR
     relatif terhadap background tanpa mengubah payload; titik dikembalikan ke
     koordinat frame asli.
+
+    `full_cascade` untuk pemanggil yang TIDAK punya percobaan frame-penuh
+    sesudah ini (worker YOLO QR: crop dari bbox adalah satu-satunya percobaan
+    decode). Di sana tier upscale 2x/4x justru inti manfaatnya, jadi ZXing 1x
+    saja terlalu lemah.
     """
     q = np.asarray(pts, dtype=np.float32).reshape(-1, 2) if pts is not None else None
     if q is None or len(q) < 4:
@@ -409,7 +442,9 @@ def _decode_tracked_roi(frame, pts):
     if xb - xa < 24 or yb - ya < 24:
         return []
     crop = frame[ya:yb, xa:xb]
-    if ZXING_OK:
+    if full_cascade:
+        out = decode_qr(crop, enhance=True)
+    elif ZXING_OK:
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
         # ROI adalah optimisasi, bukan jalur wajib. Bila ZXing cepat gagal pada
         # crop (mis. quiet zone ikut terpotong), segera biarkan caller mencoba
@@ -1181,26 +1216,9 @@ class VisionPipeline:
         """Pose fiducial persegi via solvePnP dari 4 sudut TERURUT (TL,TR,BR,BL) + sisi (m).
         Camera frame OpenCV: +x kanan, +y bawah, +z depan. → {x,y,z,dist (m), yaw_deg}.
         K/dist opsional (mode dual-camera, kalibrasi per-kamera) — default self._K/_dist."""
-        K = K if K is not None else self._K
-        dist = dist if dist is not None else self._dist
-        if K is None or not CV2_OK:
-            return None
-        L = side
-        objp = np.array([[-L / 2, L / 2, 0], [L / 2, L / 2, 0],
-                         [L / 2, -L / 2, 0], [-L / 2, -L / 2, 0]], dtype=np.float32)
-        img = np.asarray(img_pts, dtype=np.float32).reshape(4, 2)
-        flags = getattr(cv2, 'SOLVEPNP_IPPE_SQUARE', cv2.SOLVEPNP_ITERATIVE)
-        ok, rvec, tvec = cv2.solvePnP(objp, img, K, dist, flags=flags)
-        if not ok:
-            return None
-        tvec = np.asarray(tvec, dtype=float).ravel()   # (3,1) → (3,); aman di numpy 2.x
-        x, y, z = float(tvec[0]), float(tvec[1]), float(tvec[2])
-        R, _ = cv2.Rodrigues(rvec)
-        # yaw = skew fiducial thd sumbu kamera (utk squaring). Tanda perlu VERIFIKASI hardware.
-        yaw_deg = normalize_plane_yaw(
-            math.degrees(math.atan2(R[0, 2], R[2, 2])))
-        return {'x': x, 'y': y, 'z': z, 'dist': math.sqrt(x * x + y * y + z * z),
-                'yaw_deg': yaw_deg}
+        return estimate_pose_pts(img_pts, side,
+                                 K if K is not None else self._K,
+                                 dist if dist is not None else self._dist)
 
     def _dispatch(self, result: dict):
         # debug: deteksi terjadi tiap frame saat QR di FOV → hindari banjir log INFO

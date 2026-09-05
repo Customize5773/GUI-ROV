@@ -53,6 +53,19 @@ const HOOK_VISION_DEFAULT_URL = process.env.HOOK_CAMERA_URL || "http://192.168.2
    di CPU biarkan 10 supaya inferensi tidak saling menumpuk. */
 const HOOK_VISION_FPS = Number(process.env.HOOK_VISION_FPS) > 0
   ? String(Number(process.env.HOOK_VISION_FPS)) : "10";
+/* Worker QR: best_new.pt (detect-only) melokalisasi region QR di CAM BOTTOM,
+   crop ROI dari bbox itu, lalu decode DI DALAM crop. Terpisah dari worker hook
+   karena kameranya beda. Decode QR lokal di Pi tetap jalan sebagai fallback. */
+const QR_VISION_WORKER = path.join(AUTONOMY, "tools", "qr_vision_worker.py");
+const QR_VISION_MODEL = path.resolve(REPO_ROOT, process.env.QR_VISION_MODEL || path.join(AUTONOMY, "vision", "best_new.pt"));
+const QR_VISION_CALIB = path.resolve(REPO_ROOT, process.env.QR_VISION_CALIB || path.join(AUTONOMY, "vision", "calibration", "bottom.npz"));
+const QR_VISION_DEFAULT_URL = process.env.QR_CAMERA_URL || "http://192.168.2.2:8081/stream";
+/* 0.6 = puncak F1 report training best_new.pt. Air kolam menurunkan confidence,
+   jadi angka ini memang untuk dituning lewat .env tanpa menyentuh kode. */
+const QR_VISION_CONF = Number(process.env.QR_VISION_CONF) > 0
+  ? String(Number(process.env.QR_VISION_CONF)) : "0.6";
+const QR_VISION_FPS = Number(process.env.QR_VISION_FPS) > 0
+  ? String(Number(process.env.QR_VISION_FPS)) : "10";
 /* Pilih interpreter: utamakan venv repo (.venv) karena di situlah cv2 +
    ultralytics terpasang; kalau tidak ada, jatuh ke python sistem. */
 const VENV_PYTHON = path.join(REPO_ROOT, ".venv",
@@ -64,9 +77,13 @@ const DEFAULT_PYTHON = fs.existsSync(VENV_PYTHON)
 const AUTONOMOUS_LOG_DIR = path.join(AUTONOMY, "logs");
 fs.mkdirSync(AUTONOMOUS_LOG_DIR, { recursive: true });
 
-let hookVisionProcess = null;
-let hookVisionUrl = null;
-let latestHookVision = null;
+/* Kedua worker vision sisi-laptop memakai mesin yang sama (spawn, baca JSONL,
+   siarkan ke GUI, teruskan ke Pi lewat UDP). `channel` adalah nama pesan UDP
+   yang divalidasi rov_agent sebelum boleh memengaruhi perintah ROV. */
+const visionWorkers = {
+  hook: { tag: "CAM WALL (hook)", channel: "hook_vision", proc: null, url: null, latest: null },
+  qr: { tag: "CAM BOTTOM (QR)", channel: "qr_vision", proc: null, url: null, latest: null },
+};
 
 let lastControlMode = null;
 let autonomousLogTimer = null;
@@ -196,14 +213,14 @@ function isAllowedCamHost(host) {
   return a === 127 || a === 10 || (a === 192 && b === 168) || (a === 172 && b >= 16 && b <= 31);
 }
 
-function stopHookVision() {
-  if (hookVisionProcess) hookVisionProcess.kill("SIGTERM");
-  hookVisionProcess = null;
-  hookVisionUrl = null;
-  latestHookVision = null;
+function stopVisionWorker(worker) {
+  if (worker.proc) worker.proc.kill("SIGTERM");
+  worker.proc = null;
+  worker.url = null;
+  worker.latest = null;
 }
 
-function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
+function startVisionWorker(worker, cameraUrl, buildArgs) {
   if (SIM || !cameraUrl) return;
   let parsed;
   try { parsed = new URL(cameraUrl); } catch (err) {
@@ -214,67 +231,89 @@ function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
     console.warn(`[VISION] URL kamera ditolak: host ${parsed.hostname} bukan LAN yang diizinkan`);
     return;
   }
-  if (hookVisionProcess && hookVisionUrl === cameraUrl) return;
-  stopHookVision();
+  if (worker.proc && worker.url === cameraUrl) return;
+  stopVisionWorker(worker);
 
   const python = process.env.HOOK_VISION_PYTHON || DEFAULT_PYTHON;
   const envPath = [AUTONOMY, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
-  hookVisionUrl = cameraUrl;
-  const processRef = spawn(python, [HOOK_VISION_WORKER,
-    "--camera", cameraUrl, "--model", HOOK_VISION_MODEL,
-    "--map", HOOK_VISION_MAP, "--calib", HOOK_VISION_CALIB,
-    "--fps", HOOK_VISION_FPS,
-  ], {
+  worker.url = cameraUrl;
+  const processRef = spawn(python, buildArgs(cameraUrl), {
     cwd: REPO_ROOT,
     env: { ...process.env, PYTHONPATH: envPath },
     stdio: ["pipe", "pipe", "pipe"],
   });
-  hookVisionProcess = processRef;
-  console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl} | model: ${HOOK_VISION_MODEL} | ${HOOK_VISION_FPS} fps`);
+  worker.proc = processRef;
 
   const lines = readline.createInterface({ input: processRef.stdout });
   lines.on("line", (line) => {
-    if (hookVisionProcess !== processRef) return;
+    if (worker.proc !== processRef) return;
     try {
       const data = JSON.parse(line);
-      latestHookVision = data;
-      broadcast({ type: "hook_vision", data });
+      worker.latest = data;
+      broadcast({ type: worker.channel, data });
       if (data.status === "worker_error" || data.status === "camera_error") {
-        console.warn(`[VISION] ${data.status}: ${data.reason || "alasan tidak tersedia"}`);
+        console.warn(`[VISION] ${worker.tag} ${data.status}: ${data.reason || "alasan tidak tersedia"}`);
       }
       // YOLO berjalan di laptop, sedangkan FSM berjalan di Pi. Teruskan hasil
       // observasi saja; Pi tetap melakukan validasi umur/confidence sebelum
       // hasil ini boleh memengaruhi command ROV.
-      udp.send(Buffer.from(JSON.stringify({ name: "hook_vision", value: data })),
+      udp.send(Buffer.from(JSON.stringify({ name: worker.channel, value: data })),
         UDP_OUT, RPI_ADDR, (err) => {
-          if (err && DEBUG) console.warn(`[VISION] gagal kirim hasil YOLO ke ROV: ${err.message}`);
+          if (err && DEBUG) console.warn(`[VISION] gagal kirim hasil ${worker.channel} ke ROV: ${err.message}`);
         });
     } catch (err) {
       console.warn(`[VISION] output worker bukan JSON: ${err.message}`);
     }
   });
   processRef.stderr.on("data", (buf) => {
-    if (DEBUG) console.warn(`[VISION] ${String(buf).trim()}`);
+    if (DEBUG) console.warn(`[VISION] ${worker.tag} ${String(buf).trim()}`);
   });
   processRef.on("error", (err) => {
-    console.warn(`[VISION] worker gagal dijalankan: ${err.message}`);
+    console.warn(`[VISION] worker ${worker.tag} gagal dijalankan: ${err.message}`);
   });
   processRef.on("close", (code) => {
-    if (hookVisionProcess !== processRef) return;
-    console.warn(`[VISION] worker berhenti (code=${code})`);
-    hookVisionProcess = null;
+    if (worker.proc !== processRef) return;
+    console.warn(`[VISION] worker ${worker.tag} berhenti (code=${code})`);
+    worker.proc = null;
   });
 }
 
+function stopHookVision() { stopVisionWorker(visionWorkers.hook); }
+
+function startHookVision(cameraUrl = HOOK_VISION_DEFAULT_URL) {
+  startVisionWorker(visionWorkers.hook, cameraUrl, (url) => [HOOK_VISION_WORKER,
+    "--camera", url, "--model", HOOK_VISION_MODEL,
+    "--map", HOOK_VISION_MAP, "--calib", HOOK_VISION_CALIB,
+    "--fps", HOOK_VISION_FPS,
+  ]);
+  if (visionWorkers.hook.proc) {
+    console.log(`[VISION] YOLO laptop aktif untuk CAM WALL: ${cameraUrl} | model: ${HOOK_VISION_MODEL} | ${HOOK_VISION_FPS} fps`);
+  }
+}
+
+function stopQrVision() { stopVisionWorker(visionWorkers.qr); }
+
+function startQrVision(cameraUrl = QR_VISION_DEFAULT_URL) {
+  startVisionWorker(visionWorkers.qr, cameraUrl, (url) => [QR_VISION_WORKER,
+    "--camera", url, "--model", QR_VISION_MODEL,
+    "--calib", QR_VISION_CALIB,
+    "--conf", QR_VISION_CONF, "--fps", QR_VISION_FPS,
+  ]);
+  if (visionWorkers.qr.proc) {
+    console.log(`[VISION] YOLO QR laptop aktif untuk CAM BOTTOM: ${cameraUrl} | model: ${QR_VISION_MODEL} | conf ${QR_VISION_CONF} | ${QR_VISION_FPS} fps`);
+  }
+}
+
 function sendHookTelemetry(data) {
-  if (!hookVisionProcess || !hookVisionProcess.stdin.writable) return;
+  const proc = visionWorkers.hook.proc;
+  if (!proc || !proc.stdin.writable) return;
   try {
-    hookVisionProcess.stdin.write(JSON.stringify({ type: "telemetry", data }) + "\n");
+    proc.stdin.write(JSON.stringify({ type: "telemetry", data }) + "\n");
   } catch (_) {}
 }
 
 function attachHookVision(data) {
-  return { ...data, hook_xy: latestHookVision || data.hook_xy || null };
+  return { ...data, hook_xy: visionWorkers.hook.latest || data.hook_xy || null };
 }
 
 // Satu koneksi upstream per URL kamera fisik, di-share ke semua klien yang
@@ -954,6 +993,7 @@ udp.on("error", (e) => console.error("[UDP] error:", e.message));
 udp.bind(UDP_IN, "0.0.0.0", () => {
   console.log(`[UDP] mendengar telemetri di 0.0.0.0:${UDP_IN}`);
   startHookVision();
+  startQrVision();
 });
 
 /* ----------------------- simulator (opsional) ----------------------- */
@@ -1398,10 +1438,10 @@ async function start() {
     console.log(`  Raspi cmd : ${RPI_ADDR}:${UDP_OUT}   telemetry in: :${UDP_IN}`);
     console.log(`  Mode      : ${SIM ? "SIMULASI" : "LIVE"}`);
     console.log(`  Joy cfg   : ${joyConfig.configPath()}\n`);
-    if (!SIM) startHookVision();
+    if (!SIM) { startHookVision(); startQrVision(); }
   });
 }
 
-process.on("exit", stopHookVision);
+process.on("exit", () => { stopHookVision(); stopQrVision(); });
 
 start();

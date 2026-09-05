@@ -408,7 +408,7 @@ class Mission5FSM:
                  vision: VisionPipeline, runlog=None,
                  marked_heading=None, marked_depth=None, hook_map_file=None,
                  hook_calib_file=None, yolo_source=None, heading_hold=None,
-                 bench_qr_dock=False):
+                 bench_qr_dock=False, qr_source=None):
         # Tanda gantungan yang direkam operator lewat tombol MARK saat misi 3
         # (command `mark_hook` di rov_agent.py), yaitu SAAT payload benar-benar
         # tergantung di hook. Dipakai M5_REDIVE untuk kembali ke sana.
@@ -432,6 +432,11 @@ class Mission5FSM:
         self.vision = vision
         self.runlog = runlog        # tools.run_log.RunLogger | None (None = tak merekam)
         self._yolo_source = yolo_source or (lambda: None)
+        # Worker QR sisi-laptop (best_new.pt: bbox region QR -> crop -> decode).
+        # HANYA sumber tambahan: bila kosong/basi, _fresh_payload jatuh ke decode
+        # lokal Pi seperti sebelumnya, jadi putusnya link laptop tidak mematikan
+        # QR docking.
+        self._qr_source = qr_source or (lambda: None)
         self._sample_t = 0.0        # timestamp sample JSONL terakhir (throttle ~2 Hz)
         # Peredam approach — dipakai SEMUA instans servo di bawah agar satu tuning
         # berlaku seragam (IBVS & PBVS beda satuan error, jadi deadband-nya beda).
@@ -2009,10 +2014,31 @@ class Mission5FSM:
             return False
         return True
 
+    def _external_qr(self):
+        """Hasil worker QR laptop; umur/skema sudah divalidasi rov_agent.
+
+        Umur SENGAJA tidak dicek di sini: `timestamp` pada hasil ini berasal dari
+        jam laptop yang tidak tersinkron dengan Pi, jadi membandingkannya dengan
+        time.time() lokal akan salah. Kesegaran dijaga rov_agent memakai waktu
+        terima — pola yang sama dengan hook_vision.
+        """
+        det = self._qr_source()
+        if not isinstance(det, dict) or det.get('method') != 'yolo_qr':
+            return None
+        # Region QR ketemu tapi belum ter-decode: bukan payload, jangan servo.
+        return det if det.get('data') else None
+
     def _fresh_payload(self, max_age=0.5):
         """latest_qr yang TERVALIDASI sebagai payload target (else None) — dipakai
-        akuisisi & servo misi 5 agar tak mengunci QR/objek yang salah."""
-        det = self.vision.latest_qr(max_age=max_age)
+        akuisisi & servo misi 5 agar tak mengunci QR/objek yang salah.
+
+        Worker QR laptop (best_new.pt: bbox region -> crop -> decode) diutamakan.
+        Bila kosong, JATUH ke decode lokal Pi persis seperti sebelumnya — link
+        laptop putus tidak boleh mematikan QR docking.
+        """
+        det = self._external_qr()
+        if det is None:
+            det = self.vision.latest_qr(max_age=max_age)
         if det is not None and not self._is_target_payload(det):
             return None
         return det

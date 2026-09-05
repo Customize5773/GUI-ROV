@@ -503,6 +503,9 @@ class Mission5Runner:
                           heading_hold=heading_hold,
                           bench_qr_dock=self.bench_qr_dock,
                           yolo_source=lambda: self._telem.get().get("hook_vision"),
+                          # Worker QR laptop; VisionPipeline di atas TETAP jalan
+                          # sebagai fallback bila link laptop putus.
+                          qr_source=lambda: self._telem.get().get("qr_vision"),
                           hook_map_file=cfg.get("hook_map"),
                           hook_calib_file=(cfg.get("calib_wall")
                                            if cfg.get("hook_map") else None))
