@@ -23,7 +23,7 @@ import time
 #         pernah jalan — rute cadangan open-loop bila vision gagal di hari-H.
 # Pengecualian: bench_qr_dock=True melewati CASE sepenuhnya dan masuk
 # Mission5FSM langsung di M5_QR_DOCK (rig uji satu-state).
-CUSTOM_MOTION_ENABLED = True
+CUSTOM_MOTION_ENABLED = False
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
 # gripper: "open", "close", atau "hold". duration_ms harus > 0.
