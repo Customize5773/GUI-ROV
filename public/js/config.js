@@ -15,9 +15,43 @@ export const CONFIG = {
   // :8081 = BOTTOM (kamera kepala menghadap 45 derajat ke bawah)
   // rov_agent.py M5_BOTTOM_URL/M5_WALL_URL (dipakai QR docking + drift
   // sensing) ikut diperbaiki bersamaan — lihat rov_agent.py.
+  /* Diukur 6 Sep 2026 dgn autonomy/tools/probe_both_cams.py -- BUKAN tebakan.
+     Jalankan ulang tool itu setiap kali angka di bawah diubah.
+
+     PENYEBAB LAG YANG DITEMUKAN: kedua kamera sebelumnya jalan 1920x1080@30
+     (Pi-nya memang begitu; nilai di file ini dulu tertulis 1280x720 alias
+     BOHONG). Satu stream 1080p saja ~45 Mbps, sedangkan tether cuma 100 Mbps
+     (ethtool eth0 di Pi: 100Mb/s). Begitu dua-duanya hidup, kabel jenuh ->
+     satu stream KELAPARAN sampai timeout total, ping ke Pi kehilangan 20%
+     paket dan RTT p95 melonjak ke 1,2 detik. Itu sumber video patah-patah
+     sekaligus kontrol terasa telat.
+
+     Batasnya KABEL, bukan Pi: saat kedua stream jalan Pi hanya load 0,8 /
+     68 C / throttled=0x0, dan ustreamer melaporkan captured_fps penuh.
+
+     60 fps TIDAK MUNGKIN di hardware ini: kedua sensor cuma mengiklankan
+     30/25/20/15/10 fps pada SEMUA resolusi (v4l2-ctl --list-frameintervals);
+     minta -f 60 pun ustreamer tetap melaporkan captured_fps 20. Pada 720p
+     frame MJPEG 240-305 KB, jadi 2 kamera x 30 fps = ~130 Mbps, jauh di atas
+     tether. 15 fps dipilih karena itu titik tertinggi di mana KEDUANYA stabil
+     penuh dan packet loss tetap 0%.
+
+     Kamera mengeluarkan MJPG langsung dari hardware (encoder "HW", quality 0),
+     jadi ustreamer -q TIDAK berpengaruh sama sekali. Satu-satunya kenop
+     bitrate yang bekerja adalah RESOLUSI dan FPS.
+
+     Hasil terukur sekarang (720p keduanya, sesuai permintaan): BOTTOM 15,0 fps
+     dan WALL 15,0 fps BERSAMAAN, gap p50 63 ms, total 67 Mbps, packet loss 0%,
+     RTT rata-rata 8 ms (sebelumnya 20% loss / 22 ms / p95 1200 ms).
+     720p juga MENCOCOKI wall.npz & bottom.npz yang dikalibrasi di 1280x720,
+     jadi PBVS tetap aktif (lihat qr_detect._verify_calib_size).
+
+     Nilai sebenarnya hidup di Pi: /etc/systemd/system/ustreamer-cam2.service
+     (BOTTOM, port 8081) dan ustreamer-cam1.service (WALL, port 8080), flag
+     -r dan -f. Yang di sini penanda supaya GUI/dokumen tidak berbohong lagi. */
   CAMERAS: [
-    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream", resolution: "1280x720" },
-    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream", resolution: "1280x720" },
+    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream", resolution: "1280x720", fps: 15 },
+    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream", resolution: "1280x720", fps: 15 },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".

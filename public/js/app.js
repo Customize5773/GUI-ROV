@@ -1234,9 +1234,22 @@ function applyControlCamera() {
   CONFIG.CAMERA_URL = url;
   els.camTag.textContent = `CAM ${controlCamIndex + 1}`;
 
-  // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
-  const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
-  els.camImg.src = camProxy(bust);
+  /* Cache-bust HANYA saat URL-nya sama dengan yang sedang tampil (mis. re-apply
+     setelah stream mati) — di situ tanpa _t browser memakai koneksi lama yang
+     sudah basi dan gambar tak pernah kembali.
+
+     Saat BERGANTI kamera URL-nya sudah beda, jadi _t tak diperlukan; dan justru
+     merugikan: _t membuat setiap penekanan tombol switch jadi URL yang belum
+     pernah dilihat browser, sehingga koneksi MJPEG lama dibongkar dan handshake
+     baru dimulai dari nol — itulah jeda beberapa detik sebelum gambar muncul.
+     Tanpa _t, URL kamera tujuan biasanya masih hangat dan frame pertama datang
+     nyaris seketika. Server tetap berbagi satu koneksi upstream per kamera
+     (camStreamKey() memang membuang _t), jadi ini tak menambah beban Pi. */
+  const proxied = camProxy(url);
+  const sameAsShown = els.camImg.getAttribute("src") === proxied;
+  els.camImg.src = sameAsShown
+    ? camProxy(url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now())
+    : proxied;
   syncControlCameraButton();
 }
 
