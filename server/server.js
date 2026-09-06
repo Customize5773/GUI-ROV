@@ -237,7 +237,27 @@ function startVisionWorker(worker, cameraUrl, buildArgs) {
   const python = process.env.HOOK_VISION_PYTHON || DEFAULT_PYTHON;
   const envPath = [AUTONOMY, process.env.PYTHONPATH].filter(Boolean).join(path.delimiter);
   worker.url = cameraUrl;
-  const processRef = spawn(python, buildArgs(cameraUrl), {
+
+  /* Worker menonton lewat proxy /cam SERVER INI, bukan menembak Pi langsung.
+
+     Sebelumnya tiap worker membuka koneksi sendiri ke kamera, sementara browser
+     membuka koneksi KEDUA lewat /cam — jadi satu kamera fisik dikirim DUA KALI
+     melintasi tether yang sama. Terbukti 6 Sep 2026: dgn GUI terbuka, ustreamer
+     melaporkan `clients: 2 | fps: [15, 15]` untuk satu kamera. Di tether 100 Mbps
+     yang sudah jadi batas (lihat CONFIG.CAMERAS di public/js/config.js), itu
+     memboroskan separuh anggaran bandwidth tanpa menambah satu pun frame baru.
+
+     camStreams/camStreamKey() di bawah sudah dirancang persis untuk ini: banyak
+     penonton, SATU koneksi upstream per kamera. Worker cukup ikut menumpang.
+
+     Aman soal urutan boot: kedua worker dijalankan DI DALAM callback
+     httpServer.listen() (lihat bagian bawah file), jadi /cam pasti sudah siap.
+     Worker membaca ~10 fps dari stream 15 fps sehingga ia klien "lambat" dan
+     sebagian frame dilewati fanout — itu memang yang diinginkan, dan
+     camSplitter() menjamin yang dilewati selalu frame UTUH. */
+  const watchUrl = `http://127.0.0.1:${WS_PORT}/cam?url=${encodeURIComponent(cameraUrl)}`;
+
+  const processRef = spawn(python, buildArgs(watchUrl), {
     cwd: REPO_ROOT,
     env: { ...process.env, PYTHONPATH: envPath },
     stdio: ["pipe", "pipe", "pipe"],
@@ -327,7 +347,30 @@ const camStreams = new Map(); // key -> { clients: Set<res>, statusCode, headers
    terakhir yang utuh sampai frame berikutnya datang lengkap — itu terlihat persis
    seperti "video telat/nyangkut". camSplitter() di bawah memotong stream multipart
    di batas frame supaya yang dibuang selalu frame UTUH (newest-wins). */
-const CAM_BACKLOG_LIMIT = 1 << 20;   // 1 MB antre = klien ini ketinggalan, lewati frame
+/* Batas antrean per-klien = SEBERAPA BASI gambar yang boleh sampai ke pilot.
+
+   Dulu 1 MB. Frame 720p di wahana ini 180-300 KB, jadi 1 MB berarti sampai ~5
+   frame boleh mengantre sebelum ada yang dibuang -- pada 14 fps itu ~350 ms
+   gambar USANG yang tetap dikirim dan digambar browser. Untuk pilot itu persis
+   rasa "nge-lag": gerakan stik sudah berubah, layar masih menampilkan masa lalu.
+
+   Diukur 6 Sep 2026: proxy sendiri cuma menambah +32 ms (p50) selama klien
+   sanggup membaca. Antrean ini baru terisi saat browser TERTINGGAL -- dan
+   browser Control memang sibuk (dekode MJPEG 720p + scene 3D + scan QR). Jadi
+   yang perlu dibatasi bukan kecepatan proxy, melainkan seberapa jauh klien
+   lambat boleh ketinggalan.
+
+   384 KB = sedikit di atas SATU frame terbesar yang terukur (frame gelap WALL
+   sempat 305 KB; batas di bawah itu akan membuang tiap frame ke-2 tanpa perlu).
+   Klien yang sehat mengosongkan buffer di antara
+   frame sehingga tak pernah menyentuh batas ini (tidak ada fps yang hilang);
+   klien yang tertinggal melewati frame lama dan langsung melompat ke yang
+   terbaru -- newest-wins, sebagaimana mestinya umpan live.
+
+   Naikkan HANYA kalau frame kamera dibuat jauh lebih besar (mis. balik ke
+   1080p): batas ini harus tetap >= 1 frame, kalau tidak SETIAP frame terbuang
+   dan stream mati total. */
+const CAM_BACKLOG_LIMIT = 384 * 1024;
 
 
 /* Pemotong multipart/x-mixed-replace: menyerahkan satu part utuh

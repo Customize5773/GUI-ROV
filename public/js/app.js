@@ -236,7 +236,13 @@ function loadTheme() {
 }
 
 function setCamContrast(pct) {
-  els.camImg.style.filter = `contrast(${pct}%)`;
+  /* contrast(100%) tidak mengubah apa pun secara visual, TAPI tetap memaksa
+     browser menjalankan filter GPU atas setiap frame 720p yang masuk. Pada umpan
+     live 14 fps itu beban repaint yang percuma dan menambah rasa telat di layar
+     pilot. Nilai default memang 100, jadi mayoritas waktu filter ini murni rugi.
+     Kosongkan properti-nya saat 100 supaya jalur composite cepat browser dipakai;
+     slider tetap berfungsi penuh untuk nilai selain 100. */
+  els.camImg.style.filter = Number(pct) === 100 ? "" : `contrast(${pct}%)`;
   localStorage.setItem("hydroship-cam-contrast", pct);
 }
 
@@ -1234,22 +1240,9 @@ function applyControlCamera() {
   CONFIG.CAMERA_URL = url;
   els.camTag.textContent = `CAM ${controlCamIndex + 1}`;
 
-  /* Cache-bust HANYA saat URL-nya sama dengan yang sedang tampil (mis. re-apply
-     setelah stream mati) — di situ tanpa _t browser memakai koneksi lama yang
-     sudah basi dan gambar tak pernah kembali.
-
-     Saat BERGANTI kamera URL-nya sudah beda, jadi _t tak diperlukan; dan justru
-     merugikan: _t membuat setiap penekanan tombol switch jadi URL yang belum
-     pernah dilihat browser, sehingga koneksi MJPEG lama dibongkar dan handshake
-     baru dimulai dari nol — itulah jeda beberapa detik sebelum gambar muncul.
-     Tanpa _t, URL kamera tujuan biasanya masih hangat dan frame pertama datang
-     nyaris seketika. Server tetap berbagi satu koneksi upstream per kamera
-     (camStreamKey() memang membuang _t), jadi ini tak menambah beban Pi. */
-  const proxied = camProxy(url);
-  const sameAsShown = els.camImg.getAttribute("src") === proxied;
-  els.camImg.src = sameAsShown
-    ? camProxy(url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now())
-    : proxied;
+  // bust cache agar re-apply URL sama tetap memicu load ulang; ambil lewat proxy same-origin
+  const bust = url + (url.includes("?") ? "&" : "?") + "_t=" + Date.now();
+  els.camImg.src = camProxy(bust);
   syncControlCameraButton();
 }
 

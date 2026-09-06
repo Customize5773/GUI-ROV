@@ -32,6 +32,8 @@ const RENDER_CAP = 200;
 
 /* Batch param datang beruntun; menggambar ulang tabel tiap batch mubazir. */
 const RENDER_INTERVAL_MS = 250;
+/* Kadens saat param masih mengalir masuk — lihat _scheduleRender(). */
+const LOADING_RENDER_INTERVAL_MS = 1000;
 
 /* Param yang salah tulis di sini paling berpotensi membuat wahana tidak bisa
    arm, thruster berputar terbalik, atau failsafe mati. Teks konfirmasinya
@@ -152,6 +154,18 @@ export const vehiclePage = {
     // "GCS" harus menemukan FS_GCS_ENABLE).
     this.els.group.onchange = () => { this.group = this.els.group.value; this._render(); };
 
+    /* SATU listener untuk seluruh tabel (event delegation), dipasang sekali di
+       sini. Dulu _render() memasang ulang onclick ke SETIAP baris — 200 closure
+       baru tiap 250 ms selama ~975 param mengalir masuk. Terukur 6 Sep 2026:
+       halaman ini satu-satunya yang bikin long task (52 ms) dan melonjakkan
+       latensi kontrol dari 0,5 ms ke 39 ms; halaman lain 0 long task. Klik
+       diselesaikan lewat closest() sehingga tetap bekerja walau isi <td>
+       diganti saat mengedit. */
+    this.els.rows.addEventListener("click", (e) => {
+      const btn = e.target.closest("[data-edit]");
+      if (btn && this.els.rows.contains(btn)) this._beginEdit(btn.getAttribute("data-edit"));
+    });
+
     root.querySelector("#vehRefresh").onclick = () => this.requestAll();
     root.querySelector("#vehGoSetup").onclick = () => this._goto("setup");
     root.querySelector("#vehGoJoy").onclick = () => this._goto("joystick");
@@ -244,10 +258,22 @@ export const vehiclePage = {
 
   _scheduleRender() {
     if (this._renderTimer) return;
+    /* Selagi ~975 param MASIH MENGALIR, tabel dilambatkan ke 1 Hz.
+
+       _render() membangun ulang 200 baris x 4 sel lewat innerHTML; pada 250 ms
+       itu 4 pembongkaran DOM penuh per detik SELAMA seluruh durasi muat. Terukur
+       6 Sep 2026 (server/gui_page_latency.mjs): saat jendela ukur berimpit dgn
+       pemuatan param, halaman ini jatuh ke 17 fps dgn 13 long task (total 755 ms)
+       dan latensi kontrol 78 ms — sementara semua halaman lain 0 long task.
+
+       Baris yang masuk tetap terlihat bertambah, hanya 1x/detik alih-alih 4x;
+       progress bar (_renderProgress, murah) tetap ikut tiap render. Setelah
+       msg.done -> loading=false, kecepatan kembali ke RENDER_INTERVAL_MS supaya
+       interaksi (ketik di kotak cari, ganti grup) tetap terasa instan. */
     this._renderTimer = setTimeout(() => {
       this._renderTimer = null;
       if (this._dirty) { this._dirty = false; this._render(); }
-    }, RENDER_INTERVAL_MS);
+    }, this.loading ? LOADING_RENDER_INTERVAL_MS : RENDER_INTERVAL_MS);
   },
 
   _matching() {
@@ -290,10 +316,6 @@ export const vehiclePage = {
         <td>${badge}</td>
       </tr>`;
     }).join("");
-
-    for (const btn of this.els.rows.querySelectorAll("[data-edit]")) {
-      btn.onclick = () => this._beginEdit(btn.getAttribute("data-edit"));
-    }
 
     const hidden = names.length - shown.length;
     this.els.hint.textContent = hidden > 0

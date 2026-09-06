@@ -15,43 +15,40 @@ export const CONFIG = {
   // :8081 = BOTTOM (kamera kepala menghadap 45 derajat ke bawah)
   // rov_agent.py M5_BOTTOM_URL/M5_WALL_URL (dipakai QR docking + drift
   // sensing) ikut diperbaiki bersamaan — lihat rov_agent.py.
-  /* Diukur 6 Sep 2026 dgn autonomy/tools/probe_both_cams.py -- BUKAN tebakan.
-     Jalankan ulang tool itu setiap kali angka di bawah diubah.
+  /* Diukur 6 Sep 2026 dgn autonomy/tools/probe_both_cams.py + server/cam_visual_fps.mjs.
+     Jalankan ulang keduanya setiap kali angka di bawah diubah.
 
-     PENYEBAB LAG YANG DITEMUKAN: kedua kamera sebelumnya jalan 1920x1080@30
-     (Pi-nya memang begitu; nilai di file ini dulu tertulis 1280x720 alias
-     BOHONG). Satu stream 1080p saja ~45 Mbps, sedangkan tether cuma 100 Mbps
-     (ethtool eth0 di Pi: 100Mb/s). Begitu dua-duanya hidup, kabel jenuh ->
-     satu stream KELAPARAN sampai timeout total, ping ke Pi kehilangan 20%
-     paket dan RTT p95 melonjak ke 1,2 detik. Itu sumber video patah-patah
-     sekaligus kontrol terasa telat.
+     Batasnya BANDWIDTH TETHER 100 Mbps (ethtool eth0 di Pi), bukan CPU Pi
+     (load 0,8 / 68 C / throttled=0x0 saat kedua stream jalan penuh).
 
-     Batasnya KABEL, bukan Pi: saat kedua stream jalan Pi hanya load 0,8 /
-     68 C / throttled=0x0, dan ustreamer melaporkan captured_fps penuh.
+     Dua hal yang dulu membuatnya terasa berat, keduanya sudah diperbaiki:
+       1. Kamera jalan 1920x1080@30 (~45 Mbps/kamera) -> tether jenuh, satu
+          stream kelaparan sampai timeout, ping hilang 20% paket.
+       2. Tiap kamera ditarik DUA KALI: vision worker menembak Pi langsung
+          SEKALIGUS browser lewat proxy /cam (ustreamer: "clients: 2 |
+          fps: [15,15]"). Worker kini ikut menumpang proxy — lihat
+          startVisionWorker() di server/server.js. Itu memulihkan separuh
+          anggaran bandwidth, dan itulah yang membuat 25 fps jadi mungkin.
 
-     60 fps TIDAK MUNGKIN di hardware ini: kedua sensor cuma mengiklankan
-     30/25/20/15/10 fps pada SEMUA resolusi (v4l2-ctl --list-frameintervals);
-     minta -f 60 pun ustreamer tetap melaporkan captured_fps 20. Pada 720p
-     frame MJPEG 240-305 KB, jadi 2 kamera x 30 fps = ~130 Mbps, jauh di atas
-     tether. 15 fps dipilih karena itu titik tertinggi di mana KEDUANYA stabil
-     penuh dan packet loss tetap 0%.
+     Kenapa 25 dan bukan 30 (maks sensor): 30 fps SUDAH DIUJI dan GAGAL keras --
+     89,7 Mbps, packet loss 80%, RTT rata-rata 422 ms (maks 1045 ms). ROV
+     praktis tak terkendali; SSH ke Pi pun tak bisa masuk. Pada 25 fps: 82 Mbps,
+     packet loss 0%, RTT 10 ms. Jadi 25 adalah maksimum yang AMAN, bukan angka
+     selera. 60 fps mustahil: sensor cuma menawarkan 30/25/20/15/10 di semua
+     resolusi (v4l2-ctl --list-frameintervals).
 
-     Kamera mengeluarkan MJPG langsung dari hardware (encoder "HW", quality 0),
-     jadi ustreamer -q TIDAK berpengaruh sama sekali. Satu-satunya kenop
-     bitrate yang bekerja adalah RESOLUSI dan FPS.
-
-     Hasil terukur sekarang (720p keduanya, sesuai permintaan): BOTTOM 15,0 fps
-     dan WALL 15,0 fps BERSAMAAN, gap p50 63 ms, total 67 Mbps, packet loss 0%,
-     RTT rata-rata 8 ms (sebelumnya 20% loss / 22 ms / p95 1200 ms).
-     720p juga MENCOCOKI wall.npz & bottom.npz yang dikalibrasi di 1280x720,
-     jadi PBVS tetap aktif (lihat qr_detect._verify_calib_size).
+     Efek di layar pilot (server/cam_visual_fps.mjs, halaman Control):
+       15 fps -> jeda antar-gambar p50 67 ms
+       25 fps -> jeda antar-gambar p50 34 ms, visual 24,9 fps
+     720p juga MENCOCOKI wall.npz & bottom.npz (dikalibrasi 1280x720), jadi
+     PBVS tetap aktif — lihat qr_detect._verify_calib_size.
 
      Nilai sebenarnya hidup di Pi: /etc/systemd/system/ustreamer-cam2.service
      (BOTTOM, port 8081) dan ustreamer-cam1.service (WALL, port 8080), flag
-     -r dan -f. Yang di sini penanda supaya GUI/dokumen tidak berbohong lagi. */
+     -r dan -f. Yang di sini penanda agar GUI/dokumen tidak berbohong. */
   CAMERAS: [
-    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream", resolution: "1280x720", fps: 15 },
-    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream", resolution: "1280x720", fps: 15 },
+    { id: "CAM 1", role: "BOTTOM", url: "http://192.168.2.2:8081/stream", resolution: "1280x720", fps: 25 },
+    { id: "CAM 2", role: "WALL", url: "http://192.168.2.2:8080/stream", resolution: "1280x720", fps: 25 },
   ],
 
   // "models/rov.glb" or "models/rov.fbx".

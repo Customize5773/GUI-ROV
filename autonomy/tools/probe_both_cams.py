@@ -19,6 +19,19 @@ import threading
 import time
 import urllib.request
 
+# PENTING -- BACA SEBELUM PERCAYA ANGKANYA:
+# Default di bawah menembak Pi LANGSUNG, jadi probe ini menjadi KONSUMEN
+# TAMBAHAN di samping GUI dan kedua vision worker. Di tether yang sudah padat,
+# konsumen ke-4 itu sendiri bisa kelaparan dan melaporkan fps rendah PALSU
+# (terukur 6 Sep 2026: probe langsung bilang 2,9 fps sementara jalur GUI yang
+# sesungguhnya dapat 14,6 fps pada saat yang sama).
+#
+# Untuk mengukur APA YANG BENAR-BENAR DILIHAT GUI, arahkan ke proxy /cam
+# server -- di sana banyak penonton BERBAGI satu koneksi upstream
+# (camStreamKey() di server/server.js), persis seperti browser:
+#   python autonomy/tools/probe_both_cams.py #     --bottom "http://localhost:8080/cam?url=http%3A%2F%2F192.168.2.2%3A8081%2Fstream" #     --wall   "http://localhost:8080/cam?url=http%3A%2F%2F192.168.2.2%3A8080%2Fstream"
+# Pakai URL Pi langsung hanya saat GUI MATI, utk menguji kamera secara terpisah.
+
 BOTTOM = "http://192.168.2.2:8081/stream"
 WALL = "http://192.168.2.2:8080/stream"
 
