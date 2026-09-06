@@ -15,6 +15,7 @@ Jenis event:
     config     — sekali di awal: file config yang dipakai + konstanta hasil override
     transition — tiap perpindahan state FSM
     sample     — cuplikan periodik (~2 Hz) depth/heading/offset docking/QR
+    reject     — alasan gate vision menolak deteksi, SAAT BERUBAH saja (edge)
     end        — sekali di akhir: skor, state akhir, durasi, pemakaian fallback
 
 Pemakaian:

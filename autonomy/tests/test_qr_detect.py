@@ -243,14 +243,21 @@ def test_tracked_frame_miss_skips_expensive_decode_cascade(monkeypatch):
     vp._last_qr_pts = np.float32([[10, 10], [30, 10], [30, 30], [10, 30]])
     vp._last_qr_pts_time = qd.time.time()
     monkeypatch.setattr(qd, "ZXING_OK", True)
-    monkeypatch.setattr(qd, "_decode_tracked_roi", lambda frame, pts: [])
-    monkeypatch.setattr(qd, "_zxing_qr", lambda gray: [])
+    monkeypatch.setattr(qd, "_decode_tracked_roi",
+                        lambda frame, pts, full_cascade=False: [])
     monkeypatch.setattr(
         qd, "decode_qr",
-        lambda frame: pytest.fail("tracking miss tidak boleh masuk cascade mahal"),
+        lambda frame, enhance=True: pytest.fail(
+            "tracking miss tidak boleh masuk cascade frame-penuh"),
     )
+    # Fallback yang BOLEH dipakai: sapuan multi-proyeksi skala 1x saja
+    # (~0,02 s) — jangan sampai diam-diam naik ke skala besar.
+    seen = []
+    monkeypatch.setattr(qd, "_sweep_projections",
+                        lambda frame, scales=qd.SWEEP_SCALES: seen.append(scales) or [])
 
     assert vp._decode_qr_frame(np.zeros((80, 100, 3), np.uint8)) == []
+    assert seen == [(1.0,)]
 
 
 def test_decode_qr_no_qr_returns_empty():

@@ -452,3 +452,56 @@ def test_tile_zxing_returns_points_in_frame_coords():
     assert out and out[0]['data'] == PAYLOAD
     c = np.asarray(out[0]['pts']).reshape(-1, 2).mean(axis=0)
     assert abs(c[0] - (x0 + w / 2)) < 30 and abs(c[1] - (y0 + h / 2)) < 30
+
+
+# ── QR artistik / berwarna (desain bebas) ────────────────────────────────────
+# Kelas kegagalan yang berbeda dari kontras/jarak: pipeline lama meng-grayscale
+# dulu, jadi dua warna ber-luma sama (oranye vs biru) menghasilkan QR yang RATA
+# dan tak terbaca decoder mana pun — padahal kontras warnanya besar.
+
+def _colored_qr_scene(dark_bgr, light_bgr, size=200):
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    qr = _qr_img(PAYLOAD)                       # 0=gelap, 255=terang
+    img = np.zeros((*qr.shape, 3), np.uint8)
+    img[:] = light_bgr
+    img[qr < 128] = dark_bgr
+    q = cv2.resize(img, (size, size), interpolation=cv2.INTER_AREA)
+    scene = np.full((480, 640, 3), (210, 215, 205), np.uint8)
+    y, x = (480 - size) // 2, (640 - size) // 2
+    scene[y:y + size, x:x + size] = q
+    return scene
+
+
+@pytest.mark.parametrize("dark,light,label", [
+    ((200, 60, 20), (255, 255, 255), "biru di putih"),
+    ((255, 255, 255), (90, 30, 10), "putih di navy"),
+    ((140, 40, 120), (60, 200, 240), "ungu di kuning"),
+    ((40, 110, 190), (190, 110, 40), "iso-luma oranye/biru"),
+    ((60, 150, 60), (150, 60, 150), "iso-luma hijau/ungu"),
+])
+def test_decode_qr_reads_colored_designs(dark, light, label):
+    pytest.importorskip("zxingcpp")
+    from vision.qr_detect import decode_qr
+    out = decode_qr(_colored_qr_scene(dark, light))
+    assert out and out[0]['data'] == PAYLOAD, f"gagal pada desain: {label}"
+
+
+def test_projections_include_color_channels_only_when_colorful():
+    """Kanal chroma/saturasi hanya dibayar bila frame memang berwarna."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import _projections
+    gray_scene = cv2.cvtColor(cv2.cvtColor(_colored_qr_scene((0, 0, 0), (255, 255, 255)),
+                                           cv2.COLOR_BGR2GRAY), cv2.COLOR_GRAY2BGR)
+    assert len(_projections(gray_scene)) == 5
+    assert len(_projections(_colored_qr_scene((40, 110, 190), (190, 110, 40)))) == 7
+
+
+def test_iso_luma_qr_is_invisible_in_grayscale():
+    """Bukti kenapa proyeksi warna diperlukan: di luma, QR ini praktis rata."""
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    scene = _colored_qr_scene((40, 110, 190), (190, 110, 40))
+    g = cv2.cvtColor(scene, cv2.COLOR_BGR2GRAY)[140:340, 220:420]
+    assert np.ptp(g) < 60, "skenario uji salah — QR ini masih kontras di luma"

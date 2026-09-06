@@ -133,6 +133,11 @@ STRETCH_PCT  = (1.0, 99.0)  # persentil clip contrast-stretch (lihat _stretch)
 TILE_GRID    = (4, 3)     # kolom×baris ubin jenjang-9 (overlap 50%)
 TILE_UPSCALE = 3.0        # perbesaran per ubin sebelum ZXing
 TILE_MIN_PTP = 200        # jenjang-9 hanya utk frame miskin rentang dinamis
+SWEEP_SCALES = (1.0, 2.0, 3.0, 4.0)  # perbesaran pada sapuan multi-proyeksi
+CHROMA_MAX_SCALE = 2.0    # kanal warna tak diperbesar >2x: QR sejauh itu sudah
+                          # kehilangan tepi warnanya karena blur/haze, jadi 3-4x
+                          # cuma menambah ongkos (terukur: 0 kemenangan)
+CHROMA_MIN_PTP = 30       # kanal warna dilewati bila frame praktis tak berwarna
 # Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
 # + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
 # global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
@@ -195,6 +200,66 @@ def _tile_zxing(gray):
             if res:
                 for det in res:
                     det['pts'] = np.asarray(det['pts'], dtype=np.float32) + (x, y)
+                return res
+    return []
+
+
+def _projections(frame):
+    """Beberapa proyeksi 1-kanal dari satu frame BGR — untuk QR desain APA PUN.
+
+    Seluruh pipeline sebelumnya berasumsi QR = modul GELAP di latar TERANG pada
+    *luma*. Asumsi itu patah untuk QR artistik: dua warna bisa punya luma nyaris
+    sama (mis. oranye #BE6E28 vs biru #286EBE) sehingga setelah BGR2GRAY QR-nya
+    rata dan tak ada decoder yang bisa membacanya — padahal kontras warnanya
+    besar. Diukur pada bench QR artistik: gaya 'isoluma' hanya 44% terbaca
+    lewat luma.
+
+    Proyeksi diurut menurut hit-rate terukur di rekaman kolam KKI
+    (luma 25,4% > L 23,2% > G 21,0% > maxch/V 17,4% > minch 15,2%); union-nya
+    33,3%, jadi tiap kanal menyelamatkan frame yang lain gagal — bukan duplikat.
+
+      luma/L : kasus normal (cetak hitam-putih).
+      G      : bawah air kanal merah teratenuasi; hijau paling banyak sinyal.
+      maxch  : modul berwarna GELAP di latar putih → tetap gelap di max(B,G,R).
+      minch  : modul PUTIH di latar berwarna → tetap terang di min(B,G,R).
+      chroma : max-min = 'seberapa berwarna'. Ini yang membaca pasangan
+               iso-luma; digerbang CHROMA_MIN_PTP agar frame monokrom (di mana
+               chroma cuma noise) tidak membayar ongkosnya.
+      S      : saturasi — pasangan warna-vs-abu/putih yang lolos dari chroma.
+    """
+    if frame.ndim == 2:
+        return [frame]
+    out = [cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY),
+           cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)[:, :, 0],
+           frame[:, :, 1]]
+    mx = np.max(frame, axis=2)
+    mn = np.min(frame, axis=2)
+    out += [mx, mn]
+    chroma = cv2.subtract(mx, mn)
+    if int(np.ptp(chroma)) >= CHROMA_MIN_PTP:
+        out.append(chroma)
+        out.append(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)[:, :, 1])
+    return out
+
+
+def _sweep_projections(frame, scales=SWEEP_SCALES):
+    """ZXing pada tiap proyeksi (sudah di-stretch) × tiap skala, skala kecil dulu.
+
+    Skala dilooping di LUAR proyeksi: 1x pada semua kanal jauh lebih murah
+    daripada 3x pada satu kanal, jadi frame mudah tetap keluar cepat.
+    """
+    if not ZXING_OK:
+        return []
+    projs = _projections(frame)
+    n_mono = 5 if len(projs) > 5 else len(projs)   # sisanya = kanal warna
+    projs = [_stretch(g) for g in projs]
+    for scale in scales:
+        use = projs if scale <= CHROMA_MAX_SCALE else projs[:n_mono]
+        for g in use:
+            cand = g if scale == 1.0 else cv2.resize(
+                g, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            res = _zxing_qr(cand, scale)
+            if res:
                 return res
     return []
 
@@ -419,6 +484,13 @@ def decode_qr(frame, enhance=True):
             res = _zxing_qr(gray_st)
             if res:
                 return res
+        # Jenjang 1c: sapuan multi-proyeksi kanal × skala. Ini yang membuat QR
+        # artistik/berwarna terbaca dan sekaligus menaikkan hit-rate rekaman
+        # kolam — lihat _projections(). Ditaruh sebelum rantai pyzbar karena
+        # terukur lebih murah DAN lebih sering menang.
+        res = _sweep_projections(frame)
+        if res:
+            return res
     if PYZBAR_OK:
         res = _pyzbar_qr(frame, 1.0, gray_for_gate=gray_raw)
         if res or not enhance:
@@ -460,15 +532,13 @@ def decode_qr(frame, enhance=True):
     # tegak lurus ke payload sebelum visual servo align penuh — ini kelas kegagalan
     # yg berbeda dari kontras/riak yg fallback sebelumnya targetkan. Hanya
     # dijalankan setelah jalur cepat 1x dan seluruh preprocessing gagal.
+    # Jenjang 8: hanya varian UNSHARP yang tersisa — perbesaran polos 2x/4x sudah
+    # dikerjakan sapuan jenjang 1c, jadi mengulangnya di sini murni ongkos.
     if enhance and ZXING_OK:
         for candidate, scale in (
-                (cv2.resize(gray_st, None, fx=ZXING_SCALES[0], fy=ZXING_SCALES[0],
-                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[0]),
-                (cv2.resize(gray_st, None, fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
-                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1]),
                 (cv2.resize(_unsharp(gray_st), None,
                             fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
-                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1])):
+                            interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1]),):
             res = _zxing_qr(candidate, scale)
             if res:
                 return res
@@ -1073,14 +1143,20 @@ class VisionPipeline:
         if self._last_qr_pts is not None:
             if time.time() - self._last_qr_pts_time <= TRACK_MAX_AGE:
                 tracking = True
-                dets = _decode_tracked_roi(frame, self._last_qr_pts)
+                # Cascade penuh boleh di ROI: crop ~3x ukuran QR, jadi ongkosnya
+                # sepersekian frame penuh — justru di sinilah eskalasi berbayar.
+                dets = _decode_tracked_roi(frame, self._last_qr_pts,
+                                           full_cascade=True)
                 if dets:
                     return dets
             else:
                 self._last_qr_pts = None
-        if tracking and ZXING_OK:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
-            return _zxing_qr(gray)
+        if tracking:
+            # ROI gagal. Tetap TIDAK menjalankan cascade frame-penuh (memblokir
+            # loop servo ~0,7 s), tapi sapuan multi-proyeksi 1x seharga ~0,02 s
+            # — ongkos yang sama dengan _zxing_qr luma sebelumnya, hit-rate lebih
+            # tinggi karena tak mengasumsikan QR kontras di luma.
+            return _sweep_projections(frame, scales=(1.0,))
         return decode_qr(frame)
 
     def _detect_hook(self, frame, K):

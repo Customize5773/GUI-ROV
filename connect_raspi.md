@@ -20,9 +20,11 @@ rsync -av --include='*.py' --exclude='*' ./ hydroships@192.168.2.2:~/rov-agent/
 
 # 2) Folder autonomy/* -> diratakan (tanpa prefix "autonomy/")
 rsync -av --delete autonomy/fsm/    hydroships@192.168.2.2:~/rov-agent/fsm/
-# Bobot YOLO *.pt tetap di laptop; Pi tidak memuat Ultralytics/model.
+# Bobot *.onnx WAJIB ikut (Pi menjalankan YOLO sejak 7 Sep 2026); *.pt tetap
+# ditahan di laptop karena Pi tidak punya (dan tidak butuh) torch/Ultralytics.
 rsync -av --delete --exclude='*.pt' autonomy/vision/ hydroships@192.168.2.2:~/rov-agent/vision/
-rsync -av --delete --exclude='hook_vision_worker.py' autonomy/tools/ hydroships@192.168.2.2:~/rov-agent/tools/
+# hook_vision_worker.py TIDAK LAGI dikecualikan — ia sekarang berjalan DI PI.
+rsync -av --delete autonomy/tools/ hydroships@192.168.2.2:~/rov-agent/tools/
 rsync -av --delete autonomy/config/ hydroships@192.168.2.2:~/rov-agent/config/
 rsync -av --delete autonomy/control/ hydroships@192.168.2.2:~/rov-agent/control/
 
@@ -41,19 +43,216 @@ ssh hydroships@192.168.2.2 "sudo systemctl restart rov-agent"
 
 ## Pembagian Beban Vision
 
-- **Laptop:** `npm start` otomatis menyalakan `hook_vision_worker.py`, membuka
-  CAM WALL `http://192.168.2.2:8080/stream`, memuat `best_pose.pt`, lalu
-  menjalankan YOLOv8-Pose/keypoint dan lokalisasi hook.
-- **Raspberry Pi:** `rov_agent.py` hanya menerima JSON `hook_vision`, memvalidasi
-  bbox/confidence, dan membuang hasil yang berumur lebih dari 1 detik. Detektor
-  hook OpenCV lokal serta fallback wall-CNN juga dimatikan; Pi tidak memuat
-  model `.pt` atau paket Ultralytics. Decoder QR asli masih berjalan di Pi saat
-  Mission 5 aktif karena hasilnya dipakai langsung oleh FSM.
-- **Pixhawk/ArduSub:** tetap menangani mixing thruster, stabilisasi, PWM, dan
-  failsafe. Pemindahan vision tidak memindahkan kontrol hardware ke laptop.
+> **Berubah total 7 Sep 2026.** Sebelumnya YOLO berjalan di laptop dan hasilnya
+> dikirim ke Pi lewat tether. Sekarang **seluruh sistem YOLO ada di Pi**.
 
-Di laptop instal `autonomy/requirements-laptop.txt`. Di Pi instal
-`autonomy/requirements.txt`; jangan instal Ultralytics/Torch hanya untuk hook.
+- **Raspberry Pi:** menjalankan SEMUA inferensi. Dua worker systemd
+  (`rov-vision-hook`, `rov-vision-qr`) membaca kamera dari **localhost**
+  (uStreamer 8080/8081), menjalankan YOLOv8 lewat **cv2.dnn atas bobot `.onnx`**,
+  lalu mengirim hasil ke `rov_agent.py` via UDP `127.0.0.1:14550` memakai amplop
+  yang sama persis dengan yang dulu dikirim laptop. `rov_agent.py` tetap
+  memvalidasi bbox/confidence/umur seperti sebelumnya — tidak ada baris
+  validator yang berubah.
+- **Laptop:** TIDAK menjalankan YOLO sama sekali. Hanya menampilkan video
+  (proxy `/cam`) dan overlay bbox yang datang lewat telemetry (`hook_xy`).
+  Ultralytics/torch di laptop kini murni untuk **training, export `.onnx`, dan
+  test paritas** — bukan jalur runtime.
+- **Pixhawk/ArduSub:** tetap menangani mixing thruster, stabilisasi, PWM, dan
+  failsafe.
+
+**Pi TIDAK memerlukan torch maupun Ultralytics.** `opencv-contrib-python` yang
+sudah ada di `autonomy/requirements.txt` sudah cukup — `cv2.dnn` yang
+menjalankan `.onnx`. Jangan instal Ultralytics di Pi.
+
+### Kenapa dipindah
+
+Loop kontrol vision tidak lagi melintasi tether: `age_ms` tak terkena antrean
+jaringan, dan **QR docking tetap jalan meski kabel laptop tercabut**.
+
+### Anggaran CPU — ini yang menjaga gerak ROV tetap waras
+
+Pi 4 hanya punya 4 core, dan repo ini sudah pernah kena batunya: satu thread
+optical-flow saja memakan ~85% CPU dan mengganggu ALT_HOLD (lihat komentar di
+`autonomy/vision/optical_flow.py`). Karena itu isolasi core **bukan opsional**:
+
+| Unit | CPUAffinity | Alasan |
+|---|---|---|
+| `rov-agent` | `0 1` | MAVLink + FSM. Tidak boleh direbut YOLO, apa pun yang terjadi. |
+| `rov-vision-hook` | `2 3` | YOLO. Spike/thrashing di sini tak bisa menyentuh core 0-1. |
+| `rov-vision-qr` | `2 3` | idem |
+
+Lapis kedua: FSM menerbitkan `vision_want` (lihat `VISION_WANT` di
+`autonomy/fsm/mission5.py`) — daftar kamera yang benar-benar dibaca state saat
+ini. Worker yang tidak disebut **melewatkan inferensi**. Mis. di `M5_QR_DOCK`
+hanya worker QR yang bekerja. Fail-open: tanpa telemetri, kedua worker jalan.
+
+### Ekspor bobot (di LAPTOP, sekali tiap model baru)
+
+`imgsz` graf ONNX **bersifat tetap dan dipilih saat export** — bukan knob
+runtime. Tiap ukuran = satu berkas:
+
+```bash
+yolo export model=autonomy/vision/best_pose.pt format=onnx imgsz=640 simplify=True
+yolo export model=autonomy/vision/best_new.pt  format=onnx imgsz=640 simplify=True
+# Varian kecil (lebih cepat, akurasi turun) — rename setelah tiap export karena
+# Ultralytics selalu menulis ke nama yang sama:
+yolo export model=autonomy/vision/best_pose.pt format=onnx imgsz=320 simplify=True
+mv autonomy/vision/best_pose.onnx autonomy/vision/best_pose_320.onnx
+```
+
+Verifikasi WAJIB sebelum deploy — decode ONNX ditulis tangan, dan keypoint 2..5
+membidik servo docking:
+
+```bash
+pytest autonomy/tests/test_onnx_parity.py -v
+```
+
+### Hasil pengukuran di Pi ASLI (7 Sep 2026)
+
+Perangkat: **Raspberry Pi 4 Model B Rev 1.5, aarch64, 4 core, RAM 8 GB**,
+venv `~/rov-agent/.venv` (Python 3.12.3, cv2 5.0.0, numpy 2.5.2, **tanpa torch**).
+Diukur dengan `rov-agent` + kedua uStreamer AKTIF.
+
+| Model | imgsz | Bebas (4 core) | **Dipin core 2-3, 2 thread** | Ambang | Putusan |
+|---|---|---|---|---|---|
+| `best_pose.onnx` | 640 | 1,43 Hz | — | ≥2 Hz | **GAGAL** |
+| `best_pose_416.onnx` | 416 | 3,36 Hz | **2,67 Hz** | ≥2 Hz | lolos (tipis) |
+| `best_pose_320.onnx` | 320 | 5,87 Hz | **4,61 Hz** | ≥2 Hz | **LULUS** |
+| `best_new.onnx` | 640 | 1,42 Hz | — | ≥3 Hz | **GAGAL** |
+| `best_new_416.onnx` | 416 | 3,45 Hz | **~2,7 Hz** | ≥3 Hz | **GAGAL saat dipin** |
+| `best_new_320.onnx` | 320 | 5,86 Hz | **4,61 Hz** | ≥3 Hz | **LULUS** |
+
+**Pakai varian 320 untuk KEDUANYA.** 640 tidak pernah masuk akal (0,7 detik per
+frame). 416 terlihat lolos pada bench bebas tetapi **jatuh ke ~2,7 Hz begitu
+dipin ke 2 core** — di bawah gate QR 3 Hz. Hanya 320 yang lolos dengan margin
+pada konfigurasi produksi sebenarnya.
+
+> Soal akurasi 320: test paritas mencatat `best_new_320` tidak mendeteksi region
+> QR pada korpus `fixtures/real_hard_cases/`. Perlu diletakkan pada konteks —
+> keempat foto itu memang **gagal decode di SEMUA jenjang, termasuk zxing-cpp**
+> (lihat `tests/test_qr_real_hard_cases.py`), dan worker hanya melapor bila QR
+> benar-benar ter-decode. Jadi yang "hilang" di 320 adalah frame yang toh tidak
+> menghasilkan apa pun. **Tetap wajib divalidasi ulang di kolam dgn QR nyata.**
+
+Threading: `--cv-threads 2` (default) terukur sedikit LEBIH CEPAT daripada 4
+thread saat dipin ke 2 core (216,9 ms vs 224,8 ms) — 4 thread hanya berebut core
+yang sama, dan menambah panas percuma.
+
+### ⚠ BATAS TERMAL — kendala fisik yang sebenarnya
+
+Ini, bukan perebutan CPU, yang jadi risiko utama:
+
+| Kondisi | Suhu | `get_throttled` |
+|---|---|---|
+| Idle (rov-agent + 2 uStreamer) | **71,1 °C** | `0x0` |
+| Sesudah bench | 74,5 °C | `0xe0000` (pernah throttle) |
+| **Sesudah 45 detik inferensi 320 nonstop** | **81,3 °C** | **`0xe0008` — soft temp limit AKTIF** |
+
+**Throttling termal bersifat SoC-wide: penurunan clock ikut mengenai core 0-1.**
+Artinya `CPUAffinity` melindungi loop kontrol dari perebutan penjadwalan, TAPI
+TIDAK melindunginya dari panas. Satu trial Misi 5 berdurasi sampai 10 menit,
+sedangkan batas termal tersentuh dalam **45 detik**.
+
+Idle 71 °C juga sudah tinggi untuk Pi 4 — indikasi pendinginan pas-pasan.
+
+Yang harus dilakukan SEBELUM percaya jalur ini di kolam:
+
+1. **Pendinginan.** Heatsink + kontak termal ke bodi enclosure adalah perbaikan
+   paling langsung. Ukur ulang suhu di enclosure TERTUTUP, bukan di meja
+   terbuka — kondisi lapangan lebih buruk daripada pengukuran ini.
+2. **Turunkan duty cycle.** Gate `vision_want` sudah mematikan worker yang tidak
+   dipakai. Pertimbangkan `--fps 4` (bukan 10): 320 hanya sanggup 4,6 Hz, jadi
+   `--fps 10` berarti worker berjalan 100% duty tanpa menghasilkan frame
+   tambahan — hanya menambah panas.
+3. **Pantau `pi_temp` di telemetry GUI selama trial.** Sudah dikirim
+   `rov_agent.py`; jadikan itu angka yang diawasi pilot.
+
+### Pilih ukuran model (jalankan ulang bila model berubah)
+
+```bash
+# di Pi, dengan rov-agent AKTIF (angka di Pi menganggur menipu)
+python3 ~/rov-agent/tools/bench_pi_yolo.py
+```
+
+Ambang berasal dari gate kesegaran `rov_agent.py`: QR >= 3 Hz, hook >= 2 Hz.
+Bench berjalan TANPA pin core, jadi angkanya optimistis — verifikasi kandidat
+dengan `taskset -c 2,3` sebelum memutuskan.
+
+### Unit systemd worker vision
+
+> **Pakai interpreter venv, BUKAN `/usr/bin/python3`.** Audit Pi 7 Sep 2026:
+> python3 sistem TIDAK punya cv2/numpy/pymavlink sama sekali — semuanya ada di
+> `~/rov-agent/.venv` (Python 3.12.3, cv2 5.0.0), dan `rov-agent.service` yang
+> berjalan sekarang memang sudah memakai venv itu. Menunjuk `/usr/bin/python3`
+> membuat worker mati saat start dengan `ModuleNotFoundError: cv2`.
+
+
+```ini
+# /etc/systemd/system/rov-vision-hook.service
+[Unit]
+Description=ROV Vision Worker — CAM WALL (hook, YOLOv8-Pose)
+After=rov-agent.service ustreamer-cam1.service
+
+[Service]
+User=hydroships
+WorkingDirectory=/home/hydroships/rov-agent
+Environment=PYTHONPATH=/home/hydroships/rov-agent
+ExecStart=/home/hydroships/rov-agent/.venv/bin/python tools/hook_vision_worker.py --camera http://127.0.0.1:8080/stream --model vision/best_pose_320.onnx --map config/hook_map.pool.yaml --calib vision/calibration/wall.npz --emit-udp 127.0.0.1:14550 --telemetry-port 14556 --cv-threads 2 --fps 4
+CPUAffinity=2 3
+Nice=10
+CPUWeight=20
+MemoryMax=700M
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```ini
+# /etc/systemd/system/rov-vision-qr.service
+[Unit]
+Description=ROV Vision Worker — CAM BOTTOM (region QR + decode dalam crop)
+After=rov-agent.service ustreamer-cam2.service
+
+[Service]
+User=hydroships
+WorkingDirectory=/home/hydroships/rov-agent
+Environment=PYTHONPATH=/home/hydroships/rov-agent
+ExecStart=/home/hydroships/rov-agent/.venv/bin/python tools/qr_vision_worker.py --camera http://127.0.0.1:8081/stream --model vision/best_new_320.onnx --calib vision/calibration/bottom.npz --conf 0.6 --emit-udp 127.0.0.1:14550 --telemetry-port 14557 --cv-threads 2 --fps 4
+CPUAffinity=2 3
+Nice=10
+CPUWeight=20
+MemoryMax=700M
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Tambahkan ke `rov-agent.service` (bagian `[Service]`) supaya loop kontrol punya
+core sendiri:
+
+```ini
+CPUAffinity=0 1
+Nice=-5
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now rov-vision-hook rov-vision-qr
+sudo systemctl restart rov-agent
+journalctl -u rov-vision-qr -f          # hasil deteksi per baris JSON
+```
+
+Cek isolasi core benar-benar berlaku:
+
+```bash
+for u in rov-agent rov-vision-hook rov-vision-qr; do
+  echo -n "$u: "; taskset -cp $(systemctl show -p MainPID --value $u) 2>/dev/null
+done
+```
 
 ## Ambil Log Trial (Pi → Laptop)
 

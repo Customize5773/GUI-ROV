@@ -407,6 +407,11 @@
               <div class="readout"><span class="readout__k">OFFSET X</span><span class="readout__v" id="mission5OffX">—</span><span class="readout__u">px</span></div>
               <div class="readout"><span class="readout__k">OFFSET Y</span><span class="readout__v" id="mission5OffY">—</span><span class="readout__u">px</span></div>
               <div class="readout"><span class="readout__k">SISA WAKTU HEAT</span><span class="readout__v" id="mission5TimeLeft">—</span><span class="readout__u">s</span></div>
+              <!-- Kenapa FSM menolak deteksi + progres latch YOLO. Bbox di overlay
+                   TIDAK membuktikan FSM menerima deteksi (jalur gambarnya lain),
+                   jadi dua readout inilah satu-satunya kabar dari sisi Pi. -->
+              <div class="readout"><span class="readout__k">LOCK YOLO</span><span class="readout__v readout__v--text" id="mission5Lock">—</span></div>
+              <div class="readout"><span class="readout__k">GATE TOLAK</span><span class="readout__v readout__v--text" id="mission5Reject">—</span></div>
               <div class="axes" role="group" aria-label="Gripper">
                 <span class="axis__k">Gripper</span>
                 <button class="ctrl" id="btnGripOpen" title="Buka gripper (H)"><span class="ctrl__led"></span> OPEN</button>

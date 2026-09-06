@@ -463,26 +463,37 @@ class Mission5Runner:
             vision = VisionPipeline(
                 source=cfg.get("vision_source", "usb"),
                 device=cfg.get("vision_device", 0),
-                # YOLO hook tetap berasal dari CAM WALL lewat hook_vision laptop.
+                # YOLO hook tetap berasal dari CAM WALL lewat hook_vision.
                 # QR docking wajib memakai CAM BOTTOM yang menghadap gripper;
                 # sebelumnya bottom_url/calib_bottom sudah dikonfigurasi agent
                 # tetapi tidak pernah dipakai oleh bridge.
                 qr_url=cfg.get("bottom_url"),
-                # QR 4x4 cm (spesifikasi KKI, tak bisa diperbesar) hanya ~3 px
-                # per modul dari jarak kerja gripper — satu kamera sering gagal
-                # decode di air keruh. VisionPipeline menjalankan decode QR di
-                # KEDUA loop kamera, jadi CAM WALL dipasang sebagai sumber QR
-                # kedua: sudut & jaraknya berbeda, siapa pun yang lolos duluan
-                # dipakai. hook_enabled=False tetap berlaku — CAM WALL di sini
-                # murni pembaca QR, deteksi hook tetap milik worker YOLO laptop.
-                hook_url=cfg.get("wall_url"),
+                # CAM WALL TIDAK LAGI dipasang sebagai sumber QR kedua.
+                #
+                # Dulu dipakai karena QR 4x4 cm (spesifikasi KKI, tak bisa
+                # diperbesar) hanya ~3 px per modul dari jarak kerja gripper,
+                # jadi sudut kedua menaikkan peluang decode. Sejak 7 Sep 2026
+                # KEDUA model YOLO ikut berjalan di Pi 4 yang sama, dan decode
+                # QR full-frame 720p di loop kamera kedua adalah beban CPU
+                # terbesar yang bisa dilepas tanpa menyentuh jalur kontrol.
+                #
+                # Yang MENGGANTIKANNYA bukan ketiadaan: worker qr_vision
+                # sekarang melokalisasi region QR dgn YOLO lalu men-decode di
+                # dalam crop — jauh lebih kuat drpd pindai full-frame yang
+                # dihapus di sini. Decode klasik di CAM BOTTOM (qr_url di
+                # bawah) tetap jalan sbg fallback.
+                #
+                # REVERSIBEL: kalau uji kolam menunjukkan akuisisi QR turun dan
+                # bench Pi menyatakan CPU masih longgar, kembalikan satu baris
+                # ini -> hook_url=cfg.get("wall_url"),
+                hook_url=None,
                 calib_file=cfg.get("calib_bottom"),
                 qr_length=cfg.get("qr_size", mission5_module.QR_SIDE_M),
                 hook_hsv_range=mission5_module.HOOK_COLOR_HSV_RANGE,
                 hook_min_area=mission5_module.HOOK_MIN_AREA,
                 hook_pipe_diam=mission5_module.HOOK_PIPE_DIAM_M,
-                # Hook berasal dari worker YOLO di laptop melalui hook_vision.
-                # Jangan jalankan detector hook OpenCV/YOLO kedua di Raspberry Pi.
+                # Hook berasal dari worker hook_vision (proses terpisah di Pi).
+                # Jangan jalankan detector hook OpenCV/YOLO KEDUA di dalam proses ini.
                 hook_enabled=False,
                 # Jangan muat fallback CNN lain di Pi. Ini hanya tebakan sisi
                 # saat QR gagal, bukan hasil decode yang boleh dipercaya FSM.
@@ -510,8 +521,8 @@ class Mission5Runner:
                           heading_hold=heading_hold,
                           bench_qr_dock=self.bench_qr_dock,
                           yolo_source=lambda: self._telem.get().get("hook_vision"),
-                          # Worker QR laptop; VisionPipeline di atas TETAP jalan
-                          # sebagai fallback bila link laptop putus.
+                          # Worker qr_vision (kini di Pi, bukan laptop);
+                          # VisionPipeline di atas TETAP jalan sbg fallback.
                           qr_source=lambda: self._telem.get().get("qr_vision"),
                           hook_map_file=cfg.get("hook_map"),
                           hook_calib_file=(cfg.get("calib_wall")

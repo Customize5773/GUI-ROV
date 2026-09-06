@@ -154,3 +154,10 @@ logs
 .codex_b1080.jpg
 .codex_w1080.jpg
 .codex_wall_test.jpg
+
+# Varian ONNX berukuran kecil = artefak TURUNAN, regenerasi dalam hitungan detik
+# (lihat "Ekspor bobot" di connect_raspi.md). Pasangan 640 (best_pose.onnx /
+# best_new.onnx) TETAP dilacak: itu baseline test paritas dan yang dirujuk unit
+# systemd default di Pi.
+autonomy/vision/*_320.onnx
+autonomy/vision/*_416.onnx

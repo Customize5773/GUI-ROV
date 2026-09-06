@@ -144,24 +144,55 @@ class OnnxHookDetector:
         # sudah jalur tercepat yang tersedia tanpa menambah paket.
         self.net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
         self.net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-        # Jumlah keypoint DIBACA dari bentuk output, bukan di-hardcode 6: kolom
-        # YOLOv8 = 4 bbox + 1 skor kelas + 3 per keypoint. Model detect-only
-        # (best_new.pt) menghasilkan 5 -> nk 0 -> keypoints None, persis
-        # perilaku YOLOHookDetector untuk model yang sama.
-        channels = self._forward_shape()
+        # Ukuran masukan DIBACA DARI MODEL, bukan dipercaya dari argumen.
+        # Graf ONNX hasil export Ultralytics berukuran TETAP (mis. 640x640) dan
+        # menolak ukuran lain. Kalau imgsz yang diminta tak cocok, letterbox
+        # akan memakai skala yang salah dan SETIAP koordinat keluaran meleset —
+        # bbox masih terlihat masuk akal, tapi keypoint (yang membidik servo
+        # docking) tidak. Jadi ukuran yang benar dicari sekali di sini, dan
+        # argumen imgsz hanya jadi tebakan pertama.
+        self.imgsz, channels = self._probe_input_size(self.imgsz)
+        # Jumlah keypoint juga dibaca dari bentuk output, bukan di-hardcode 6:
+        # kolom YOLOv8 = 4 bbox + 1 skor kelas + 3 per keypoint. Model
+        # detect-only (best_new) menghasilkan 5 -> nk 0 -> keypoints None,
+        # persis perilaku YOLOHookDetector untuk model yang sama.
         self.n_keypoints = max(0, (channels - 5) // 3)
         log.info('[vision] ONNX hook aktif: %s (conf>=%.2f, imgsz=%d, keypoints=%d, underwater=%s)',
                  self.weights, self.conf, self.imgsz, self.n_keypoints,
                  self.enhance_underwater)
 
-    def _forward_shape(self):
+    def _forward_shape(self, imgsz):
         import cv2
         import numpy as np
         blob = cv2.dnn.blobFromImage(
-            np.zeros((self.imgsz, self.imgsz, 3), np.uint8), 1 / 255.0,
-            (self.imgsz, self.imgsz), swapRB=True, crop=False)
+            np.zeros((imgsz, imgsz, 3), np.uint8), 1 / 255.0,
+            (imgsz, imgsz), swapRB=True, crop=False)
         self.net.setInput(blob)
         return int(np.asarray(self.net.forward()).shape[1])
+
+    def _probe_input_size(self, preferred):
+        """Ukuran masukan yang BENAR-BENAR diterima graf ini, + jumlah kanal keluaran.
+
+        Coba ukuran yang diminta dulu; kalau graf menolaknya (export statis
+        berukuran lain), coba ukuran ekspor yang lazim. Gagal semua = bobot ini
+        memang tidak bisa dipakai, dan itu harus berisik SEKARANG (saat start)
+        bukan diam-diam jadi koordinat meleset di tengah misi.
+        """
+        candidates = [preferred] + [s for s in (640, 512, 416, 320, 256) if s != preferred]
+        errors = []
+        for imgsz in candidates:
+            try:
+                channels = self._forward_shape(imgsz)
+            except Exception as exc:            # cv2 melempar cv2.error, bukan turunan std
+                errors.append(f'{imgsz}: {str(exc).strip().splitlines()[-1][:80]}')
+                continue
+            if imgsz != preferred:
+                log.warning('[vision] %s berukuran tetap %dx%d, bukan %d yang diminta — '
+                            'memakai %d (ekspor ulang bila ingin ukuran lain)',
+                            self.weights, imgsz, imgsz, preferred, imgsz)
+            return imgsz, channels
+        raise RuntimeError(f'{self.weights}: tak ada ukuran masukan yang diterima graf ONNX ini. '
+                           + ' | '.join(errors))
 
     def _letterbox(self, frame):
         """Skala jaga-rasio + padding TERPUSAT, sama seperti preprocessing

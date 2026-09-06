@@ -46,6 +46,15 @@ from rov_pistat import read_cpu_percent, read_soc_temp
 LAPTOP_IP = os.environ.get("LAPTOP_IP", "192.168.2.1")   # IP laptop / ground station
 UDP_TELEM_PORT = int(os.environ.get("UDP_IN", "14551"))  # telemetry ke laptop (sesuai server.js)
 UDP_CMD_PORT = int(os.environ.get("UDP_OUT", "14550"))   # command dari laptop ke Pi
+# Sejak 7 Sep 2026 kedua worker YOLO berjalan DI PI (bukan lagi di laptop) sbg
+# systemd service. Mereka mengirim hasil ke UDP_CMD_PORT memakai amplop yang
+# sama dgn laptop dulu, dan MENERIMA telemetri di dua port lokal berikut —
+# menggantikan pipa stdin dari Node yang tidak ada lagi di Pi. Loopback saja;
+# tidak pernah menyeberang tether.
+VISION_TELEM_PORTS = {
+    "WALL": int(os.environ.get("HOOK_VISION_TELEM_PORT", "14556")),
+    "BOTTOM": int(os.environ.get("QR_VISION_TELEM_PORT", "14557")),
+}
 
 # Jembatan QGroundControl: semua MAVLink dari Pixhawk diteruskan ke QGC, dan
 # perintah dari QGC diteruskan balik ke Pixhawk. Terpisah dari port telemetri
@@ -637,11 +646,44 @@ def send_telemetry():
         state["pi_cpu"] = pct
         state["pi_temp"] = read_soc_temp()
 
+    # Overlay GUI: sejak YOLO pindah ke Pi, laptop tidak lagi punya hasil
+    # deteksi sendiri untuk disuntikkan (attachHookVision di server.js). Satu-
+    # satunya sumber sekarang adalah Pi, jadi ikutkan di telemetry. app.js
+    # membaca d.hook_xy.bbox apa adanya sehingga sisi browser tak berubah.
+    state["hook_xy"] = latest_hook_vision
+    state["qr_vision"] = latest_qr_vision
+
     send_to_gui(state)
+    send_to_vision_workers(state)
 
     if VERBOSE_TELEMETRY and now - _last_telem_log >= 1.0:
         _last_telem_log = now
         print(f"[SEND] -> {LAPTOP_IP}:{UDP_TELEM_PORT} | {state}")
+
+def send_to_vision_workers(state):
+    """Teruskan telemetri ke worker YOLO di Pi (loopback).
+
+    Dua alasan, keduanya wajib:
+      1. Lokalisasi hook butuh heading_compass. Di laptop itu datang lewat
+         stdin dari Node; di Pi tidak ada Node, jadi lewat sini.
+      2. Membawa mission5.vision_want, yaitu daftar kamera yang benar-benar
+         dibaca state FSM saat ini. Worker yang tidak disebut melewatkan
+         inferensi, sehingga di Pi 4 berinti empat tidak ada model yang
+         membakar CPU untuk hasil yang tak seorang pun baca.
+
+    Gagal-lunak: worker boleh saja belum jalan / sudah mati. Loop kontrol
+    TIDAK BOLEH terganggu hanya karena worker vision tidak ada.
+    """
+    try:
+        payload = json.dumps(state, allow_nan=False).encode("utf-8")
+    except (TypeError, ValueError):
+        return
+    for port in VISION_TELEM_PORTS.values():
+        try:
+            telem_sock.sendto(payload, ("127.0.0.1", port))
+        except OSError:
+            pass
+
 
 def normalize_heading(deg):
     if deg < 0:
@@ -688,6 +730,21 @@ QR_DATA_MAX_LEN = 512
 QR_VISION_MAX_AGE = 0.5
 
 
+# Alasan penolakan TERAKHIR per kanal vision. Ada semata supaya penolakan di
+# batas jaringan berhenti menjadi senyap: overlay bbox di GUI digambar dari
+# telemetry `hook_xy`, sedangkan yang menyetir FSM adalah hasil validator di
+# bawah — dua jalur berbeda, jadi bbox bisa terlihat rapi di layar sementara Pi
+# membuang record yang sama persis tanpa satu pun indikator.
+# Dibaca _fsm_read_state() -> telem['vision_reject'] -> telemetry_out.
+last_vision_reject = {"hook": None, "qr": None}
+
+
+def _reject_vision(channel, reason):
+    """Catat alasan lalu tolak. Selalu mengembalikan None (dipakai `return`)."""
+    last_vision_reject[channel] = reason
+    return None
+
+
 def _validate_qr_vision(value):
     """Validasi hasil worker QR laptop pada batas jaringan laptop -> Pi.
 
@@ -698,11 +755,11 @@ def _validate_qr_vision(value):
     {mission, type} di _is_target_payload.
     """
     if not isinstance(value, dict) or value.get("method") != "yolo_qr":
-        return None
+        return _reject_vision("qr", "bad_method")
     status = str(value.get("status", ""))[:40]
     data = value.get("data")
     if not isinstance(data, str) or not data or len(data) > QR_DATA_MAX_LEN:
-        return None
+        return _reject_vision("qr", "data_empty_or_too_long")
     try:
         confidence = float(value["confidence"])
         frame_w = int(value["frame_w"])
@@ -710,37 +767,42 @@ def _validate_qr_vision(value):
         cx, cy = float(value["center"][0]), float(value["center"][1])
         area = float(value["area"])
     except (KeyError, TypeError, ValueError, IndexError):
-        return None
-    if (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
-            or frame_w <= 0 or frame_h <= 0
-            or not math.isfinite(cx) or not math.isfinite(cy)
-            or not math.isfinite(area) or area <= 0
+        return _reject_vision("qr", "fields_malformed")
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return _reject_vision("qr", "conf_out_of_range:%s" % confidence)
+    if frame_w <= 0 or frame_h <= 0:
+        return _reject_vision("qr", "frame_invalid:%dx%d" % (frame_w, frame_h))
+    if not math.isfinite(area) or area <= 0:
+        return _reject_vision("qr", "area_invalid:%s" % area)
+    if (not math.isfinite(cx) or not math.isfinite(cy)
             or not 0 <= cx <= frame_w or not 0 <= cy <= frame_h):
-        return None
+        return _reject_vision("qr", "center_outside_frame:%s,%s@%dx%d"
+                              % (cx, cy, frame_w, frame_h))
     center = [cx, cy]
 
     payload = value.get("payload")
     if payload is not None and not isinstance(payload, dict):
-        return None
+        return _reject_vision("qr", "payload_malformed")
     wall = value.get("wall")
     if wall is not None and (not isinstance(wall, str) or wall not in ("A", "B", "C", "D")):
-        return None
+        return _reject_vision("qr", "wall_invalid")
 
     pose = value.get("pose")
     clean_pose = None
     if pose is not None:
         if not isinstance(pose, dict):
-            return None
+            return _reject_vision("qr", "pose_non_finite")
         clean_pose = {}
         try:
             for key in ("x", "y", "z", "dist", "yaw_deg"):
                 number = float(pose[key])
                 if not math.isfinite(number):
-                    return None
+                    return _reject_vision("qr", "pose_non_finite:%s" % key)
                 clean_pose[key] = number
         except (KeyError, TypeError, ValueError):
-            return None
+            return _reject_vision("qr", "pose_non_finite")
 
+    last_vision_reject["qr"] = None
     return {
         "status": status,
         "method": "yolo_qr",
@@ -759,24 +821,31 @@ def _validate_qr_vision(value):
 def _validate_hook_vision(value):
     """Validasi observasi YOLO pada batas jaringan laptop -> Pi."""
     if not isinstance(value, dict):
-        return None
+        return _reject_vision("hook", "bad_method")
     status = str(value.get("status", ""))[:40]
     if value.get("method") != "yolov8":
-        return {"status": status} if status else None
+        # status non-kosong = kabar sehat worker (mis. "cam_error"), bukan deteksi:
+        # bukan penolakan, jadi jangan mencemari alasan terakhir.
+        if status:
+            return {"status": status}
+        return _reject_vision("hook", "bad_method")
     try:
         confidence = float(value["confidence"])
         bbox = [float(v) for v in value["bbox"]]
         frame_w = int(value["frame_w"])
         frame_h = int(value["frame_h"])
     except (KeyError, TypeError, ValueError):
-        return None
-    if (not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0
-            or len(bbox) != 4 or not all(math.isfinite(v) for v in bbox)
+        return _reject_vision("hook", "bbox_malformed")
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return _reject_vision("hook", "conf_out_of_range:%s" % confidence)
+    if (len(bbox) != 4 or not all(math.isfinite(v) for v in bbox)
             or bbox[2] <= 0 or bbox[3] <= 0 or frame_w <= 0 or frame_h <= 0):
-        return None
+        return _reject_vision("hook", "bbox_malformed")
     x, y, w, h = bbox
     if x < 0 or y < 0 or x + w > frame_w + 1 or y + h > frame_h + 1:
-        return None
+        return _reject_vision(
+            "hook", "bbox_outside_frame:%.0f,%.0f,%.0fx%.0f@%dx%d"
+            % (x, y, w, h, frame_w, frame_h))
 
     # Pertahankan enam keypoint pose dari YOLO laptop sampai ke FSM Pi. Versi
     # sebelumnya membuang field ini sehingga align masih menebak tip dari bbox.
@@ -784,33 +853,54 @@ def _validate_hook_vision(value):
     clean_keypoints = None
     if keypoints is not None:
         if not isinstance(keypoints, (list, tuple)):
-            return None
+            return _reject_vision("hook", "keypoint_count_not_6")
         clean_keypoints = []
         seen_ids = set()
         try:
             for item in keypoints:
                 if not isinstance(item, dict):
-                    return None
+                    return _reject_vision("hook", "keypoint_count_not_6")
                 point_id = int(item["id"])
                 point_x = float(item["x"])
                 point_y = float(item["y"])
                 point_conf = item.get("confidence")
                 point_conf = None if point_conf is None else float(point_conf)
-                if (point_id not in range(6) or point_id in seen_ids
-                        or not math.isfinite(point_x) or not math.isfinite(point_y)
-                        or point_x < 0 or point_y < 0
-                        or point_x > frame_w or point_y > frame_h
-                        or (point_conf is not None and
-                            (not math.isfinite(point_conf) or not 0 <= point_conf <= 1))):
-                    return None
+                # Keypoint DI LUAR frame itu WAJAR, bukan tanda data rusak:
+                # batang hook memang menerus melewati tepi gambar justru saat
+                # ROV sudah dekat — kondisi paling penting untuk docking.
+                # Versi sebelumnya menuntut semua titik ada DI DALAM frame dan
+                # membuang SELURUH deteksi kalau satu titik meleset sedikit saja.
+                # Terukur 7 Sep 2026: keypoint 0 di y = -2,9 px membuang deteksi
+                # hook lengkap berisi ujung "J" (id 5) yang justru dipakai
+                # membidik servo.
+                #
+                # Yang tetap dijaga di sini cuma batas kewarasan angka (tolak
+                # NaN/inf/nilai absurd). Keputusan LAYAK-GERAK tetap di FSM:
+                # _hook_skeleton() di fsm/mission5.py sudah menuntut id 2..5
+                # lolos confidence DAN margin tepi sebelum ROV bergerak.
+                margin_x, margin_y = frame_w, frame_h
+                if point_id not in range(6):
+                    return _reject_vision("hook", "keypoint_id_invalid:%d" % point_id)
+                if point_id in seen_ids:
+                    return _reject_vision("hook", "keypoint_id_duplicate:%d" % point_id)
+                if (not math.isfinite(point_x) or not math.isfinite(point_y)
+                        or not -margin_x <= point_x <= frame_w + margin_x
+                        or not -margin_y <= point_y <= frame_h + margin_y):
+                    return _reject_vision(
+                        "hook", "keypoint_out_of_frame:%d@%.1f,%.1f"
+                        % (point_id, point_x, point_y))
+                if point_conf is not None and (not math.isfinite(point_conf)
+                                               or not 0 <= point_conf <= 1):
+                    return _reject_vision("hook", "keypoint_conf_invalid:%d" % point_id)
                 seen_ids.add(point_id)
                 clean_keypoints.append({"id": point_id, "x": point_x, "y": point_y,
                                         "confidence": point_conf})
         except (KeyError, TypeError, ValueError, OverflowError):
-            return None
+            return _reject_vision("hook", "keypoint_count_not_6")
         if seen_ids != set(range(6)):
-            return None
+            return _reject_vision("hook", "keypoint_count_not_6:%d" % len(seen_ids))
 
+    last_vision_reject["hook"] = None
     return {
         "status": status,
         "method": "yolov8",
@@ -1793,29 +1883,47 @@ def _fsm_emergency_stop():
     send_arm_disarm(False)
 
 
+HOOK_VISION_MAX_AGE = 1.0
+
+
 def _fsm_read_state():
     """Telemetri untuk FSM: dict `state` apa adanya.
 
     FSM membaca 'depth', 'heading', 'roll', 'pitch', dan 'control_mode' —
     semuanya sudah diisi loop utama & send_telemetry.
+
+    Juga mengisi `vision_reject`: gabungan alasan penolakan validator batas
+    jaringan DAN gate kesegaran di bawah. Tanpa field ini keduanya membuang
+    data tanpa jejak, dan satu-satunya gejala di GUI adalah ROV yang diam.
     """
     data = dict(state)
-    data["hook_vision"] = (
-        dict(latest_hook_vision)
-        if latest_hook_vision is not None
-        and time.monotonic() - latest_hook_vision_received <= 1.0
-        else None
-    )
+    now = time.monotonic()
+    reasons = []
+
+    hook_age = now - latest_hook_vision_received
+    hook_fresh = latest_hook_vision is not None and hook_age <= HOOK_VISION_MAX_AGE
+    data["hook_vision"] = dict(latest_hook_vision) if hook_fresh else None
+    if latest_hook_vision is not None and not hook_fresh:
+        reasons.append("stale_hook_%.2fs" % hook_age)
+
     # Kesegaran QR dijaga di SINI memakai waktu terima Pi, bukan `timestamp`
     # bawaan worker: jam laptop tidak tersinkron dengan Pi. Jendelanya sengaja
     # 0,5 s — sama dengan kontrak _fresh_payload lama, karena hasil ini
     # menggerakkan servo docking.
-    data["qr_vision"] = (
-        dict(latest_qr_vision)
-        if latest_qr_vision is not None
-        and time.monotonic() - latest_qr_vision_received <= QR_VISION_MAX_AGE
-        else None
-    )
+    qr_age = now - latest_qr_vision_received
+    qr_fresh = latest_qr_vision is not None and qr_age <= QR_VISION_MAX_AGE
+    data["qr_vision"] = dict(latest_qr_vision) if qr_fresh else None
+    if latest_qr_vision is not None and not qr_fresh:
+        reasons.append("stale_qr_%.2fs" % qr_age)
+
+    # Alasan validator ikut dilaporkan BERSAMA alasan basi, bukan saling
+    # menimpa: record yang ditolak validator membuat cache lama ikut menua,
+    # jadi kalau salah satu menang yang terlihat cuma gejala hilirnya.
+    for channel in ("hook", "qr"):
+        reason = last_vision_reject[channel]
+        if reason:
+            reasons.append("%s:%s" % (channel, reason))
+    data["vision_reject"] = ",".join(reasons) if reasons else None
     return data
 
 

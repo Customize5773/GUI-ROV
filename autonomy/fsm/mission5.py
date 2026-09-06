@@ -298,9 +298,50 @@ class State(Enum):
     M5_HOOK_ALIGN = auto()   # langkah 4: bidik kepala ujung hook "J"
     M5_QR_DOCK    = auto()   # langkah 5: QR — auto yaw + auto sway
     M5_GRIP       = auto()   # tutup gripper (lalu M5_UNHOOK: angkat + tarik)
+
     DONE          = auto()
     ABORT         = auto()
 
+
+# ── Kamera mana yang benar-benar dibaca tiap state ────────────────────────────
+# Raspberry Pi 4 hanya punya 4 core dan sejak 7 Sep 2026 KEDUA model YOLO ikut
+# jalan di sana. Menjalankan dua model serentak sepanjang misi membakar CPU
+# untuk hasil yang tidak ada satu pun state membacanya. Peta ini dikirim ke
+# worker lewat telemetry_out['vision_want'] supaya worker yang tidak diperlukan
+# melewatkan inferensi.
+#
+# Diturunkan dari pembacaan sumber yang SEBENARNYA (audit 7 Sep 2026), bukan dari
+# nama state:
+#   BOTTOM/QR  -> _fresh_payload()/_external_qr()
+#   WALL/hook  -> _yolo_source()/_fresh_external_yolo()
+# M5_YOLO_SEARCH memakai KEDUANYA — selain mencari hook ia juga mengintip QR
+# tiap tick sebagai jalan pintas ke M5_QR_DOCK (lihat _state_m5_yolo_search).
+# Menggating QR di state itu akan menghapus jalan pintas tsb dan memakan jatah
+# 10 menit; itulah kenapa peta ini eksplisit dan tidak disederhanakan jadi
+# "satu kamera per state".
+#
+# State yang TIDAK terdaftar (M5_GRIP, M5_UNHOOK, M5_ASCEND, ...) memang tak
+# membaca vision sama sekali -> kedua worker menganggur, tepat saat ROV sedang
+# mengangkat payload. GATE INI MURNI PENGHEMAT CPU: rov_agent tetap memvalidasi
+# umur/confidence, dan FSM tetap menoleransi sumber yang kosong.
+VISION_WANT = {
+    State.M5_REDIVE:      ('BOTTOM',),
+    State.M5_SEARCH:      ('BOTTOM',),
+    State.M5_DOCK:        ('BOTTOM',),
+    State.M5_ENGAGE:      ('BOTTOM',),
+    State.M5_QR_DOCK:     ('BOTTOM',),
+    State.M5_YOLO_SEARCH: ('BOTTOM', 'WALL'),
+    State.M5_HOOK_ALIGN:  ('WALL',),
+}
+
+
+def vision_want(state):
+    """Kamera yang perlu diinferensi pada `state`.
+
+    Default JATUH-AMAN: state tak dikenal -> kedua kamera. Salah menyalakan
+    hanya memboroskan CPU; salah mematikan membutakan FSM.
+    """
+    return list(VISION_WANT.get(state, ('BOTTOM', 'WALL')))
 
 # ── Telemetri dari rov_link (diterima via UDP) ────────────────────────────────
 class TelemetryReceiver:
@@ -446,6 +487,7 @@ class Mission5FSM:
         # QR docking.
         self._qr_source = qr_source or (lambda: None)
         self._sample_t = 0.0        # timestamp sample JSONL terakhir (throttle ~2 Hz)
+        self._last_reject = ''      # sentinel != None → alasan pertama selalu tercatat
         # Peredam approach — dipakai SEMUA instans servo di bawah agar satu tuning
         # berlaku seragam (IBVS & PBVS beda satuan error, jadi deadband-nya beda).
         _ibvs_smooth = dict(kd=SERVO_KD_IBVS, slew=SERVO_SLEW,
@@ -529,12 +571,24 @@ class Mission5FSM:
             # Hasil decode QR terakhir dari pipeline vision Python (bukan scan
             # jsQR di browser) — dibaca readout QR di halaman Control.
             'qr_data': None, 'qr_wall': None,
+            # Kamera yang perlu diinferensi worker YOLO Pi — lihat VISION_WANT.
+            'vision_want': None,
             # Sisa jam heat (detik) — lihat _time_left(). None sampai start().
             'time_left': None,
             # Lokalisasi hook (OPSIONAL, lihat --hook-map). None = fitur mati,
             # yang juga kondisi default. Field baru saja — rov_link.py menyalin
             # dict ini bulat-bulat, jadi field lama tak terganggu.
             'hook_loc': None,
+            # Kenapa gate vision menolak deteksi terakhir (None = tidak menolak).
+            # Diisi ulang TIAP TICK dari telem['vision_reject'] (alasan batas
+            # jaringan di rov_agent) lalu dipertajam gate FSM di bawah. Ini
+            # satu-satunya jalan melihat penolakan: overlay bbox di GUI datang
+            # dari jalur lain dan tetap tergambar walau FSM membuang record.
+            'reject_reason': None,
+            # Progres latch M5_YOLO_SEARCH, mis. "2/5". Latch butuh deteksi
+            # BERTURUT-TURUT, jadi angka yang mentok di tengah = deteksi
+            # berkedip, bukan deteksi tak ada.
+            'lock_progress': None,
         }
 
         # ── Lokalisasi hook (OPSIONAL) ────────────────────────────────────────
@@ -652,7 +706,13 @@ class Mission5FSM:
         while self._running and self._state not in (State.DONE, State.ABORT):
             telem = self.telem.get()
             self.telemetry_out['state'] = self._state.name
+            # Alasan penolakan batas jaringan jadi NILAI DASAR tick ini; gate
+            # FSM di bawah menimpanya dengan alasan yang lebih spesifik bila
+            # datanya sendiri lolos sampai sini.
+            self.telemetry_out['reject_reason'] = telem.get('vision_reject')
             self.telemetry_out['time_left'] = round(self._time_left(), 1)
+            # Dibaca rov_agent -> diteruskan ke worker YOLO di Pi (lihat VISION_WANT).
+            self.telemetry_out['vision_want'] = vision_want(self._state)
 
             # QR terakhir yang masih segar, independen dari state saat ini —
             # supaya operator lihat hasil scan pipeline vision di GUI kapan pun.
@@ -713,6 +773,7 @@ class Mission5FSM:
             elif self._state == State.M5_GRIP:
                 self._state_m5_grip(telem)
 
+            self._log_reject()
             self._log_sample(telem)
             time.sleep(0.1)
 
@@ -775,6 +836,21 @@ class Mission5FSM:
             log.debug("[FSM] hook localization error: %s", e)
             self.telemetry_out['hook_loc'] = None
 
+    def _log_reject(self):
+        """Tulis alasan penolakan ke run log SAAT BERUBAH saja.
+
+        _log_sample cuma 2 Hz sedangkan loop 10 Hz — alasan yang berkedip di
+        antara dua cuplikan hilang, padahal pola berkedip itulah yang dicari
+        (deteksi hidup-mati = latch tak pernah penuh). Edge-triggered, jadi
+        stall panjang tetap satu baris, bukan ribuan."""
+        reason = self.telemetry_out['reject_reason']
+        if reason == self._last_reject:
+            return
+        self._last_reject = reason
+        if self.runlog:
+            self.runlog.event('reject', state=self._state.name, reason=reason,
+                              lock_progress=self.telemetry_out['lock_progress'])
+
     def _log_sample(self, telem):
         """Cuplik telemetri ke run log ~2 Hz (loop jalan 10 Hz — merekam tiap iterasi
         bikin file 5x lebih besar tanpa menambah info; dinamika ROV jauh lebih lambat)."""
@@ -791,6 +867,8 @@ class Mission5FSM:
                           distance_z=t['distance_z'],
                           offset_x=t['offset_x'], offset_y=t['offset_y'],
                           qr_data=t['qr_data'], qr_wall=t['qr_wall'],
+                          reject_reason=t['reject_reason'],
+                          lock_progress=t['lock_progress'],
                           target_wall=self._target_wall)
 
     # ── State handlers ────────────────────────────────────────────────────────
@@ -1570,14 +1648,30 @@ class Mission5FSM:
         self.cmd.send(vert=ASCEND_SPEED, gripper=1)
         log.debug("[FSM] M5_ASCEND naik depth=%.2f", depth)
 
+    def _reject(self, reason):
+        """Catat alasan gate vision menolak lalu tolak (selalu None).
+
+        Satu-satunya cara membedakan "tidak ada deteksi" dari "ada deteksi tapi
+        dibuang": keduanya dulu sama-sama `return None` tanpa jejak apa pun."""
+        self.telemetry_out['reject_reason'] = reason
+        return None
+
     def _fresh_external_yolo(self, det=None):
         """Deteksi YOLO yang sudah divalidasi umur/skema oleh rov_agent."""
         if det is None:
             det = self._yolo_source()
+        if det is None:
+            return self._reject('yolo_absent')
         if not isinstance(det, dict) or det.get('method') != 'yolov8':
-            return None
-        if float(det.get('confidence', 0.0)) < LEFT_YOLO_CONF:
-            return None
+            return self._reject('yolo_bad_method:%s' % (
+                det.get('method') if isinstance(det, dict) else type(det).__name__))
+        confidence = float(det.get('confidence', 0.0))
+        if confidence < LEFT_YOLO_CONF:
+            # Angka NYATA, bukan sekadar flag: worker emit di --conf yang jauh
+            # lebih rendah dari gate ini, jadi selisihnya yang menentukan apakah
+            # masalahnya ambang tak sinkron atau model memang tak yakin.
+            return self._reject('conf_below_gate:%.2f<%.2f'
+                                % (confidence, LEFT_YOLO_CONF))
         return det
 
     @staticmethod
@@ -1651,8 +1745,7 @@ class Mission5FSM:
         self._left_visual_cmd.update(output)
         self.cmd.send(**output, gripper=gripper)
 
-    @staticmethod
-    def _hook_skeleton(det):
+    def _hook_skeleton(self, det):
         """Validasi bagian hook yang diperlukan untuk membidik tip J.
 
         Model tetap mengirim 0..2 untuk batang, 3..4 untuk kepala, dan 5 untuk
@@ -1663,47 +1756,54 @@ class Mission5FSM:
         """
         raw = det.get('keypoints')
         if not isinstance(raw, (list, tuple)):
-            return None
+            return self._reject('keypoints_absent')
         points = {}
         confidences = {}
         try:
             for item in raw:
                 if not isinstance(item, dict):
-                    return None
+                    return self._reject('keypoint_malformed')
                 index = int(item['id'])
                 if index not in range(6) or index in points:
-                    return None
+                    return self._reject('keypoint_id_bad:%d' % index)
                 confidence = item.get('confidence')
                 if confidence is None or not math.isfinite(float(confidence)):
-                    return None
+                    return self._reject('keypoint_conf_missing:%d' % index)
                 x, y = float(item['x']), float(item['y'])
                 frame_w, frame_h = float(det['frame_w']), float(det['frame_h'])
                 if (not math.isfinite(x) or not math.isfinite(y)
                         or x < 0 or y < 0 or x > frame_w or y > frame_h):
-                    return None
+                    return self._reject('keypoint_out_of_frame:%d@%.1f,%.1f'
+                                        % (index, x, y))
                 points[index] = (x, y)
                 confidences[index] = float(confidence)
         except (KeyError, TypeError, ValueError, OverflowError):
-            return None
+            return self._reject('keypoint_malformed')
         if set(points) != set(range(6)):
-            return None
+            return self._reject('keypoint_count_not_6:%d' % len(points))
 
         required = (2, 3, 4, 5)
         edge_margin = max(2.0, 0.005 * min(frame_w, frame_h))
         for index in required:
             x, y = points[index]
-            if (confidences[index] < HOOK_KEYPOINT_CONF
-                    or x < edge_margin or y < edge_margin
+            if confidences[index] < HOOK_KEYPOINT_CONF:
+                return self._reject('keypoint_conf_low:%d:%.2f<%.2f'
+                                    % (index, confidences[index], HOOK_KEYPOINT_CONF))
+            if (x < edge_margin or y < edge_margin
                     or x > frame_w - edge_margin or y > frame_h - edge_margin):
-                return None
+                return self._reject('keypoint_edge_margin:%d@%.1f,%.1f' % (index, x, y))
 
         # Tolak skeleton kolaps. Span 2→3 memvalidasi pangkal kepala, 3→4
         # lengkungan, dan 4→5 sambungan ke tip yang benar-benar dibidik.
         span_min = max(2.0, 0.003 * max(float(det['frame_w']), float(det['frame_h'])))
-        spans = (math.dist(points[2], points[3]),
-                 math.dist(points[3], points[4]),
-                 math.dist(points[4], points[5]))
-        return points if all(span >= span_min for span in spans) else None
+        spans = {'2-3': math.dist(points[2], points[3]),
+                 '3-4': math.dist(points[3], points[4]),
+                 '4-5': math.dist(points[4], points[5])}
+        for label, span in spans.items():
+            if span < span_min:
+                return self._reject('skeleton_collapsed:%s:%.1f<%.1f'
+                                    % (label, span, span_min))
+        return points
 
     def _hook_tip(self, det):
         """Piksel point 5: ujung J tempat payload tergantung."""
@@ -1712,6 +1812,13 @@ class Mission5FSM:
 
     def _state_m5_yolo_search(self, telem):
         """3. Maju sampai hasil YOLO laptop yang segar terdeteksi."""
+        # Progres latch dilaporkan TIAP TICK (nilai saat masuk tick), bukan cuma
+        # saat latch berhasil: angka yang naik lalu selalu jatuh lagi adalah
+        # tanda deteksi berkedip — LEFT_YOLO_LOCK_FRAMES menuntut hit BERTURUT-
+        # TURUT, jadi satu frame meleset me-reset hitungan. Tanpa laporan ini
+        # gejalanya identik dengan "tidak ada deteksi sama sekali".
+        self.telemetry_out['lock_progress'] = '%d/%d' % (self._left_search_hits,
+                                                         LEFT_YOLO_LOCK_FRAMES)
         if self._elapsed() > LEFT_TIMEOUT_YOLO:
             self._left_abort("YOLO tidak mendeteksi hook")
             return
@@ -2031,9 +2138,11 @@ class Mission5FSM:
             return True
         m = payload.get('mission')
         if m is not None and str(m) != str(PAYLOAD_MISSION):
+            self._reject('payload_mismatch:mission=%r!=%r' % (m, PAYLOAD_MISSION))
             return False
         ptype = payload.get('type')
         if ptype is not None and str(ptype).lower() != PAYLOAD_TYPE:
+            self._reject('payload_mismatch:type=%r!=%r' % (ptype, PAYLOAD_TYPE))
             return False
         return True
 

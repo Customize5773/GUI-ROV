@@ -1,21 +1,61 @@
 #!/usr/bin/env python3
 """Backend YOLO worker: CAM WALL -> hook_xy JSONL.
 
-The Node GUI server owns this process. The worker never sends vehicle commands;
-it only reads video/telemetry and writes vision results to stdout.
+Worker ini TIDAK PERNAH mengirim perintah wahana; ia hanya membaca
+video/telemetri lalu melaporkan hasil deteksi.
+
+Dua cara menjalankannya, kode yang sama persis:
+
+  * Raspberry Pi (produksi, sejak 7 Sep 2026) - systemd service. Kamera dibaca
+    dari localhost (uStreamer), hasil dikirim UDP ke rov_agent lewat
+    --emit-udp, telemetri masuk lewat --telemetry-port. Inferensi memakai
+    cv2.dnn atas bobot .onnx sehingga Pi TIDAK perlu torch sama sekali.
+  * Laptop (dev / uji darat) - di-spawn Node, kamera lewat proxy /cam, hasil ke
+    stdout, telemetri lewat stdin. Bobot .pt + Ultralytics.
+
+Backend dipilih otomatis dari ekstensi bobot (vision/yolo_hook.make_detector),
+jadi tidak ada cabang "kalau di Pi" di file ini.
 """
 
 import argparse
 import json
 import logging
+import socket
 import sys
 import threading
 import time
 
 
+# Diisi enable_udp_emit(); None = mode stdout saja (jalur laptop).
+_udp_sink = None
+
+
+def enable_udp_emit(target, channel):
+    """Kirim tiap record JUGA sebagai UDP JSON ke rov_agent.
+
+    Amplopnya {"name": channel, "value": record} - PERSIS yang dulu dikirim
+    server.js dari laptop, sehingga handler dan validator di rov_agent.py tidak
+    berubah sedikit pun ketika YOLO pindah ke Pi.
+    """
+    global _udp_sink
+    host, _, port = target.rpartition(':')
+    _udp_sink = (socket.socket(socket.AF_INET, socket.SOCK_DGRAM),
+                 (host or '127.0.0.1', int(port)), channel)
+
+
 def emit(value):
     sys.stdout.write(json.dumps(value, separators=(',', ':')) + '\n')
     sys.stdout.flush()
+    if _udp_sink is None:
+        return
+    sock, address, channel = _udp_sink
+    try:
+        sock.sendto(json.dumps({'name': channel, 'value': value},
+                               separators=(',', ':')).encode(), address)
+    except OSError as exc:
+        # Link lokal (127.0.0.1): satu paket gagal tidak boleh menghentikan loop
+        # deteksi, dan rov_agent sendiri sudah membuang observasi yang basi.
+        logging.getLogger(__name__).debug('emit UDP gagal: %s', exc)
 
 
 class LatestFrame:
@@ -122,7 +162,22 @@ class LatestFrame:
             pass
 
 
+def limit_cv_threads(count):
+    """Batasi thread OpenCV agar cocok dgn core yang di-pin systemd.
+
+    cv2.dnn default memakai SEMUA core. Kalau unit systemd sudah mengurung
+    worker di 2 core (CPUAffinity=2 3), 4 thread hanya saling berebut core yang
+    sama. Terukur di Pi 4 asli 7 Sep 2026, best_pose_320 @ core 2-3:
+    4 thread 224,8 ms vs 2 thread 216,9 ms — lebih sedikit thread justru lebih
+    cepat, sekaligus mengurangi panas.
+    """
+    if count and count > 0:
+        import cv2
+        cv2.setNumThreads(int(count))
+
+
 def telemetry_reader(state, lock):
+    """Telemetri lewat stdin - jalur laptop, dipipakan server.js."""
     for line in sys.stdin:
         try:
             msg = json.loads(line)
@@ -130,8 +185,59 @@ def telemetry_reader(state, lock):
                 continue
             with lock:
                 state.update(msg.get('data') or {})
+                state['_telemetry_ts'] = time.time()
         except (ValueError, TypeError):
             continue
+
+
+def telemetry_listener(state, lock, port):
+    """Telemetri lewat UDP localhost - jalur Pi.
+
+    Di Pi worker berjalan sebagai systemd service, jadi tidak ada Node yang
+    memipakan telemetri ke stdin-nya. Padahal lokalisasi hook BUTUH
+    heading_compass (lihat main()). rov_agent mengirim dict telemetri yang sama
+    ke port ini.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(('127.0.0.1', port))
+    while True:
+        try:
+            payload, _ = sock.recvfrom(65535)
+            msg = json.loads(payload)
+        except (OSError, ValueError):
+            continue
+        if not isinstance(msg, dict):
+            continue
+        with lock:
+            state.update(msg)
+            state['_telemetry_ts'] = time.time()
+
+
+def inference_wanted(state, lock, camera, grace=2.0):
+    """Boleh menjalankan inferensi untuk `camera` ('WALL' / 'BOTTOM')?
+
+    FSM menerbitkan daftar kamera yang benar-benar dibacanya (VISION_WANT di
+    fsm/mission5.py). Di Pi 4 berinti empat, melewatkan model yang hasilnya
+    tidak dibaca satu state pun adalah penghematan CPU terbesar yang bisa
+    diambil tanpa mengorbankan apa pun.
+
+    JATUH-AMAN di dua arah:
+      * telemetri basi/tidak ada (rov_agent mati, uji darat, FSM idle) -> JALAN,
+        supaya overlay GUI tetap hidup.
+      * FSM jalan tetapi tidak menyebut vision_want (versi lama) -> JALAN.
+    Worker hanya diam bila FSM secara AKTIF dan BARU menyatakan kamera ini
+    memang tidak dipakai.
+    """
+    with lock:
+        stamp = state.get('_telemetry_ts', 0.0)
+        mission = state.get('mission5') or {}
+    if time.time() - stamp > grace:
+        return True
+    want = mission.get('vision_want')
+    if not isinstance(want, (list, tuple)) or not want:
+        return True
+    return camera in want
 
 
 def main():
@@ -149,15 +255,31 @@ def main():
     ap.add_argument('--no-tta', action='store_true', help='matikan test-time augmentation')
     ap.add_argument('--no-underwater-enhance', action='store_true',
                     help='matikan CLAHE untuk haze underwater')
+    # --- jalur Raspberry Pi -------------------------------------------------
+    ap.add_argument('--emit-udp', default=None, metavar='HOST:PORT',
+                    help='kirim hasil sbg UDP JSON ke rov_agent (mis. 127.0.0.1:14550); '
+                         'tanpa ini hasil hanya ke stdout spt jalur laptop')
+    ap.add_argument('--telemetry-port', type=int, default=None,
+                    help='dengarkan telemetri rov_agent di port UDP ini, '
+                         'menggantikan stdin saat berjalan sbg service di Pi')
+    ap.add_argument('--cv-threads', type=int, default=2,
+                    help='jumlah thread OpenCV; samakan dgn jumlah core di '
+                         'CPUAffinity unit systemd (default 2)')
     args = ap.parse_args()
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                         format='[hook-worker] %(levelname)s %(message)s')
+    limit_cv_threads(args.cv_threads)
+    if args.emit_udp:
+        # Dipasang SEBELUM blok try di bawah supaya kegagalan memuat model pun
+        # tetap sampai ke rov_agent (status worker_error), bukan hanya ke
+        # journald. FSM memakai status itu untuk abort, lihat _yolo_source_failed.
+        enable_udp_emit(args.emit_udp, 'hook_vision')
     try:
         import cv2
         from vision.hook_localization import HookTracker, load_calibration, load_hook_map, localize_hook
-        from vision.yolo_hook import YOLOHookDetector
-        detector = YOLOHookDetector(
+        from vision.yolo_hook import make_detector
+        detector = make_detector(
             args.model, conf=args.conf, imgsz=args.imgsz,
             augment=not args.no_tta,
             enhance_underwater=not args.no_underwater_enhance,
@@ -186,7 +308,11 @@ def main():
         return 3
 
     state, lock = {}, threading.Lock()
-    threading.Thread(target=telemetry_reader, args=(state, lock), daemon=True).start()
+    if args.telemetry_port:
+        threading.Thread(target=telemetry_listener,
+                         args=(state, lock, args.telemetry_port), daemon=True).start()
+    else:
+        threading.Thread(target=telemetry_reader, args=(state, lock), daemon=True).start()
     camera = LatestFrame(cap, opener=_open_camera).start()
     tracker = HookTracker()
     interval = 1.0 / max(0.1, args.fps)
@@ -197,6 +323,12 @@ def main():
     try:
         while True:
             started = time.monotonic()
+            if not inference_wanted(state, lock, 'WALL'):
+                # State FSM saat ini tidak membaca CAM WALL. Jangan bakar CPU Pi
+                # untuk hasil yang tak seorang pun baca; JANGAN emit juga, biar
+                # gate kesegaran rov_agent membiarkannya kedaluwarsa dgn wajar.
+                time.sleep(interval)
+                continue
             last_seq, frame, captured_at, failed = camera.take(last_seq)
             if frame is None:
                 if not failed:

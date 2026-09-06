@@ -16,6 +16,7 @@ ground-truth simulator (posisi sejati, status hook) yang tak ada di hardware;
 file ini hanya memakai apa yang benar-benar terukur saat trial nyata.
 """
 import argparse
+import collections
 import glob
 import json
 import os
@@ -33,6 +34,7 @@ def summarize(path: str) -> dict:
     end = next((e for e in ev if e['kind'] == 'end'), {})
     trans = [e for e in ev if e['kind'] == 'transition']
     samp = [e for e in ev if e['kind'] == 'sample']
+    rej = [e for e in ev if e['kind'] == 'reject']
 
     s = {
         'file': os.path.basename(path),
@@ -95,6 +97,30 @@ def summarize(path: str) -> dict:
         if vals:
             s['dock_konvergensi'] = vals
             s['dock_keluar_ke'] = next((e.get('to') for e in trans if e.get('frm') == 'M5_DOCK'), None)
+
+    # ── Kenapa FSM menolak deteksi ───────────────────────────────────────────
+    # Event `reject` edge-triggered, jadi yang dihitung adalah LAMA BERTAHAN tiap
+    # alasan, bukan berapa kali muncul: satu alasan yang bertahan 90 detik jauh
+    # lebih penting daripada sepuluh alasan yang berkedip sedetik.
+    if rej:
+        t_end = end.get('durasi_s') or (samp[-1]['t'] if samp else rej[-1]['t'])
+        lama = collections.Counter()
+        for e, nxt in zip(rej, rej[1:] + [{'t': t_end}]):
+            if e.get('reason'):
+                # Keluarga alasan, tanpa angka di belakang ':' pertama —
+                # "conf_below_gate:0.28<0.35" dan "…:0.31<0.35" satu penyebab.
+                lama[str(e['reason']).split(':')[0]] += max(0.0, nxt['t'] - e['t'])
+        if lama:
+            s['reject_lama_s'] = {k: round(v, 1) for k, v in lama.most_common()}
+            s['reject_dominan'] = lama.most_common(1)[0][0]
+            s['reject_contoh'] = next(e['reason'] for e in rej
+                                      if str(e.get('reason', '')).split(':')[0]
+                                      == s['reject_dominan'])
+        locks = [e['lock_progress'] for e in rej if e.get('lock_progress')]
+        if locks:
+            # Pembilang tertinggi yang pernah dicapai latch. Mentok di bawah
+            # penyebut = deteksi berkedip, bukan deteksi tak ada.
+            s['lock_maks'] = max(locks, key=lambda v: int(str(v).split('/')[0]))
     return s
 
 
@@ -128,13 +154,22 @@ def print_detail(s: dict):
         v = s['dock_konvergensi']
         print(f"  Konvergensi dock ({DOCK_TAIL_S}s terakhir M5_DOCK → {s['dock_keluar_ke']}): "
               + "  ".join(f"{k}={val}" for k, val in v.items()))
+    if 'reject_dominan' in s:
+        print(f"\n  Gate vision menolak (total detik per penyebab):")
+        for reason, detik in s['reject_lama_s'].items():
+            tanda = " ←DOMINAN" if reason == s['reject_dominan'] else ""
+            print(f"    {detik:7.1f}s  {reason}{tanda}")
+        print(f"    contoh alasan lengkap: {s['reject_contoh']}")
+    if 'lock_maks' in s:
+        print(f"  Latch YOLO tertinggi : {s['lock_maks']}")
     for k, label in (('hang_used_fallback', 'HANG'), ('dock_used_fallback', 'DOCK')):
         if s.get(k):
             print(f"  ⚠ {label} jatuh ke jalur fallback timed (visual gagal)")
 
 
 def print_table(rows: list):
-    hdr = f"{'run':<28} {'akhir':<12} {'skor':>5} {'durasi':>7} {'QR%':>6} {'drop':>6}  fallback"
+    hdr = (f"{'run':<28} {'akhir':<12} {'skor':>5} {'durasi':>7} {'QR%':>6} "
+           f"{'drop':>6} {'lock':>6}  {'tolak-dominan':<24} fallback")
     print(hdr)
     print("-" * len(hdr))
     for s in rows:
@@ -142,7 +177,8 @@ def print_table(rows: list):
                                      ('dock_used_fallback', 'dock')) if s.get(k)) or "-"
         print(f"{s['file']:<28} {str(s['state_akhir']):<12} "
               f"{s['skor'].get('total', '-'):>5} {str(s['durasi_s']):>7} "
-              f"{s.get('qr_rate_pct', '-'):>6} {s.get('qr_dropout_max_s', '-'):>6}  {fb}")
+              f"{s.get('qr_rate_pct', '-'):>6} {s.get('qr_dropout_max_s', '-'):>6} "
+              f"{s.get('lock_maks', '-'):>6}  {s.get('reject_dominan', '-'):<24} {fb}")
     print(f"\n{len(rows)} run. Kaitkan perubahan skor ke nilai config tiap run "
           f"(`--json` menampilkan `nilai_config`).")
 

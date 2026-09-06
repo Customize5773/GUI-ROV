@@ -56,6 +56,7 @@ const els = {
   mission5State: $("mission5State"), mission5Cam: $("mission5Cam"),
   mission5Z: $("mission5Z"), mission5OffX: $("mission5OffX"), mission5OffY: $("mission5OffY"),
   mission5TimeLeft: $("mission5TimeLeft"),
+  mission5Lock: $("mission5Lock"), mission5Reject: $("mission5Reject"),
   m2Fails: $("m2Fails"), m2Score: $("m2Score"), m3Fails: $("m3Fails"), m3Score: $("m3Score"),
   runLastFile: $("runLastFile"), runLastResult: $("runLastResult"),
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
@@ -618,6 +619,17 @@ function drawHookBbox(m5) {
   }
 }
 
+/* Dua readout diagnostik gate vision. Panjang, jadi teks penuhnya ditaruh di
+   title supaya baris panel tidak melar saat alasannya membawa angka. */
+function setM5Gate(lock, reject) {
+  if (!els.mission5Lock) return;
+  els.mission5Lock.textContent = lock || "—";
+  els.mission5Lock.title = lock || "";
+  els.mission5Reject.textContent = reject ? String(reject).slice(0, 28) : "—";
+  els.mission5Reject.title = reject || "";
+  els.mission5Reject.className = "readout__v readout__v--text" + (reject ? " is-fault" : "");
+}
+
 /* panel Mission 5 (docking/unhook) — m5 = {state, active_cam, distance_z, offset_x, offset_y} */
 function applyMission5(m5) {
   setPyQr(m5 && m5.qr_data, m5 && m5.qr_wall);
@@ -634,6 +646,7 @@ function applyMission5(m5) {
     els.mission5OffY.textContent = "—";
     els.mission5TimeLeft.textContent = "—";
     els.mission5TimeLeft.className = "readout__v";
+    setM5Gate(null, null);
     drawHookBbox(null);
     return;
   }
@@ -652,6 +665,7 @@ function applyMission5(m5) {
   const tLeft = m5.time_left;
   els.mission5TimeLeft.textContent = tLeft == null ? "—" : Math.round(tLeft);
   els.mission5TimeLeft.className = "readout__v" + (tLeft != null && tLeft < 30 ? " is-fault" : "");
+  setM5Gate(m5.lock_progress, m5.reject_reason);
   drawHookBbox(m5);
 
   // Run baru saja berakhir → tarik ringkasannya. Ditunda sesaat karena FSM menulis

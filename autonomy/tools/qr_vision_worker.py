@@ -5,19 +5,22 @@ Melokalisasi region QR dengan best_new.pt (model detect-only, 1 kelas), meng-cro
 ROI dari bbox itu, lalu men-decode QR DI DALAM crop — bukan memindai frame penuh.
 Node GUI yang memiliki proses ini; worker tidak pernah mengirim perintah wahana.
 
-Kenapa di laptop dan bukan di Pi: ultralytics hanya terpasang di laptop, dan Pi
-sengaja dijaga bebas torch. Decode QR lokal di Pi TETAP jalan sebagai fallback —
-lihat _fresh_payload di fsm/mission5.py.
+Sejak 7 Sep 2026 worker ini berjalan DI PI, bukan di laptop: inferensi memakai
+cv2.dnn atas bobot .onnx sehingga Pi tetap bebas torch. Decode QR lokal di Pi
+TETAP jalan sebagai fallback — lihat _fresh_payload di fsm/mission5.py.
 """
 
 import argparse
 import logging
 import sys
+import threading
 import time
 
 # Lewat paket `tools` supaya import ini sah baik saat worker dijalankan sebagai
 # skrip oleh Node (PYTHONPATH=autonomy) maupun saat diimpor tes.
-from tools.hook_vision_worker import LatestFrame, emit
+from tools.hook_vision_worker import (LatestFrame, emit, enable_udp_emit,
+                                      inference_wanted, limit_cv_threads,
+                                      telemetry_listener)
 
 
 def _quad_from_bbox(bbox):
@@ -51,20 +54,29 @@ def main():
     ap.add_argument('--conf', type=float, default=0.6)
     ap.add_argument('--imgsz', type=int, default=640)
     ap.add_argument('--fps', type=float, default=10.0)
+    # --- jalur Raspberry Pi -------------------------------------------------
+    ap.add_argument('--emit-udp', default=None, metavar='HOST:PORT',
+                    help='kirim hasil sbg UDP JSON ke rov_agent (mis. 127.0.0.1:14550)')
+    ap.add_argument('--telemetry-port', type=int, default=None,
+                    help='dengarkan telemetri rov_agent di port UDP ini (gate vision_want)')
+    ap.add_argument('--cv-threads', type=int, default=2,
+                    help='jumlah thread OpenCV; samakan dgn CPUAffinity unit systemd')
     args = ap.parse_args()
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                         format='[qr-worker] %(levelname)s %(message)s')
+    limit_cv_threads(args.cv_threads)
+    if args.emit_udp:
+        enable_udp_emit(args.emit_udp, 'qr_vision')
     try:
         import cv2
         import numpy as np
         from vision.qr_detect import (_decode_tracked_roi, _order_quad_points,
                                       estimate_pose_pts, parse_payload, wall_from_qr)
-        from vision.yolo_hook import YOLOHookDetector
-        # YOLOHookDetector dipakai apa adanya: untuk model detect-only blok
-        # keypoint-nya menghasilkan None dan TTA menyesuaikan sendiri. Tidak ada
-        # perubahan di yolo_hook.py, jadi jalur hook/pose tidak tersentuh.
-        detector = YOLOHookDetector(args.model, conf=args.conf, imgsz=args.imgsz)
+        from vision.yolo_hook import make_detector
+        # Detektor dipakai apa adanya: untuk model detect-only blok keypoint-nya
+        # menghasilkan None di kedua backend, jadi jalur hook/pose tak tersentuh.
+        detector = make_detector(args.model, conf=args.conf, imgsz=args.imgsz)
         K = dist = None
         if args.calib:
             from vision.hook_localization import load_calibration
@@ -91,6 +103,10 @@ def main():
               'timestamp': time.time()})
         return 3
 
+    state, lock = {}, threading.Lock()
+    if args.telemetry_port:
+        threading.Thread(target=telemetry_listener,
+                         args=(state, lock, args.telemetry_port), daemon=True).start()
     camera = LatestFrame(cap, opener=_open_camera).start()
     interval = 1.0 / max(0.1, args.fps)
     last_status = None
@@ -100,6 +116,10 @@ def main():
     try:
         while True:
             started = time.monotonic()
+            if not inference_wanted(state, lock, 'BOTTOM'):
+                # State FSM saat ini tidak membaca CAM BOTTOM — lihat VISION_WANT.
+                time.sleep(interval)
+                continue
             last_seq, frame, captured_at, failed = camera.take(last_seq)
             if frame is None:
                 if not failed:
