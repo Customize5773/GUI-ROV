@@ -289,6 +289,9 @@ def test_left_yolo_search_butuh_voting_bukan_satu_frame():
     """best.pt sesekali menyatakan Hook pada frame tanpa hook — satu frame palsu
     tak boleh menghentikan ROV jauh dari dinding."""
     fsm = _make_fsm()
+    # Jalur ini HANYA berlaku saat QR belum terbaca — kalau QR sudah
+    # ter-decode, _state_m5_yolo_search sengaja lompat ke M5_QR_DOCK.
+    fsm._fresh_payload = lambda max_age=0.5: None
     det = _yolo_at_area_fraction(0.02)          # conf 0.9, lolos gate
     fsm._yolo_source = lambda: det
     fsm._transition(State.M5_YOLO_SEARCH)
@@ -303,6 +306,9 @@ def test_left_yolo_search_butuh_voting_bukan_satu_frame():
 def test_left_yolo_search_deteksi_sekejap_tidak_mengunci():
     """Satu frame palsu lalu hilang → hitungan luruh, ROV lanjut maju."""
     fsm = _make_fsm()
+    # Jalur ini HANYA berlaku saat QR belum terbaca — kalau QR sudah
+    # ter-decode, _state_m5_yolo_search sengaja lompat ke M5_QR_DOCK.
+    fsm._fresh_payload = lambda max_age=0.5: None
     hantu = [_yolo_at_area_fraction(0.02), None, None]
     fsm._yolo_source = lambda: hantu.pop(0) if hantu else None
     fsm._transition(State.M5_YOLO_SEARCH)
@@ -318,6 +324,9 @@ def test_left_yolo_search_deteksi_sekejap_tidak_mengunci():
 def test_left_yolo_search_berhenti_maju_setelah_budget_jarak():
     """Tanpa sensor jarak, satu-satunya rem sebelum dinding adalah budget detik."""
     fsm = _make_fsm()
+    # Jalur ini HANYA berlaku saat QR belum terbaca — kalau QR sudah
+    # ter-decode, _state_m5_yolo_search sengaja lompat ke M5_QR_DOCK.
+    fsm._fresh_payload = lambda max_age=0.5: None
     lemah = dict(_yolo_at_area_fraction(0.01), confidence=0.1)   # ada stream, blm yakin
     fsm._yolo_source = lambda: lemah
     fsm._state = State.M5_YOLO_SEARCH
@@ -566,6 +575,9 @@ def test_alur_kiri_menahan_kedalaman_di_tiap_state():
     ]:
         fsm = _make_fsm()
         fsm._yolo_source = lambda src=source: src
+        # Depth-hold M5_YOLO_SEARCH hanya teruji bila ROV MEMANG masih di state
+        # itu — dgn QR sudah terbaca ia sengaja lompat ke M5_QR_DOCK.
+        fsm._fresh_payload = lambda max_age=0.5: None
         fsm._state = state
         fsm._state_t = m5.time.time()
         call(fsm)
@@ -1483,3 +1495,52 @@ def test_m5_search_finds_laterally_offset_payload_end_to_end():
         plant.step(0.1)
     assert fsm._state == m5.State.M5_DOCK, (
         f"ladder gagal menemukan payload (lat={plant.s.lat:.2f}, rz={plant.s.rz:.2f})")
+
+
+# ── Turunan HOOK_DEPTH dari geometri kolam (regresi 6 Sep) ───────────────────
+# `hook_depth: 0.30` absolut di rov_tuned.yaml dulu MENANG atas turunan pool.*,
+# jadi geometri pool_kki_*.yaml diam-diam diabaikan dan ROV menahan kedalaman
+# kolam latihan di arena lomba. Kunci: yang disimpan sekarang offset, dan
+# turunannya harus mereproduksi 0.30 di kolam latihan.
+@pytest.mark.parametrize('pool_file, depth, hook_floor, expected', [
+    ('config/pool_trial.yaml',       0.80, 0.385, 0.30),
+    ('config/pool_kki_trial.yaml',   0.90, 0.45,  0.335),
+    ('config/pool_kki_running.yaml', 0.90, 0.45,  0.335),
+])
+def test_hook_depth_diturunkan_dari_geometri(pool_file, depth, hook_floor, expected):
+    ns = dict(vars(m5))
+    keys = set()
+    for f in ('config/rov_tuned.yaml', pool_file):
+        keys.update(n for n, _o, _n in apply_config(ns, load_config(os.path.join(_AUTONOMY, f))))
+    assert 'HOOK_DEPTH' not in keys, (
+        f"{pool_file}: HOOK_DEPTH diset eksplisit lagi — itu mematikan turunan pool.*")
+    assert ns['POOL_DEPTH'] == depth and ns['HOOK_HEIGHT_FROM_FLOOR'] == hook_floor
+    got = round(ns['POOL_DEPTH'] - ns['HOOK_HEIGHT_FROM_FLOOR'] - ns['HOOK_VIEW_OFFSET'], 4)
+    assert got == expected, f"{pool_file}: HOOK_DEPTH {got} != {expected}"
+
+
+# ── M5_YOLO_SEARCH: QR terbaca → lompat langsung ke M5_QR_DOCK ───────────────
+def _yolo_search_fsm(qr_det):
+    """FSM berhenti di M5_YOLO_SEARCH; _fresh_payload dipaksa ke qr_det."""
+    fsm = _make_fsm()
+    fsm._fresh_payload = lambda max_age=0.5: qr_det
+    fsm._yolo_source = lambda: None
+    fsm._yolo_source_failed = lambda raw: False
+    fsm._transition(State.M5_YOLO_SEARCH)
+    return fsm
+
+
+def test_yolo_search_lompat_ke_qr_dock_saat_qr_terbaca():
+    """QR payload sudah ter-decode = ROV sudah di depan target. Membidik ujung
+    "J" dulu cuma menambah satu fase yang bisa gagal dan memakan jatah waktu."""
+    fsm = _yolo_search_fsm({'cx': 320, 'cy': 240, 'area': 3000.0})
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_QR_DOCK
+    assert fsm.cmd.plant._in['surge'] == 0, "harus berhenti maju saat serah terima"
+
+
+def test_yolo_search_tetap_cari_hook_tanpa_qr():
+    """Pagar sisi lain: tanpa QR jalur hook align harus utuh, tidak ikut terlompati."""
+    fsm = _yolo_search_fsm(None)
+    fsm._state_m5_yolo_search({'depth': m5.HOOK_DEPTH})
+    assert fsm._state == State.M5_YOLO_SEARCH

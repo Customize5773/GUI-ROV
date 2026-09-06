@@ -134,7 +134,16 @@ depth:
   # Catatan uji 6-8 terisolasi: bila operator menempatkan ROV jauh di bawah
   # nilai ini, _left_hold memanjat 60% dan ROV melesat sebelum menggenggam —
   # samakan hook_depth dgn kedalaman penempatan saat menguji tahap 6-8 saja.
-  hook_depth: 0.30
+  # DIPINDAH dari `hook_depth: 0.30` absolut (6 Sep). Angka 0,30 itu benar UNTUK
+  # kolam latihan 0,8 m saja, dan karena HOOK_DEPTH eksplisit MENANG atas turunan
+  # pool.*, ia diam-diam mematikan geometri pool_kki_*.yaml: di arena 0,90 m ROV
+  # tetap menahan 0,30 m = 0,60 m dari dasar, sedangkan hook ada di 0,45 m dari
+  # dasar -> hook 15 cm di bawah ROV, bukan 11,5 cm seperti saat tuning.
+  # Yang berpindah antar kolam adalah OFFSET-nya, jadi itu yang disimpan:
+  #   HOOK_DEPTH = pool.depth - pool.hook_height_from_floor - depth.hook_view_offset
+  #   latihan : 0,80 - 0,385 - 0,115 = 0,30 m  (sama persis dgn nilai lama)
+  #   KKI run : 0,90 - 0,450 - 0,115 = 0,335 m
+  hook_view_offset: 0.115
 
 # ── Batas waktu ───────────────────────────────────────────────────────────────
 timeouts:

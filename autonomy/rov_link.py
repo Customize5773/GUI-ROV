@@ -492,8 +492,50 @@ class RovLink:
             print("\n[EXIT] berhenti.")
 
 
+def _load_fsm_config(paths):
+    """Terapkan config tuning + geometri kolam ke globals fsm.mission5.
+
+    Tanpa ini toggle Autonomous di GUI menjalankan FSM dengan default modul
+    (dive 30%, HOOK_DEPTH 0.45, timeout arena 5x5) sementara jalur CLI
+    `python fsm/mission5.py --config ...` memakai angka hasil trial — dua
+    perilaku berbeda dari kode yang sama, dan yang lewat GUI itulah yang
+    dipakai saat lomba. Urutan & semantik dijaga sama persis dgn mission5.main().
+    """
+    import fsm.mission5 as m5
+    from config.loader import load_config, apply_config
+    keys = set()
+    for path in paths:
+        applied = apply_config(vars(m5), load_config(path))
+        keys.update(name for name, _old, _new in applied)
+        print(f"[CFG] {path}: {len(applied)} nilai dioverride")
+    m5._derive_depths(keys)
+    # Nama-nama ini disalin ke modul ini saat `from fsm.mission5 import ...`, jadi
+    # TIDAK ikut berubah saat globals mission5 di-override (beda dgn state handler
+    # FSM yang late-binding). Tanpa penyegaran ini VisionPipeline dibangun dgn
+    # nilai lama sementara FSM memakai nilai config — diam-diam tidak konsisten.
+    global QR_SIDE_M, HOOK_COLOR_HSV_RANGE, HOOK_MIN_AREA, HOOK_PIPE_DIAM_M
+    QR_SIDE_M = m5.QR_SIDE_M
+    HOOK_COLOR_HSV_RANGE = m5.HOOK_COLOR_HSV_RANGE
+    HOOK_MIN_AREA = m5.HOOK_MIN_AREA
+    HOOK_PIPE_DIAM_M = m5.HOOK_PIPE_DIAM_M
+    print(f"[CFG] HOOK_DEPTH={m5.HOOK_DEPTH} DEPTH_TARGET_BOTTOM={m5.DEPTH_TARGET_BOTTOM} "
+          f"DIVE_SPEED={m5.DIVE_SPEED} WALL_HEADING={m5.WALL_HEADING}")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Jembatan JSON/UDP GUI <-> MAVLink ArduSub")
+    # Pra-parse --fsm-config LEBIH DULU (pola mission5.main()): default flag di
+    # bawah (mis. --fsm-qr-size) membaca konstanta yang baru saja dioverride.
+    pre = argparse.ArgumentParser(add_help=False)
+    pre.add_argument("--fsm-config", action="append", default=None, metavar="FILE",
+                     help="config tuning/geometri .yaml utk FSM misi 5 yang dinyalakan "
+                          "toggle Autonomous di GUI. BOLEH DIULANG, file belakangan menang: "
+                          "--fsm-config config/rov_tuned.yaml --fsm-config config/pool_kki_running.yaml")
+    pre_args, _ = pre.parse_known_args()
+    if pre_args.fsm_config:
+        _load_fsm_config(pre_args.fsm_config)
+
+    ap = argparse.ArgumentParser(description="Jembatan JSON/UDP GUI <-> MAVLink ArduSub",
+                                 parents=[pre])
     ap.add_argument("--server", default="127.0.0.1", help="IP komputer yang menjalankan server.js (telemetri dikirim ke sini)")
     ap.add_argument("--telem-port", type=int, default=14551, help="port telemetri di server.js")
     ap.add_argument("--telem-extra", default="", help="tujuan telemetri tambahan, csv host:port (mis. 127.0.0.1:14552 untuk FSM autonomy)")

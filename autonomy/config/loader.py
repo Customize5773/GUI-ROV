@@ -39,6 +39,7 @@ _SCALAR_MAP = {
     ('depth', 'target_surface'):  'DEPTH_TARGET_SURFACE',
     ('depth', 'tolerance'):       'DEPTH_TOLERANCE',
     ('depth', 'hook_depth'):      'HOOK_DEPTH',
+    ('depth', 'hook_view_offset'): 'HOOK_VIEW_OFFSET',
 
     ('speed', 'dive'):    'DIVE_SPEED',
     ('speed', 'ascend'):  'ASCEND_SPEED',

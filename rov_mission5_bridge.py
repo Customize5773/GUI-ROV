@@ -12,10 +12,17 @@ import time
 
 
 # ═══ EDIT MOTION CUSTOM DI SINI ═══
-# True  = jalankan CASE di bawah (langkah 1-2 misi 5) lalu SERAHKAN ke Mission5FSM
-#         di M5_YOLO_SEARCH untuk langkah 3-8 (YOLO → ujung J → QR → grip →
-#         unhook → surface). Ini jalur lomba.
-# False = langsung Mission5FSM dari cfg["start_state"], tanpa CASE.
+# True  = jalankan CASE di bawah (langkah 1-2 misi 5; tambah case bila perlu)
+#         lalu SERAHKAN ke Mission5FSM di M5_YOLO_SEARCH untuk langkah 3-8
+#         (YOLO → ujung J → QR → grip → unhook → surface). INI JALUR LOMBA.
+#         Di M5_YOLO_SEARCH, bila QR payload sudah ter-decode, FSM lompat
+#         langsung ke M5_QR_DOCK — M5_HOOK_ALIGN hanya untuk MENEMUKAN
+#         gantungan saat QR belum terbaca.
+# False = full motion dari file ini saja: SELURUH CUSTOM_CASES dijalankan
+#         (motion terjadwal dari Pi), lalu stop + disarm. Mission5FSM TIDAK
+#         pernah jalan — rute cadangan open-loop bila vision gagal di hari-H.
+# Pengecualian: bench_qr_dock=True melewati CASE sepenuhnya dan masuk
+# Mission5FSM langsung di M5_QR_DOCK (rig uji satu-state).
 CUSTOM_MOTION_ENABLED = True
 
 # motion = (surge %, sway %, heading target °, depth target m, gripper)
@@ -259,7 +266,7 @@ class Mission5Runner:
             if gripper not in ("open", "close", "hold"):
                 raise ValueError(f"{case.get('name')}: gripper tidak valid")
 
-    def _start_custom(self):
+    def _start_custom(self, handover=True):
         try:
             self._validate_custom_cases(self.custom_cases)
         except (TypeError, ValueError) as exc:
@@ -326,7 +333,8 @@ class Mission5Runner:
                 # hitungan detik dan akan arm sendiri; disarm di sini hanya
                 # menciptakan jeda mati di tengah serah terima. Batal/error ->
                 # wajib disarm, jangan tinggalkan wahana hidup tanpa pengendali.
-                if self._custom_state != "COMPLETE" or self._custom_stop.is_set():
+                if (not handover or self._custom_state != "COMPLETE"
+                        or self._custom_stop.is_set()):
                     self._cmd.arm(False)
                 if runlog:
                     alasan = ("dibatalkan" if self._custom_stop.is_set() else
@@ -339,7 +347,7 @@ class Mission5Runner:
             # heading CASE terakhir sbg acuan yang ditahan selagi mencari hook.
             # Cek _custom_stop LAGI di sini: kill-switch yang menyala tepat di
             # batas serah terima tak boleh malah memulai FSM.
-            if self._custom_state == "COMPLETE" and not self._custom_stop.is_set():
+            if handover and self._custom_state == "COMPLETE" and not self._custom_stop.is_set():
                 self._log("[CUSTOM] CASE selesai → serah terima ke FSM "
                           f"(M5_YOLO_SEARCH, heading_hold={self._last_case_heading})")
                 with self._lock:
@@ -413,16 +421,15 @@ class Mission5Runner:
                 self._log("[M5] start dilewati — thread FSM masih hidup")
                 return False
 
-        # CASE menjalankan langkah 1-2 lalu MERANTAI sendiri ke _start_fsm()
-        # (lihat _start_custom.run) — bukan lagi jalur alternatif yang buntu.
-        if self.custom_enabled:
-            return self._start_custom()
-        start_state = self._cfg.get("start_state", "M5_REDIVE")
-        # rov_agent me-zero-kan heading tepat saat AUTONOMOUS dipilih. Pada uji
-        # langsung tahap 3, tahan arah hadap awal itu sebagai 0 derajat supaya
-        # ROV tidak datang menyerong ketika point 5 sedang dikejar.
-        heading_hold = 0.0 if start_state in ("M5_YOLO_SEARCH", "M5_HOOK_ALIGN") else None
-        return self._start_fsm(heading_hold=heading_hold)
+        # Bench QR docking adalah rig uji satu-state: ia memang harus masuk
+        # Mission5FSM langsung di M5_QR_DOCK, tanpa motion CASE apa pun.
+        if self.bench_qr_dock:
+            return self._start_fsm()
+        # Sisanya SELALU lewat CASE. Yang dibedakan CUSTOM_MOTION_ENABLED cuma
+        # apakah FSM mengambil alih setelahnya:
+        #   True  -> CASE langkah 1-2, lalu serah terima ke Mission5FSM (jalur lomba)
+        #   False -> full motion dari file ini saja, FSM tidak pernah jalan
+        return self._start_custom(handover=self.custom_enabled)
 
     def _start_fsm(self, start_state_name=None, heading_hold=None):
         """Jalankan Mission5FSM. Dipanggil start() (langsung) DAN rantai CASE."""

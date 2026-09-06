@@ -67,6 +67,14 @@ HOOK_DEPTH            = 0.45   # m — kedalaman hook DARI PERMUKAAN. Lihat _der
 POOL_DEPTH             = None  # m — kedalaman air kolam (ukur di lokasi)
 HOOK_HEIGHT_FROM_FLOOR = None  # m — tinggi ujung hook dari DASAR (KKI 2026 = 0.45)
 BOTTOM_CLEARANCE       = None  # m — jarak aman titik-tengah ROV di atas dasar (BERPINDAH antar venue)
+# m — seberapa tinggi titik-tengah ROV ditahan DI ATAS ujung hook supaya hook jatuh
+# di tengah bidang pandang CAM WALL. Sifat kamera+rangka (tilt & FOV), jadi BERPINDAH
+# antar kolam — beda dgn HOOK_DEPTH absolut yang tidak. Tiga titik ukur trial kolam
+# 0,8 m (hook 0,385 m dari dasar) konsisten dgn satu offset:
+#   hook_depth 0.45 → ROV 0,035 m DI BAWAH hook → terpotong tepi atas frame
+#   hook_depth 0.22 → ROV 0,195 m di atas hook  → hook lewat di bawah tengah
+#   hook_depth 0.30 → ROV 0,115 m di atas hook  → TEPAT center (tip_y_offset -22..+10 px)
+HOOK_VIEW_OFFSET       = None  # m — diisi config/rov_tuned.yaml (depth.hook_view_offset)
 
 DIVE_SPEED            = 30     # % thruster vertikal saat menyelam
 ASCEND_SPEED          = 30     # % thruster vertikal saat naik
@@ -1709,6 +1717,18 @@ class Mission5FSM:
             return
         if self._left_out_of_time():
             return
+        # QR payload sudah terbaca → langsung ke langkah 5. M5_HOOK_ALIGN hanya
+        # ada untuk MENEMUKAN gantungan lewat pose hook; kalau QR payload-nya
+        # sendiri sudah ter-decode, ROV sudah berada di depan target dan
+        # membidik ujung "J" dulu cuma menambah satu fase yang bisa gagal
+        # (dan memakan jatah 10 menit). Decode QR jauh lebih kuat drpd bbox
+        # YOLO — sudah tervalidasi _is_target_payload() — jadi tak perlu
+        # voting seperti latch hook di bawah.
+        if self._fresh_payload(0.5) is not None:
+            log.info("[FSM] M5_YOLO_SEARCH — QR payload terbaca, lompat ke M5_QR_DOCK")
+            self.cmd.stop_all()
+            self._transition(State.M5_QR_DOCK)
+            return
         raw = self._yolo_source()
         if self._yolo_source_failed(raw):
             self._left_abort("worker/kamera YOLO error")
@@ -2117,7 +2137,12 @@ def _derive_depths(explicit: set):
     g = globals()
     if POOL_DEPTH is None:
         return
-    for attr, part, label in (('HOOK_DEPTH', HOOK_HEIGHT_FROM_FLOOR, 'hook_height_from_floor'),
+    # HOOK_DEPTH juga mundur sejauh HOOK_VIEW_OFFSET: yang harus dipertahankan antar
+    # kolam adalah posisi hook di FRAME, bukan angka kedalaman absolutnya.
+    hook_part = HOOK_HEIGHT_FROM_FLOOR
+    if hook_part is not None and HOOK_VIEW_OFFSET is not None:
+        hook_part = hook_part + HOOK_VIEW_OFFSET
+    for attr, part, label in (('HOOK_DEPTH', hook_part, 'hook_height_from_floor'),
                               ('DEPTH_TARGET_BOTTOM', BOTTOM_CLEARANCE, 'bottom_clearance')):
         if part is None:
             continue

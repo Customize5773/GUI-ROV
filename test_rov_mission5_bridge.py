@@ -189,8 +189,10 @@ class TestRunnerGagalLunak(unittest.TestCase):
         berarti 'misi 5 tak tersedia', BUKAN agent mati dan kontrol manual
         ikut hilang."""
         pesan = []
+        # bench_qr_dock = satu-satunya rute start() -> _start_fsm sejak
+        # custom_motion_enabled False berarti "full CASE, tanpa FSM".
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
-                           config={"custom_motion_enabled": False},
+                           config={"bench_qr_dock": True},
                            log=pesan.append)
         r._import_autonomy = lambda: (_ for _ in ()).throw(
             ImportError("No module named 'cv2'"))
@@ -226,13 +228,15 @@ class TestRunnerGagalLunak(unittest.TestCase):
 
         pesan = []
         r = Mission5Runner(_adapter({}), Mission5TelemetryAdapter(lambda: {}),
-                           config={"custom_motion_enabled": False,
-                                   "start_state": "M5_REDIVE"},
+                           config={"start_state": "M5_REDIVE"},
                            log=pesan.append)
         r._import_autonomy = lambda: (object, State, object, 0.04, (), 0, 0.025)
         r._apply_motion_config = lambda _module: None
 
-        self.assertFalse(r.start())
+        # _start_fsm langsung: start() tak lagi punya rute ke M5_REDIVE, tapi
+        # guard-nya tetap dijaga supaya jalur bench/manual tak bisa menyelam
+        # tanpa tahu gantungan ada di mana.
+        self.assertFalse(r._start_fsm())
         self.assertIn("MARK gantungan wajib", r.last_error)
         self.assertTrue(any("TIDAK BISA START" in p for p in pesan), pesan)
 
@@ -295,17 +299,33 @@ class TestAutonomousMotionConfig(unittest.TestCase):
 
 
 class TestCustomCaseMotion(unittest.TestCase):
-    def test_start_langsung_tahap_3_menahan_heading_nol(self):
-        r = Mission5Runner(
-            _adapter({}), Mission5TelemetryAdapter(lambda: {"heading": 0}),
-            config={"custom_motion_enabled": False,
-                    "start_state": "M5_YOLO_SEARCH"},
-            log=lambda *_: None,
+    def test_custom_false_full_case_tanpa_serah_terima_fsm(self):
+        """False = full motion dari file ini. FSM tak boleh jalan sama sekali,
+        dan wahana WAJIB disarm di akhir: tidak ada yang mengambil alih.
+        (Jalur True->FSM dikunci test_custom_case_bisa_diedit_tanpa_import_fsm_besar.)"""
+        arms = []
+        cases = [{"name": "SATU", "duration_ms": 20,
+                  "motion": (10, 0, 0, 0.3, "hold")}]
+        adapter = Mission5CommandAdapter(
+            set_axis=lambda **kw: None,
+            set_gripper=lambda c: None,
+            arm=arms.append,
+            emergency_stop=lambda: None,
+            set_alt_hold=lambda: True,
+            set_depth_target=lambda _d: True,
         )
-        started = []
-        r._start_fsm = lambda *args, **kwargs: started.append((args, kwargs)) or True
+        r = Mission5Runner(adapter, Mission5TelemetryAdapter(lambda: {"heading": 0}),
+                           config={"custom_motion_enabled": False,
+                                   "custom_cases": cases},
+                           log=lambda *_: None)
+        chained = []
+        r._start_fsm = lambda *a, **kw: chained.append((a, kw)) or True
+
         self.assertTrue(r.start())
-        self.assertEqual(started[0][1]["heading_hold"], 0.0)
+        r._thread.join(timeout=5)
+        self.assertEqual(r._custom_state, "COMPLETE")
+        self.assertEqual(chained, [], "FSM tak boleh diambil alih saat False")
+        self.assertIn(False, arms, "full-CASE wajib disarm di akhir")
 
     def test_custom_case_bisa_diedit_tanpa_import_fsm_besar(self):
         sink, history = {}, []

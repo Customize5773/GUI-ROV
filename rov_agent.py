@@ -2507,6 +2507,18 @@ def main():
                         print("[DEPTH] Depth-set OFF — vehicle disarm")
                     globals()["depth_target_active"] = False
 
+            # Disarm tidak memotong sinyal PWM ke CH7/CH8 (GripperController
+            # tidak digerbang oleh status armed sama sekali), jadi target
+            # gripper/rotate yang tertinggal non-netral saat disarm (mis.
+            # trigger gamepad kesenggol) baru benar-benar "dieksekusi" servo
+            # begitu Pixhawk membuka output PWM lagi saat arm -> kelihatan
+            # servo 8 "jalan sendiri" beberapa detik pas transisi disarm->arm.
+            # Paksa netral di titik transisi ini supaya tidak ada target basi
+            # yang terbawa lewat siklus arm.
+            if not was_armed and state["armed"] and gripper is not None:
+                gripper.stop()
+                gripper.rotate_stop()
+
             # Mode yang diminta sudah terkonfirmasi -> tidak perlu ditahan lagi.
             if requested_mode is not None and state["mode"] == requested_mode:
                 globals()["requested_mode"] = None
