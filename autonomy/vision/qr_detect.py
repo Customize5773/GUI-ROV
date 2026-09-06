@@ -129,6 +129,10 @@ RECTIFY_SIZE = 500     # ukuran kanvas QR setelah diluruskan
 RECTIFY_MARGIN = 1.5   # margin quiet-zone saat perspective warp
 ZXING_SCALES = (2.0, 4.0)  # dibuktikan pada rekaman payload tidur: modul kecil perlu diperbesar
 TRACK_MAX_AGE = 2.0       # deteksi valid boleh membuka ROI lokal selama 2 detik
+STRETCH_PCT  = (1.0, 99.0)  # persentil clip contrast-stretch (lihat _stretch)
+TILE_GRID    = (4, 3)     # kolom×baris ubin jenjang-9 (overlap 50%)
+TILE_UPSCALE = 3.0        # perbesaran per ubin sebelum ZXing
+TILE_MIN_PTP = 200        # jenjang-9 hanya utk frame miskin rentang dinamis
 # Adaptive threshold: pisahkan modul QR dari lantai berfaset/riak (window ganjil
 # + konstanta pengurang) — beda mekanisme dari CLAHE (normalisasi kontras lokal,
 # global-ish), diambil dari pengalaman ros2_ws qr_logic.py (docs/MISSION-ALIGNMENT.md).
@@ -148,6 +152,51 @@ def _adaptive_thresh(gray):
     latar berfaset/beriak yang lolos dari normalisasi kontras CLAHE saja."""
     return cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
                                  cv2.THRESH_BINARY, ADAPT_BLOCK, ADAPT_C)
+
+
+def _stretch(gray):
+    """Regangkan kontras linier antar-persentil (1%..99%) ke 0..255.
+
+    Rekaman kolam KKI (hydroship_record_*.webm) memperlihatkan frame yang
+    ter-overexpose ke dinding putih: seluruh QR hidup di rentang ~30 dari 255
+    aras abu. CLAHE saja tidak cukup — tile 8x8 pada 1280x720 = 160 px, jauh
+    lebih besar dari QR ~60 px, jadi peregangan lokalnya lemah. Clip persentil
+    (bukan min/max) menahan agar satu piksel glare/noda gelap tidak mengunci
+    skala.
+    """
+    lo, hi = np.percentile(gray, STRETCH_PCT)
+    if hi - lo < 1.0:
+        return gray
+    return np.clip((gray.astype(np.float32) - lo) * (255.0 / (hi - lo)),
+                   0, 255).astype(np.uint8)
+
+
+def _tile_zxing(gray):
+    """Jenjang terakhir: ubin bertumpang-tindih, tiap ubin di-stretch sendiri.
+
+    Stretch global gagal saat SATU frame memuat dinding putih terang dan QR
+    di bayangan — persentil frame-penuh didominasi dinding. Per-ubin, QR
+    mengisi porsi yang jauh lebih besar dari histogram, dan perbesaran 3x
+    mengembalikan modul yang sub-piksel di frame asli. Titik dikembalikan ke
+    koordinat frame asli.
+    """
+    if not ZXING_OK:
+        return []
+    H, W = gray.shape[:2]
+    nx, ny = TILE_GRID
+    tw, th = int(W / (nx * 0.5 + 0.5)), int(H / (ny * 0.5 + 0.5))
+    for j in range(ny):
+        for i in range(nx):
+            x, y = min(i * tw // 2, W - tw), min(j * th // 2, H - th)
+            tile = _stretch(gray[y:y + th, x:x + tw])
+            big = cv2.resize(tile, None, fx=TILE_UPSCALE, fy=TILE_UPSCALE,
+                             interpolation=cv2.INTER_CUBIC)
+            res = _zxing_qr(big, TILE_UPSCALE)
+            if res:
+                for det in res:
+                    det['pts'] = np.asarray(det['pts'], dtype=np.float32) + (x, y)
+                return res
+    return []
 
 
 def _unsharp(gray):
@@ -357,10 +406,19 @@ def decode_qr(frame, enhance=True):
     # mentah 1,17 s dan seluruh fallback sebelum ZXing mencapai beberapa detik.
     # Dahulukan decoder checksum-verified ini agar timestamp visual servo tidak
     # basi; jalur preprocessing lama tetap menjadi fallback untuk QR sulit.
+    gray_st = _stretch(gray_raw) if enhance else gray_raw
     if enhance and ZXING_OK:
         res = _zxing_qr(gray_raw)
         if res:
             return res
+        # Jenjang 1b: ZXing pada grayscale yang di-contrast-stretch. Semurah
+        # jenjang 1 (satu pass ZXing) dan menyelamatkan frame ter-overexpose
+        # yang mendominasi rekaman kolam — jalankan SEBELUM rantai pyzbar yang
+        # ~4x lebih mahal.
+        if not np.array_equal(gray_st, gray_raw):
+            res = _zxing_qr(gray_st)
+            if res:
+                return res
     if PYZBAR_OK:
         res = _pyzbar_qr(frame, 1.0, gray_for_gate=gray_raw)
         if res or not enhance:
@@ -404,16 +462,27 @@ def decode_qr(frame, enhance=True):
     # dijalankan setelah jalur cepat 1x dan seluruh preprocessing gagal.
     if enhance and ZXING_OK:
         for candidate, scale in (
-                (cv2.resize(gray_raw, None, fx=ZXING_SCALES[0], fy=ZXING_SCALES[0],
+                (cv2.resize(gray_st, None, fx=ZXING_SCALES[0], fy=ZXING_SCALES[0],
                             interpolation=cv2.INTER_CUBIC), ZXING_SCALES[0]),
-                (cv2.resize(gray_raw, None, fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
+                (cv2.resize(gray_st, None, fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
                             interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1]),
-                (cv2.resize(_unsharp(gray_raw), None,
+                (cv2.resize(_unsharp(gray_st), None,
                             fx=ZXING_SCALES[1], fy=ZXING_SCALES[1],
                             interpolation=cv2.INTER_CUBIC), ZXING_SCALES[1])):
             res = _zxing_qr(candidate, scale)
             if res:
                 return res
+    # Jenjang 9: ubin + stretch per-ubin (frame campur terang-gelap, QR jauh).
+    # Digerbang kontras global: ubin hanya menolong frame yang MEMANG kehilangan
+    # rentang dinamis (kolam berkabut / overexposed ke dinding putih). Pada frame
+    # berkontras penuh jenjang ini tak pernah menang, jadi jangan bayar ongkosnya.
+    # ponytail: 12 ubin ZXing ≈ +0.15 s/frame gagal di laptop (jelas lebih mahal di
+    # RPi). Kalau visual servo kekurangan frame rate, kecilkan TILE_GRID atau
+    # jalankan jenjang ini tiap-N frame gagal saja.
+    if enhance and int(np.ptp(gray_raw)) < TILE_MIN_PTP:
+        res = _tile_zxing(gray_raw)
+        if res:
+            return res
     return []
 
 

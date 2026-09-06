@@ -397,3 +397,58 @@ def test_sweep_spec_parsing():
         _parse_sweep('bukan-angka')
     with pytest.raises(SystemExit):
         _parse_sweep('0:1:0')                   # langkah 0 → tak boleh infinite loop
+
+
+# ── Jenjang low-contrast / overexposed (dari rekaman kolam KKI) ───────────────
+
+def _qr_img(payload, module_px=6):
+    segno = pytest.importorskip("segno")
+    np = pytest.importorskip("numpy")
+    import io as _io
+    from PIL import Image
+    buf = _io.BytesIO()
+    segno.make(payload, error='h').save(buf, kind='png', scale=module_px, border=4)
+    return np.array(Image.open(buf).convert('L'))
+
+
+def test_stretch_recovers_overexposed_range():
+    """Frame yang seluruh QR-nya hidup di rentang ~30 aras abu dikembalikan ke 0..255."""
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import _stretch
+    qr = _qr_img(PAYLOAD)
+    flat = (qr.astype(np.float32) * (30.0 / 255.0) + 200).astype(np.uint8)
+    assert np.ptp(flat) < 40
+    assert np.ptp(_stretch(flat)) > 200
+    # frame rata (tanpa informasi) tidak boleh diperkuat jadi noise
+    assert np.ptp(_stretch(np.full((50, 50), 128, np.uint8))) == 0
+
+
+def test_decode_qr_reads_low_contrast_qr():
+    """Regresi jalur 1b: QR sah tapi ter-overexposed harus tetap terbaca."""
+    pytest.importorskip("zxingcpp")
+    cv2 = pytest.importorskip("cv2")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import decode_qr
+    qr = _qr_img(PAYLOAD)
+    frame = np.full((480, 640), 205, np.uint8)
+    h, w = qr.shape
+    frame[40:40 + h, 40:40 + w] = (qr.astype(np.float32) * (28 / 255.0) + 190).astype(np.uint8)
+    frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+    out = decode_qr(frame)
+    assert out and out[0]['data'] == PAYLOAD
+
+
+def test_tile_zxing_returns_points_in_frame_coords():
+    """Jenjang 9: QR kecil di pojok kanan-bawah — titik harus di koordinat frame asli."""
+    pytest.importorskip("zxingcpp")
+    np = pytest.importorskip("numpy")
+    from vision.qr_detect import _tile_zxing
+    qr = _qr_img(PAYLOAD, module_px=2)
+    frame = np.full((720, 1280), 255, np.uint8)
+    h, w = qr.shape
+    y0, x0 = 600, 1100
+    frame[y0:y0 + h, x0:x0 + w] = qr
+    out = _tile_zxing(frame)
+    assert out and out[0]['data'] == PAYLOAD
+    c = np.asarray(out[0]['pts']).reshape(-1, 2).mean(axis=0)
+    assert abs(c[0] - (x0 + w / 2)) < 30 and abs(c[1] - (y0 + h / 2)) < 30
