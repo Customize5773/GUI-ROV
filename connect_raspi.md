@@ -248,7 +248,7 @@ Keduanya BENAR — mereka memang mencari benda yang berbeda. Karena itu:
   mengusulkan hook itu pada ambang berapa pun, karena bukan itu tugasnya.
 * `rov-vision-qr.service` tetap `best_new_320.onnx`.
 * Servo CASE 4 di `server/control_main.py` mengikuti **kotak QR**
-  (`servo_hook.source: qr` -> telemetry `qr_vision`), bukan hook.
+  (`servo_hook.source: qr` -> telemetry `qr_vision` / `qr_region`), bukan hook.
 
 > Dua jebakan yang hampir memasang bobot salah ke kolam:
 >
@@ -509,3 +509,81 @@ echo '{"name":"light","value":true}' | nc -u -w1 192.168.2.2 14550
 | Port 14550 bentrok | `sudo lsof -i:14550` — hanya boleh satu `rov_agent.py` |
 | Telemetry tidak sampai ke GUI | Cek `LAPTOP_IP` di `.env` sesuai IP laptop |
 | Agent restart berulang | `journalctl -u rov-agent --no-pager -n 50`
+
+
+## Urutan QR payload (control_main, 8 Sep 2026)
+
+Semua durasi dan command gerak dibaca dari `server/control_config.yaml` setiap
+mode autonomous dinyalakan. `rov_pid.py`, mixing ArduSub, jalur F310, dan kontrak
+`qr_vision` tetap seperti sebelumnya. Tidak ada ARM otomatis.
+
+| CASE | Perintah | Transisi |
+| --- | --- | --- |
+| 0 | Diam setelah ARM | 3 detik; selama DISARM timer settle belum berjalan |
+| 1 | `depth_apply=1.0` m | 3 detik atau error depth < 0.1 m |
+| 2 | Yaw berganti arah + surge kecil; sway nol | QR segar → 4; 8 detik tanpa QR → berhenti |
+| 3 | Cadangan | Dilewati |
+| 4 | Sway servo; surge merayap hanya saat centered | Centered + area per kanal selama N tick → 5; timeout 3 detik → berhenti |
+| 5 | Kirim `gripper=close` sekali, motion nol | Tahan 1.5 detik → 6 |
+| 6 | Target = depth aktual saat masuk dikurangi 0.5 m (minimum 0) | 3 detik → selesai, target native tetap aktif |
+
+CASE 5 hanya dicapai oleh pemicu visual, tidak pernah oleh timeout pencarian
+atau timeout servo. Ini mengikuti aturan **hentikan gerak, tahan kedalaman,
+akhiri urutan**. Timeout CASE 4 tetap 3 detik dan dapat mengakhiri CASE
+lebih dahulu daripada batas kehilangan QR 10 detik. Durasi diam sesudah close mengikuti tabel misi (1.5 detik);
+10 tick syarat visual sekitar 0.5 detik mendahului close.
+
+Syarat close adalah `abs(ex) < center_tol_norm` **dan**
+`area/(frame_w*frame_h) > ambang kanal`. Keduanya harus benar selama
+`centered_ticks` tick berturut-turut; satu tick gagal/basi mereset streak.
+Kanal decoded memakai `close_area_frac_decoded` (contour empat sudut), kanal
+region memakai `close_area_frac_region` (luas bbox YOLO). Jangan menyamakan
+keduanya. `pose.z` tidak menjadi syarat penutupan.
+
+Kedua ambang dikirim sebagai **null**: capit otomatis tidak akan menutup sampai
+angka pengukuran diisi. Pada jarak yang benar-benar terjangkau capit, ukur tiap
+kanal terpisah; lihat `[SERVO] channel=... area_frac=... threshold=... close_ticks=...`
+atau hitung dari telemetry. Gunakan beberapa frame dan periksa kotaknya, bukan
+confidence saja. Command search ±100 dan creep -100 adalah placeholder yang
+belum diuji di kolam; semua gain/slew serta `invert_sway: false` juga belum
+tervalidasi untuk trial ini.
+
+Kesegaran memakai metadata aditif `vision_receipts` dari Pi (`received`, `age`),
+yang diteruskan server ke port 14603 bersama channel. Cache yang diulang atau
+kanal lama tidak memperbarui waktu deteksi; umur dihitung di Pi tanpa perlu
+menyamakan jam laptop. Data decoded dan region bisa sama-sama ada di cache
+telemetry meskipun worker hanya mengirim satu kanal per frame.
+**Update Pi diperlukan** untuk metadata ini; versi lama tanpa metadata ditolak
+oleh konsumen visi baru, sehingga pencarian berakhir dengan timeout aman.
+Tidak ada deployment atau uji gerak hardware yang dilakukan oleh perubahan ini.
+
+Saat deteksi melewati `max_age`, surge dan sway langsung nol. Lebih dari
+`lost_timeout_s` (10 detik) → urutan selesai tanpa pencarian ulang. Abort memakai
+`depth_apply` pada depth aktual yang masih segar. Jika telemetry depth hilang,
+command motion nol dan target native terakhir dibiarkan; tidak ada tebakan depth
+baru. Setelah perintah close terkirim, kehilangan QR tidak membatalkan CASE naik
+dan tidak membuka capit. Ini **bukan acknowledgment grip fisik**. Kehilangan
+telemetry kendaraan atau DISARM tetap menghentikan urutan.
+
+Frame gerak tetap bertag `src="fsm"`; abort F310 dan watchdog lama tetap berlaku.
+Selesai tidak mengganti mode GUI ke manual secara otomatis: frame fsm nol terus
+dikirim agar target depth native tetap aktif. Mulai ulang dengan toggle mode.
+
+
+Verifikasi lokal perubahan ini (baseline working tree bersih `1c6a8289`, sebelum
+edit; tidak perlu stash karena belum ada diff):
+
+| Suite | Baseline | Sesudah perubahan |
+| --- | --- | --- |
+| `unittest test_control_authority test_control_servo_hook` | 35 lulus | 53 lulus |
+| `unittest discover -p "test_rov_*.py"` | 197 test, 3 failure + 3 error | Sama, nama kegagalan identik |
+| `CONTROL_STACK=0 npm test` | 4 failure profil joystick | Sama; test relay telemetry baru lulus |
+| `PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest tests/ -q` dari `autonomy/` | 415 passed, 19 skipped, 4 failed | Sama, nama kegagalan identik |
+
+Empat kegagalan autonomy yang sudah ada: `test_make_detector_picks_backend_by_extension`,
+`test_decoder_matches_ultralytics_on_same_onnx[best_pose]`,
+`test_zxing_qr_rescales_checksum_verified_position`, dan
+`test_enhanced_decoder_recovers_ripple_case`. Rantai `npm test` berhenti pada
+profil joystick, sehingga skrip setelahnya tidak dijalankan. Python compile,
+Node syntax check, dan `git diff --check` lulus. Ini bukti lokal, bukan bukti
+keberhasilan grasp, naik di air, atau deployment Pi.

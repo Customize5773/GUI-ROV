@@ -78,8 +78,10 @@ class TagAsalFrame(unittest.TestCase):
         """
         self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
         self.cm.auto_index = next(
-            i for i, step in enumerate(self.cm.AUTO_STEPS) if step[1])
-        self.cm.auto_step_start = time.time()
+            i for i, step in enumerate(self.cm.AUTO_STEPS) if step[7])
+        self.cm.vehicle_state = {"depth": 1.0, "armed": True}
+        self.cm.last_vehicle_time = time.monotonic()
+        self.cm.auto_step_start = time.monotonic()
 
         # Hook melenceng ke kanan -> servo menggerakkan sway.
         self.cm.latest_hook = (640.0 * 0.75, 640.0)
@@ -93,6 +95,22 @@ class TagAsalFrame(unittest.TestCase):
         self.assertTrue(
             any(frame[axis] for axis in ("surge", "sway", "yaw", "heave")),
             "CASE gerak tidak menghasilkan axis non-netral sama sekali")
+
+
+    def test_mode_autonomous_dipublikasikan_setelah_reset_siap(self):
+        from unittest.mock import patch
+        modes_during_reset = []
+        reset = self.cm.autonomous_reset
+
+        def check_reset():
+            modes_during_reset.append(self.cm.get_mode())
+            reset()
+
+        with patch.object(self.cm, "autonomous_reset", side_effect=check_reset):
+            self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
+        self.assertEqual(modes_during_reset, [self.cm.MODE_MANUAL])
+        self.assertIsNotNone(self.cm.mission_cfg)
+        self.assertEqual(self.cm.get_mode(), self.cm.MODE_AUTONOMOUS)
 
 
 class KillSwitchOperator(unittest.TestCase):
