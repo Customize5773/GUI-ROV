@@ -169,10 +169,34 @@ def main():
                                                full_cascade=True)
                            if detection is not None else None)
                 if not decoded:
-                    # Region tanpa decode tidak dilaporkan: tanpa teks QR, FSM
-                    # tak boleh menggerakkan apa pun, jadi hasilnya sama saja
-                    # dengan tidak ada deteksi.
+                    # Tanpa teks QR, FSM Mission 5 tak boleh menggerakkan apa
+                    # pun — jadi `qr_vision` TETAP kosong di sini, kontraknya
+                    # tidak berubah sedikit pun.
+                    #
+                    # Tapi region-nya sendiri berguna untuk kendali LATERAL:
+                    # menengahkan kotak QR di frame tidak butuh tahu isinya, dan
+                    # decode adalah bagian yang paling sering gagal di air
+                    # berriak. Region karena itu dilaporkan di kanal TERPISAH
+                    # `qr_region`, yang dipakai servo CASE 4 di
+                    # server/control_main.py. Konsumen yang butuh teks QR tidak
+                    # pernah melihat kanal ini.
                     result = {'status': 'no_detection', 'timestamp': time.time()}
+
+                    if detection is not None:
+                        emit({
+                            'status': 'region',
+                            'center': [float(detection['center'][0]),
+                                       float(detection['center'][1])],
+                            'bbox': [float(v) for v in detection['bbox']],
+                            'area': float(detection['area']),
+                            'confidence': detection.get('confidence'),
+                            'frame_w': w, 'frame_h': h,
+                            'timestamp': time.time(),
+                            'capture_ts': captured_at,
+                            'age_ms': round((time.time() - captured_at) * 1000.0, 1),
+                            'method': 'yolo_qr_region',
+                            'active_cam': 'BOTTOM',
+                        }, channel='qr_region')
                 else:
                     det = decoded[0]
                     pts = np.asarray(det['pts'], dtype=np.float32).reshape(-1, 2)

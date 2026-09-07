@@ -1,0 +1,5 @@
+# joystick.py (server/) butuh pygame utk membaca F310. Dipasang di komputer
+# server, BUKAN di Pi — karena itu terpisah dari requirements.txt root.
+#
+#   pip install -r server/requirements.txt
+pygame>=2.0

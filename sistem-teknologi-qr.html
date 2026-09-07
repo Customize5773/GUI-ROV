@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sistem Teknologi QR - GUI-ROV</title>
+  <style>
+    :root { --bg:#07111f; --panel:#10223a; --line:#254363; --text:#e8f1fb; --muted:#a8bdd3; --cyan:#55d6ff; --green:#65e6a4; --yellow:#ffd166; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:linear-gradient(135deg,#07111f,#0d1b2e); color:var(--text); font:16px/1.6 system-ui,sans-serif; }
+    main { max-width:1100px; margin:auto; padding:42px 22px 64px; }
+    h1,h2 { line-height:1.2; } h1 { font-size:clamp(2rem,5vw,3.4rem); margin:0 0 12px; } h2 { color:var(--cyan); margin-top:0; }
+    .lead { color:var(--muted); max-width:800px; font-size:1.08rem; }
+    .badge { display:inline-block; padding:5px 10px; border:1px solid #39708d; border-radius:999px; color:var(--green); font-size:.85rem; }
+    .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr)); gap:18px; margin:26px 0; }
+    .card { background:rgba(16,34,58,.9); border:1px solid var(--line); border-radius:16px; padding:22px; }
+    .flow { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:14px 0; }
+    .step { background:#173453; border:1px solid #376287; border-radius:10px; padding:10px 13px; }
+    .arrow { color:var(--yellow); font-weight:700; }
+    code { color:#b7efff; background:#071827; padding:2px 5px; border-radius:5px; }
+    table { width:100%; border-collapse:collapse; } th,td { text-align:left; vertical-align:top; padding:11px; border-bottom:1px solid var(--line); } th { color:var(--yellow); }
+    ul { padding-left:22px; } .muted { color:var(--muted); } .warning { border-left:4px solid var(--yellow); }
+    footer { color:var(--muted); font-size:.9rem; margin-top:28px; }
+  </style>
+</head>
+<body>
+<main>
+  <span class="badge">STATUS: IMPLEMENTED IN REPOSITORY</span>
+  <h1>Sistem Teknologi QR Saat Ini</h1>
+  <p class="lead">Sistem GUI-ROV memiliki dua jalur pembacaan QR: pembacaan cepat di dashboard browser dan pembacaan vision di Raspberry Pi untuk otonomi Mission 5.</p>
+
+  <section class="grid">
+    <article class="card">
+      <h2>1. Jalur GUI / monitoring</h2>
+      <p>Dipakai untuk menampilkan hasil QR pada dashboard dan membaca QR dari kamera <strong>BOTTOM</strong>.</p>
+      <div class="flow"><span class="step">Feed kamera</span><span class="arrow">→</span><span class="step">Proxy <code>/cam</code></span><span class="arrow">→</span><span class="step">Canvas</span><span class="arrow">→</span><span class="step">jsQR</span></div>
+      <ul>
+        <li>Library: <code>public/vendor/jsqr.min.js</code>.</li>
+        <li>Diproses di browser melalui Web Worker <code>public/js/qr-worker.js</code>.</li>
+        <li>Memakai pembacaan normal lalu adaptive-threshold dengan inversion.</li>
+        <li>Proxy kamera menjaga feed tetap same-origin sehingga canvas dapat dibaca.</li>
+      </ul>
+    </article>
+    <article class="card">
+      <h2>2. Jalur otonomi Mission 5</h2>
+      <p>Dipakai oleh pipeline Python di laptop/Raspberry Pi untuk FSM, visual servo, dan docking QR.</p>
+      <div class="flow"><span class="step">Frame kamera</span><span class="arrow">→</span><span class="step"><code>decode_qr()</code></span><span class="arrow">→</span><span class="step">Payload + posisi</span><span class="arrow">→</span><span class="step">M5_QR_DOCK</span></div>
+      <ul>
+        <li>Implementasi utama: <code>autonomy/vision/qr_detect.py</code>.</li>
+        <li>Decoder utama/fallback: <strong>pyzbar/ZBar</strong>, <strong>OpenCV QRCodeDetector</strong>, dan <strong>ZXing-C++</strong> opsional melalui <code>zxingcpp</code>.</li>
+        <li>Preprocessing berjenjang: raw, grayscale + CLAHE, upscale, adaptive threshold, proyeksi/ubin, dan tracking ROI ketika deteksi sebelumnya masih segar.</li>
+        <li>ZXing dipakai sebagai jenjang tambahan untuk QR miring atau kecil.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="card">
+    <h2>Format data QR</h2>
+    <p>Format yang direkomendasikan adalah JSON terstruktur:</p>
+    <p><code>{"mission":5,"team":"HYDROSHIP","type":"payload","id":"A"}</code></p>
+    <table>
+      <tr><th>Field</th><th>Fungsi</th></tr>
+      <tr><td><code>mission</code></td><td>Identitas misi, misalnya Mission 5.</td></tr>
+      <tr><td><code>team</code></td><td>Identitas tim.</td></tr>
+      <tr><td><code>type</code></td><td>Jenis objek/payload.</td></tr>
+      <tr><td><code>id</code></td><td>Penentu sisi dinding A, B, C, atau D.</td></tr>
+    </table>
+    <p class="muted">String lama seperti <code>SIDE_B</code> tetap didukung sebagai fallback.</p>
+  </section>
+
+  <section class="card warning" style="margin-top:18px">
+    <h2>Catatan batas sistem</h2>
+    <ul>
+      <li>QR memberi identitas payload/sisi dan posisi relatif pada frame; hasil ini bukan otomatis koordinat global X/Y.</li>
+      <li>Keberhasilan decode pada bench atau video tidak membuktikan performa di air, konvergensi docking, atau keberhasilan gripper.</li>
+      <li>QR hilang atau stale harus menghentikan/membatasi gerak otonom melalui watchdog dan safety FSM.</li>
+      <li>ArduSub tetap bertanggung jawab atas mixing thruster, stabilisasi, PWM, dan failsafe hardware.</li>
+    </ul>
+  </section>
+
+  <footer>Sumber kode: <code>README.md</code>, <code>autonomy/vision/qr_detect.py</code>, dan <code>public/js/qr-worker.js</code>. Dokumen ini menjelaskan kondisi implementasi saat ini, bukan klaim validasi real-water.</footer>
+</main>
+</body>
+</html>

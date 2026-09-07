@@ -33,6 +33,12 @@ const CONTROL_MAIN_IN = parseInt(
 
 const CONTROL_MODE_PORT = 14602;
 
+/* Deteksi hook (YOLO) -> control_main.py. Worker YOLO berjalan di Pi dan
+   hasilnya sudah menumpang telemetry sebagai `hook_xy`; server ini hanya
+   mencabangkannya, TIDAK menjalankan inferensi apa pun (lihat catatan
+   "YOLO TIDAK LAGI berjalan di laptop" di atas). */
+const CONTROL_HOOK_PORT = 14603;
+
 const controlModeUdp = dgram.createSocket("udp4");
 
 /* console.log di Node itu SINKRON ke stdout: kalau terminal lambat (atau
@@ -916,12 +922,19 @@ const udp = dgram.createSocket("udp4");
 
 const controlMainUdp = dgram.createSocket("udp4");
 
-function sendToRpi(name, value) {
+function sendToRpi(name, value, src) {
     const command = {
         name: name,
         value: value,
         t: Date.now()
     };
+
+    /* Tag asal ikut apa adanya ke Pi. rov_agent.py memakainya untuk memilih
+       fsm_axes vs joystick; kalau hilang di sini, axis autonomous dianggap
+       stik operator dan kill-switch membatalkan FSM di gerakan pertama. */
+    if (src) {
+        command.src = src;
+    }
 
     const packet = Buffer.from(
         JSON.stringify(command)
@@ -996,7 +1009,7 @@ controlMainUdp.on("message", (buf, rinfo) => {
         };
 
         for (const [name, value] of Object.entries(axes)) {
-            sendToRpi(name, value);
+            sendToRpi(name, value, msg.src);
         }
 
         if (DEBUG) {
@@ -1021,7 +1034,10 @@ controlMainUdp.on("message", (buf, rinfo) => {
 
         if (
             msg.name === "gripper" ||
-            msg.name === "depth_apply"
+            msg.name === "depth_apply" ||
+            // Abort stik F310: control_main sudah pindah ke MANUAL, Pi harus
+            // ikut — kalau tidak, Pi tetap mengira dirinya autonomous.
+            msg.name === "control_mode"
         ) {
             sendToRpi(
                 msg.name,
@@ -1055,6 +1071,56 @@ controlMainUdp.bind(
         );
     }
 );
+// ============================================================
+// CONTROL STACK
+// npm start = server.js + control_main.py + joystick.py
+// ============================================================
+
+/* Ketiganya cuma berguna bersama-sama: joystick.py -> :14600 ->
+   control_main.py -> :14601 -> server.js. Lifecycle anak diikat ke proses ini
+   supaya Ctrl-C tidak meninggalkan joystick yatim yang masih menembak axis.
+   CONTROL_STACK=0 kalau ingin menjalankannya manual di terminal terpisah. */
+const controlChildren = [];
+
+function startControlStack() {
+    if (process.env.CONTROL_STACK === "0") {
+        console.log("[CTRL] CONTROL_STACK=0 — control_main.py & joystick.py tidak di-spawn");
+        return;
+    }
+
+    for (const script of ["control_main.py", "joystick.py"]) {
+        const child = spawn(
+            DEFAULT_PYTHON,
+            ["-u", path.join(__dirname, script)],
+            { stdio: ["ignore", "inherit", "inherit"] }
+        );
+
+        controlChildren.push(child);
+
+        child.on("error", (err) =>
+            console.error(`[CTRL] ${script} gagal dijalankan: ${err.message}`));
+
+        /* joystick.py keluar sendiri kalau F310 tidak tercolok, dan itu bukan
+           alasan mematikan server: dashboard + telemetri tetap berguna. */
+        child.on("exit", (code, sig) =>
+            console.warn(`[CTRL] ${script} berhenti (code=${code} sig=${sig})`));
+    }
+
+    console.log(`[CTRL] control_main.py + joystick.py dijalankan (${DEFAULT_PYTHON})`);
+}
+
+function stopControlStack() {
+    for (const child of controlChildren) {
+        try { child.kill("SIGTERM"); } catch (_) {}
+    }
+}
+
+process.on("exit", stopControlStack);
+for (const sig of ["SIGINT", "SIGTERM"]) {
+    process.on(sig, () => { stopControlStack(); process.exit(0); });
+}
+
+startControlStack();
 
 udp.on("message", (buf, rinfo) => {
   let data;
@@ -1081,6 +1147,34 @@ udp.on("message", (buf, rinfo) => {
       `heading=${data.heading} roll=${data.roll} pitch=${data.pitch} ` +
       `volt=${data.voltage} armed=${data.armed} mode=${data.mode}`
     );
+  }
+
+  /* Cabang ke control_main: hanya frame yang BENAR-BENAR membawa deteksi.
+     Telemetry mengalir 10 Hz walau qr_vision/hook_xy null; meneruskan yang null
+     cuma akan me-refresh stempel waktu di sisi sana dan membuat deteksi basi
+     terlihat segar — persis yang tidak boleh terjadi kalau kamera mati.
+
+     Tiga sumber diteruskan; control_main yang memilih lewat
+     `servo_hook.source` di control_config.yaml:
+       qr_vision — best_new @ CAM BOTTOM, kotak QR yang BERHASIL di-decode
+       qr_region — best_new @ CAM BOTTOM, kotak QR terdeteksi TANPA decode
+       hook_xy   — best_pose @ CAM WALL, hook candy-cane
+     qr_vision & qr_region tak pernah datang untuk frame yang sama: worker
+     mengirim salah satu, tergantung decode berhasil atau tidak. */
+  for (const [type, value, punyaGeometri] of [
+    ["qr_vision", data.qr_vision, data.qr_vision && data.qr_vision.center],
+    ["qr_region", data.qr_region, data.qr_region && data.qr_region.center],
+    ["hook_vision", data.hook_xy, data.hook_xy && Array.isArray(data.hook_xy.bbox)],
+  ]) {
+    if (!punyaGeometri) continue;
+
+    const paket = Buffer.from(JSON.stringify({ type, value, t: Date.now() }));
+
+    controlModeUdp.send(paket, CONTROL_HOOK_PORT, "127.0.0.1", (err) => {
+      if (err && DEBUG) {
+        console.error(`[VISI -> control_main] ${type} gagal:`, err.message);
+      }
+    });
   }
 
   broadcast({ type: "telemetry", data, recv: Date.now() });

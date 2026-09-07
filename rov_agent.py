@@ -249,6 +249,10 @@ mission5_runner = None
 # menentukan mana yang dipakai adalah current_control_mode di joystick_sender.
 fsm_axes = {"surge": 0, "sway": 0, "heave": 0, "yaw": 0}
 fsm_axes_lock = threading.Lock()
+# Kapan fsm_axes terakhir di-refresh. Sejak axis autonomous datang lewat UDP
+# (control_main.py), fail-safe idle yang sama dengan axis operator berlaku juga
+# untuknya: sumber diam = netral, bukan mengulang perintah terakhir.
+last_fsm_axes_update = 0.0
 
 # Complementary filter + EMA untuk roll/pitch/yaw dari ATTITUDE (lihat
 # attitude_filter.py). Meredam jitter sensor tanpa menambah lag berarti.
@@ -286,6 +290,13 @@ latest_hook_vision = None
 latest_hook_vision_received = 0.0
 latest_qr_vision = None
 latest_qr_vision_received = 0.0
+# Region kotak QR yang TERDETEKSI tapi gagal di-decode. Terpisah dari
+# latest_qr_vision karena kontraknya berbeda: tanpa teks QR, Mission 5 tak boleh
+# bergerak — tapi menengahkan kotak di frame (servo CASE 4 di control_main.py)
+# tidak butuh tahu isinya, dan decode adalah bagian yang paling sering gagal di
+# air berriak.
+latest_qr_region = None
+latest_qr_region_received = 0.0
 
 # Hitungan trial gagal Misi 2 (grab) & Misi 3 (hang), command `mission_counter`.
 # Skor 15/10/5 per Guidebook KKI 2026 §4.7.4 ditentukan dari jumlah trial —
@@ -658,6 +669,7 @@ def send_telemetry():
     # membaca d.hook_xy.bbox apa adanya sehingga sisi browser tak berubah.
     state["hook_xy"] = latest_hook_vision
     state["qr_vision"] = latest_qr_vision
+    state["qr_region"] = latest_qr_region
 
     send_to_gui(state)
     send_to_vision_workers(state)
@@ -742,13 +754,53 @@ QR_VISION_MAX_AGE = 0.5
 # bawah — dua jalur berbeda, jadi bbox bisa terlihat rapi di layar sementara Pi
 # membuang record yang sama persis tanpa satu pun indikator.
 # Dibaca _fsm_read_state() -> telem['vision_reject'] -> telemetry_out.
-last_vision_reject = {"hook": None, "qr": None}
+last_vision_reject = {"hook": None, "qr": None, "qr_region": None}
 
 
 def _reject_vision(channel, reason):
     """Catat alasan lalu tolak. Selalu mengembalikan None (dipakai `return`)."""
     last_vision_reject[channel] = reason
     return None
+
+
+def _validate_qr_region(value):
+    """Validasi region kotak QR (tanpa decode) pada batas jaringan worker -> Pi.
+
+    Sengaja TIDAK menuntut `data`/`payload`/`pose`: yang dipakai konsumennya
+    hanya geometri lateral. Batas kewarasan angkanya sama ketat dengan
+    _validate_qr_vision — asalnya sama-sama dari luar proses ini.
+    """
+    if not isinstance(value, dict) or value.get("method") != "yolo_qr_region":
+        return _reject_vision("qr_region", "bad_method")
+    try:
+        confidence = float(value["confidence"])
+        frame_w = int(value["frame_w"])
+        frame_h = int(value["frame_h"])
+        cx, cy = float(value["center"][0]), float(value["center"][1])
+        area = float(value["area"])
+    except (KeyError, TypeError, ValueError, IndexError):
+        return _reject_vision("qr_region", "fields_malformed")
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        return _reject_vision("qr_region", "conf_out_of_range:%s" % confidence)
+    if frame_w <= 0 or frame_h <= 0:
+        return _reject_vision("qr_region", "frame_invalid:%dx%d" % (frame_w, frame_h))
+    if not math.isfinite(area) or area <= 0:
+        return _reject_vision("qr_region", "area_invalid:%s" % area)
+    if (not math.isfinite(cx) or not math.isfinite(cy)
+            or not 0 <= cx <= frame_w or not 0 <= cy <= frame_h):
+        return _reject_vision("qr_region", "center_outside_frame:%s,%s@%dx%d"
+                              % (cx, cy, frame_w, frame_h))
+
+    last_vision_reject["qr_region"] = None
+    return {
+        "status": str(value.get("status", ""))[:40],
+        "method": "yolo_qr_region",
+        "confidence": confidence,
+        "center": [cx, cy],
+        "area": area,
+        "frame_w": frame_w,
+        "frame_h": frame_h,
+    }
 
 
 def _validate_qr_vision(value):
@@ -920,6 +972,7 @@ def _validate_hook_vision(value):
 
 def command_listener():
     global last_joystick_update
+    global last_fsm_axes_update
     global requested_mode
     global requested_mode_ts
     global current_control_mode
@@ -939,6 +992,8 @@ def command_listener():
     global latest_hook_vision_received
     global latest_qr_vision
     global latest_qr_vision_received
+    global latest_qr_region
+    global latest_qr_region_received
     global current_control_mode
     global last_control_main_heartbeat
 
@@ -972,7 +1027,8 @@ def command_listener():
         # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console.
         # Gripper analog (nilai angka dari axis gamepad) juga bisa datang cepat;
         # open/close diskrit dari tombol/keyboard tetap di-log.
-        quiet = name in AXIS_RANGE or name in ("hook_vision", "qr_vision") or (
+        quiet = name in AXIS_RANGE or name in ("hook_vision", "qr_vision",
+                                           "qr_region") or (
             name == "gripper" and isinstance(value, (int, float))
             and not isinstance(value, bool)
         )
@@ -1056,6 +1112,10 @@ def command_listener():
             elif name == "hook_vision":
                 latest_hook_vision = _validate_hook_vision(value)
                 latest_hook_vision_received = time.monotonic()
+
+            elif name == "qr_region":
+                latest_qr_region = _validate_qr_region(value)
+                latest_qr_region_received = time.monotonic()
 
             elif name == "qr_vision":
                 latest_qr_vision = _validate_qr_vision(value)
@@ -1573,9 +1633,21 @@ def command_listener():
             elif name in AXIS_RANGE:
                 new_value = clamp_axis(name, value)
 
-                with joystick_lock:
-                    joystick[name] = new_value
-                    last_joystick_update = time.time()
+                # Otoritas ditentukan TAG, bukan alamat pengirim: sejak
+                # control_main.py ikut mengirim axis lewat UDP yang sama,
+                # keduanya datang dari server.js dan tak terbedakan dari IP.
+                # Axis autonomous (src="fsm") HARUS masuk fsm_axes; kalau ia
+                # mendarat di dict joystick, joystick_sender() membacanya
+                # sebagai stik operator dan kill-switch membatalkan FSM di
+                # gerakan pertama. Lihat juga catatan src di rov_link.py.
+                if msg.get("src") == "fsm":
+                    with fsm_axes_lock:
+                        fsm_axes[name] = new_value
+                        last_fsm_axes_update = time.time()
+                else:
+                    with joystick_lock:
+                        joystick[name] = new_value
+                        last_joystick_update = time.time()
 
             elif name in GUI_ONLY_COMMANDS:
                 # Murni urusan dashboard, tidak ada padanannya di wahana.
@@ -1837,11 +1909,14 @@ def _fsm_set_axis(surge=0, sway=0, yaw=0, heave=0):
     persen milik FSM). Di-clamp lewat jalur yang sama dengan axis operator
     supaya tidak ada cara FSM mengirim nilai di luar rentang yang sah.
     """
+    global last_fsm_axes_update
+
     with fsm_axes_lock:
         fsm_axes["surge"] = clamp_axis("surge", surge)
         fsm_axes["sway"] = clamp_axis("sway", sway)
         fsm_axes["yaw"] = clamp_axis("yaw", yaw)
         fsm_axes["heave"] = clamp_axis("heave", heave)
+        last_fsm_axes_update = time.time()
 
 def _fsm_set_alt_hold():
     global master
@@ -1925,10 +2000,19 @@ def _fsm_read_state():
     if latest_qr_vision is not None and not qr_fresh:
         reasons.append("stale_qr_%.2fs" % qr_age)
 
+    # Region kotak QR memakai jendela yang sama dgn qr_vision: sumbernya satu
+    # worker, satu kamera, dan konsumennya (servo lateral) sama-sama tak boleh
+    # bergerak atas dasar geometri basi.
+    region_age = now - latest_qr_region_received
+    region_fresh = latest_qr_region is not None and region_age <= QR_VISION_MAX_AGE
+    data["qr_region"] = dict(latest_qr_region) if region_fresh else None
+    if latest_qr_region is not None and not region_fresh:
+        reasons.append("stale_qr_region_%.2fs" % region_age)
+
     # Alasan validator ikut dilaporkan BERSAMA alasan basi, bukan saling
     # menimpa: record yang ditolak validator membuat cache lama ikut menua,
     # jadi kalau salah satu menang yang terlihat cuma gejala hilirnya.
-    for channel in ("hook", "qr"):
+    for channel in ("hook", "qr", "qr_region"):
         reason = last_vision_reject[channel]
         if reason:
             reasons.append("%s:%s" % (channel, reason))
@@ -2196,11 +2280,14 @@ def joystick_sender():
             else:
                 with fsm_axes_lock:
                     axes = dict(fsm_axes)
-                # Axis FSM tidak lewat command_listener, jadi fail-safe idle
-                # (yang mengukur last_joystick_update) tak berlaku untuknya —
-                # kalau tidak di-refresh, FSM selalu dianggap "stale" dan
-                # setiap perintahnya diganti netral.
-                last_update = time.time()
+                    # Umur SUNGGUHAN dari fsm_axes. Dulu di sini ditulis
+                    # time.time() karena axis FSM tak pernah lewat
+                    # command_listener; sekarang control_main.py mengirimnya
+                    # lewat UDP, jadi stempel palsu itu justru mematikan
+                    # fail-safe: loop motion control_main bisa macet sementara
+                    # thread heartbeat-nya tetap hidup, dan axis terakhir akan
+                    # diulang selamanya.
+                    last_update = last_fsm_axes_update
 
         # Ramp TIDAK BOLEH menunda perintah berhenti. E-Stop menetralkan axis
         # lalu disarm; tanpa reset di sini, nilai ter-shape masih meluncur

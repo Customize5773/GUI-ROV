@@ -44,12 +44,19 @@ def enable_udp_emit(target, channel):
                  (host or '127.0.0.1', int(port)), channel)
 
 
-def emit(value):
+def emit(value, channel=None):
+    """`channel` menimpa kanal default sink untuk SATU record.
+
+    Dipakai worker QR: region yang terdeteksi tapi gagal di-decode dikirim ke
+    kanal `qr_region`, terpisah dari `qr_vision` yang kontraknya mewajibkan teks
+    QR. Satu soket, dua nama — jadi tidak ada sink kedua yang harus dirawat.
+    """
     sys.stdout.write(json.dumps(value, separators=(',', ':')) + '\n')
     sys.stdout.flush()
     if _udp_sink is None:
         return
-    sock, address, channel = _udp_sink
+    sock, address, default_channel = _udp_sink
+    channel = channel or default_channel
     try:
         sock.sendto(json.dumps({'name': channel, 'value': value},
                                separators=(',', ':')).encode(), address)

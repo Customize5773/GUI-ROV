@@ -198,6 +198,66 @@ dengan `taskset -c 2,3` sebelum memutuskan.
 > membuat worker mati saat start dengan `ModuleNotFoundError: cv2`.
 
 
+### Kanal `qr_region` — kotak QR tanpa decode (8 Sep 2026)
+
+`rov-vision-qr.service` kini mengirim DUA kanal UDP dari satu soket:
+
+| kanal | kapan | konsumen |
+|---|---|---|
+| `qr_vision` | QR berhasil di-decode | Mission 5 (butuh teks QR) |
+| `qr_region` | kotak terdeteksi, decode GAGAL | servo CASE 4 (`control_main.py`) |
+
+Keduanya tak pernah dikirim untuk frame yang sama.
+
+Alasannya: menengahkan kotak QR di frame tidak butuh tahu isinya, sedangkan
+decode adalah bagian yang paling sering gagal di air berriak. Sebelum ini region
+tanpa decode dibuang ("hasilnya sama saja dengan tidak ada deteksi") — benar
+untuk Mission 5, yang tak boleh bergerak tanpa teks QR, tapi mematikan kendali
+lateral justru saat air paling keruh.
+
+**Kontrak `qr_vision` sengaja TIDAK diubah.** `_validate_qr_vision()` tetap
+mewajibkan `data`, dan record region ditolaknya (`method` berbeda), jadi
+Mission 5 tidak pernah melihat kanal baru ini. Dijaga
+`test_control_servo_hook.py::RegionTanpaDecode`.
+
+Telemetry mendapat field baru `qr_region` (gate kesegaran sama dgn `qr_vision`,
+`QR_VISION_MAX_AGE`). Alasan penolakan muncul di `vision_reject` dgn prefiks
+`qr_region:`.
+
+Deploy: ikut perintah rsync di bagian atas (`rov_agent.py` + `autonomy/tools/`),
+lalu `sudo systemctl restart rov-agent rov-vision-qr`.
+
+### Pembagian bobot: best_new = KOTAK QR, best_pose = HOOK (8 Sep 2026)
+
+Nama kelas di dalam `best_new.pt` tertulis `Hook`, dan itu menyesatkan: model
+ini melokalisasi **kotak QR payload**, bukan hook candy-cane. Ia dipakai
+`rov-vision-qr.service` di CAM BOTTOM, dan memang bekerja benar di sana.
+
+Terbukti pada frame WALL nyata (anotasi:
+`autonomy/tests/fixtures/live_hook/live_wall_hook_20260907_deteksi.png`):
+
+| bobot | kandidat (conf>=0,05) | objeknya |
+|---|---|---|
+| `best_new` @640 | conf 0,677 — 23x50 px | **kotak QR** di rakitan gripper |
+| `best_pose` @416 | conf 0,379 — 218x351 px | **hook** candy-cane |
+
+Keduanya BENAR — mereka memang mencari benda yang berbeda. Karena itu:
+
+* `rov-vision-hook.service` tetap `best_pose_320.onnx`. Sempat dipindah ke
+  `best_new_320.onnx` pada 8 Sep lalu dikembalikan: best_new tak pernah
+  mengusulkan hook itu pada ambang berapa pun, karena bukan itu tugasnya.
+* `rov-vision-qr.service` tetap `best_new_320.onnx`.
+* Servo CASE 4 di `server/control_main.py` mengikuti **kotak QR**
+  (`servo_hook.source: qr` -> telemetry `qr_vision`), bukan hook.
+
+> Dua jebakan yang hampir memasang bobot salah ke kolam:
+>
+> 1. **Jangan bandingkan bobot lintas `imgsz`.** Graf ONNX berukuran TETAP;
+>    tiap ukuran praktis model yang berbeda.
+> 2. **Jangan menilai bobot dari confidence tanpa melihat kotaknya.** Angka
+>    0,677 vs 0,379 tak memberi tahu apa pun di sini — yang menyelesaikan
+>    adalah menggambar kedua kotak ke gambar dan melihat isinya.
+
 ```ini
 # /etc/systemd/system/rov-vision-hook.service
 [Unit]
@@ -208,7 +268,7 @@ After=rov-agent.service ustreamer-cam1.service
 User=hydroships
 WorkingDirectory=/home/hydroships/rov-agent
 Environment=PYTHONPATH=/home/hydroships/rov-agent
-ExecStart=/home/hydroships/rov-agent/.venv/bin/python tools/hook_vision_worker.py --camera http://127.0.0.1:8080/stream --model vision/best_pose_320.onnx --map config/hook_map.pool.yaml --calib vision/calibration/wall.npz --emit-udp 127.0.0.1:14550 --telemetry-port 14556 --cv-threads 2 --fps 4
+ExecStart=/home/hydroships/rov-agent/.venv/bin/python tools/hook_vision_worker.py --camera http://127.0.0.1:8080/stream --model vision/best_pose_320.onnx --imgsz 320 --map config/hook_map.pool.yaml --calib vision/calibration/wall.npz --emit-udp 127.0.0.1:14550 --telemetry-port 14556 --cv-threads 2 --fps 4
 CPUAffinity=2 3
 Nice=10
 CPUWeight=20

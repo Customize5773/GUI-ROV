@@ -1,0 +1,66 @@
+# Tuning servo hook untuk CASE 4 di control_main.py.
+#
+# SEMUA nilai di sini BELUM TERVALIDASI HARDWARE. Angkanya disalin dari
+# konstanta servo docking yang sudah ada di autonomy/fsm/mission5.py (IBVS_KP_SWAY,
+# SERVO_KD_IBVS, SERVO_SLEW, SERVO_DEADBAND_NORM, VisualServo.tol_norm/max_speed)
+# supaya titik awalnya bukan tebakan kosong — TAPI konteksnya berbeda (kamera,
+# jarak, dan di sini cuma satu axis yang aktif), jadi perlakukan sebagai
+# placeholder sampai diukur di kolam.
+#
+# File ini dibaca ulang SETIAP KALI mode autonomous dinyalakan: edit yaml,
+# toggle mode di GUI, tanpa restart server dan tanpa redeploy apa pun ke Pi.
+
+servo_hook:
+
+  # ── SUMBER ACUAN LATERAL ───────────────────────────────────────────────
+  #   qr   -> best_new.pt @ CAM BOTTOM, KOTAK QR payload. Dipakai CASE 4.
+  #           Menerima DUA kanal sekaligus:
+  #             `qr_vision` QR berhasil di-decode
+  #             `qr_region` kotak terdeteksi, decode GAGAL
+  #           Worker mengirim salah satu per frame, tak pernah keduanya.
+  #           Menengahkan kotak tidak butuh tahu isi QR-nya, sedangkan decode
+  #           adalah bagian yang paling sering gagal di air berriak — jadi
+  #           servo tetap punya acuan justru saat air paling keruh.
+  #   hook -> best_pose.pt @ CAM WALL, hook candy-cane (`hook_xy`).
+  source: qr
+
+  # ── ARAH — VERIFIKASI DULU SEBELUM MENYENTUH ANGKA LAIN ────────────────
+  # Kalau tandanya terbalik, gejalanya BUKAN "koreksi kurang kuat": ROV akan
+  # menjauh dari hook makin cepat, dan itu terlihat persis seperti kp_sway
+  # kebesaran. Menurunkan kp hanya memperlambat kegagalan yang sama.
+  # Cek arah lewat panel Thruster Test di halaman Setup SEBELUM tuning angka.
+  # Preseden: joystick.py sengaja membalik surge (SURGE_MIN=1000/MAX=-1000),
+  # jadi sway berisiko sama.
+  invert_sway: false
+
+  # ── Gain & peredam ─────────────────────────────────────────────────────
+  # Frame 3-2-1: cuma SATU thruster sway. Otoritas lateral lemah, jadi menaikkan
+  # kp tidak menghasilkan koreksi lebih cepat — ia cuma menyaturasi satu-satunya
+  # thruster yang ada, sambil menambah roll.
+  kp_sway: 45.0          # % command per 1.0 error ternormalisasi
+  kd_sway: 6.0           # redam overshoot; error visual berisik, D wajib difilter
+  d_lpf: 0.4             # 0..1, kecil = lebih halus & lebih lambat
+  deadband_norm: 0.02    # |ex| di bawah ini = 0; riak menggeser centroid bbrp px
+
+  # Sway menimbulkan roll secara mekanik (asimetri terukur 7,1:1, ROV diam
+  # miring ~-2°). Roll memiringkan kamera -> error visual melompat -> servo
+  # mengejar bayangannya sendiri. slew memutus umpan balik itu; ini pagar
+  # keselamatan loop, bukan sekadar knob kenyamanan. Naikkan pelan-pelan.
+  slew: 120.0            # %/detik batas laju perubahan command
+  max_speed: 35.0        # batas command (%) sebelum diskalakan ke ±1000
+
+  # ── Ambang tengah ──────────────────────────────────────────────────────
+  # center_tol_norm membuka gate surge DAN menghitung selesainya CASE 4.
+  # 0.08 = 8% setengah-lebar frame.
+  center_tol_norm: 0.08
+  # Berapa tick 20 Hz "di tengah" (dgn histeresis) sebelum CASE 4 dianggap
+  # selesai. Ini juga yang menentukan berapa lama surge sempat berjalan setelah
+  # gate terbuka: 10 tick ≈ 0,5 detik maju.
+  centered_ticks: 10
+
+  # ── Umur deteksi ───────────────────────────────────────────────────────
+  # Sama dengan HOOK_VISION_MAX_AGE di rov_agent.py. Lebih tua dari ini =
+  # sway NOL. Tidak ada sensor posisi lateral sama sekali di ROV ini: kalau
+  # deteksi hilang, tak ada satu pun cara mengetahui ROV sudah bergeser berapa,
+  # jadi menebak dari error terakhir = menggerakkan wahana secara buta.
+  max_age: 1.0
