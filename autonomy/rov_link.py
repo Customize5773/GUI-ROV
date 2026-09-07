@@ -158,6 +158,12 @@ class RovLink:
             "heading": None, "roll": None, "pitch": None, "depth": None,
             "temp": None, "voltage": None, "armed": False,
             "light": False, "mode": "manual", "poshold": False,
+            # Alasan validator vision menolak deteksi. SELALU None di jalur ini:
+            # validator batas jaringan hidup di rov_agent.py (Pi), dan jalur
+            # rov_link tidak melewatinya sama sekali. Dideklarasikan eksplisit
+            # supaya kontrak telemetry yang dibaca fsm/mission5.py utuh — FSM
+            # membacanya lewat telem.get('vision_reject').
+            "vision_reject": None,
         }
         self.pilot_mode_name = "manual"   # nama GUI terakhir diminta lewat "pilot_mode"
 

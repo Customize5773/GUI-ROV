@@ -20,9 +20,10 @@ import sys
 
 import pytest
 
-_AUTONOMY = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+_TESTS = os.path.dirname(os.path.abspath(__file__))
+_AUTONOMY = os.path.dirname(_TESTS)
 _ROOT = os.path.dirname(_AUTONOMY)
-for _path in (_AUTONOMY, _ROOT):
+for _path in (_AUTONOMY, _ROOT, _TESTS):
     if _path not in sys.path:
         sys.path.insert(0, _path)
 
@@ -257,6 +258,46 @@ def test_lock_progress_field_exists_in_telemetry_contract():
     head = src[src.index('self.telemetry_out = {'):]
     head = head[:head.index('\n        }')]
     assert "'reject_reason': None" in head and "'lock_progress': None" in head
+
+
+# ── 3b. Sambungan Pi -> FSM -> telemetry (seam yang menyatukan semuanya) ──────
+
+def _run_one_tick(vision_reject, sebelumnya=None):
+    """Jalankan TEPAT satu iterasi _loop dgn telem['vision_reject'] dipaksa.
+
+    _running dimatikan dari dalam telem.get() — iterasi berjalan sampai tuntas
+    lalu `while` berhenti, jadi seam yang diuji adalah _loop yang sungguhan,
+    bukan tiruannya."""
+    from test_mission5 import _make_fsm  # helper sim yang sudah ada
+
+    fsm = _make_fsm()
+    asli = fsm.telem.get
+
+    def sekali():
+        fsm._running = False
+        return {**asli(), 'control_mode': 'autonomous', 'vision_reject': vision_reject}
+
+    fsm.telem.get = sekali
+    fsm.telemetry_out['reject_reason'] = sebelumnya
+    fsm._require_auto = False
+    fsm._running = True
+    fsm._transition(mission5.State.DIVE)
+    fsm._loop()
+    return fsm
+
+
+def test_loop_seeds_reject_reason_from_pi_boundary():
+    """Alasan dari validator Pi HARUS muncul di telemetry_out tanpa gate FSM
+    ikut campur. Ini sambungan yang membuat seluruh instrumentasi berguna:
+    putus di sini, alasan berhenti di Pi dan GUI tetap gelap."""
+    fsm = _run_one_tick('hook:keypoint_out_of_frame:0@640.0,-2.9')
+    assert fsm.telemetry_out['reject_reason'] == 'hook:keypoint_out_of_frame:0@640.0,-2.9'
+
+
+def test_loop_clears_reject_reason_when_boundary_is_happy():
+    """Alasan yang menempel setelah masalahnya lewat = diagnosis salah arah."""
+    fsm = _run_one_tick(None, sebelumnya='hook:bad_method')
+    assert fsm.telemetry_out['reject_reason'] is None
 
 
 # ── 4. Ringkasan run log (tools/analyze_run.py) ───────────────────────────────

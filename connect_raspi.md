@@ -138,34 +138,45 @@ Threading: `--cv-threads 2` (default) terukur sedikit LEBIH CEPAT daripada 4
 thread saat dipin ke 2 core (216,9 ms vs 224,8 ms) — 4 thread hanya berebut core
 yang sama, dan menambah panas percuma.
 
-### ⚠ BATAS TERMAL — kendala fisik yang sebenarnya
-
-Ini, bukan perebutan CPU, yang jadi risiko utama:
+### Termal — diukur pada sistem TERPASANG (7 Sep 2026)
 
 | Kondisi | Suhu | `get_throttled` |
 |---|---|---|
-| Idle (rov-agent + 2 uStreamer) | **71,1 °C** | `0x0` |
-| Sesudah bench | 74,5 °C | `0xe0000` (pernah throttle) |
-| **Sesudah 45 detik inferensi 320 nonstop** | **81,3 °C** | **`0xe0008` — soft temp limit AKTIF** |
+| Idle (rov-agent + 2 uStreamer) | 71,1 °C | `0x0` |
+| Stress sintetis 100% duty, 45 dtk | **81,3 °C** | `0xe0008` — soft temp limit AKTIF |
+| **Konfigurasi TERPASANG, 90 dtk** (2 worker `--fps 4` + rov-agent) | **69,6–72,0 °C** | **`0x0` — tidak throttle** |
 
-**Throttling termal bersifat SoC-wide: penurunan clock ikut mengenai core 0-1.**
-Artinya `CPUAffinity` melindungi loop kontrol dari perebutan penjadwalan, TAPI
-TIDAK melindunginya dari panas. Satu trial Misi 5 berdurasi sampai 10 menit,
-sedangkan batas termal tersentuh dalam **45 detik**.
+**Konfigurasi terpasang tidak menimbulkan throttling.** Angka 81,3 °C itu uji
+beban sintetis tanpa jeda (inferensi berturut-turut tanpa henti) dan TIDAK
+mewakili worker sesungguhnya: `--fps 4` plus throttle emit membuat duty jauh
+lebih rendah. Suhu berjalan praktis sama dengan idle.
 
-Idle 71 °C juga sudah tinggi untuk Pi 4 — indikasi pendinginan pas-pasan.
+Tetap perlu diawasi, karena dua alasan:
 
-Yang harus dilakukan SEBELUM percaya jalur ini di kolam:
+1. Pengukuran ini di **meja terbuka**. Di enclosure tertutup pendinginan lebih
+   buruk — ukur ulang di kondisi lomba sebenarnya.
+2. Throttling termal bersifat **SoC-wide**: bila suatu saat tersentuh, penurunan
+   clock ikut mengenai core 0-1. `CPUAffinity` melindungi loop kontrol dari
+   perebutan penjadwalan, TIDAK dari panas.
 
-1. **Pendinginan.** Heatsink + kontak termal ke bodi enclosure adalah perbaikan
-   paling langsung. Ukur ulang suhu di enclosure TERTUTUP, bukan di meja
-   terbuka — kondisi lapangan lebih buruk daripada pengukuran ini.
-2. **Turunkan duty cycle.** Gate `vision_want` sudah mematikan worker yang tidak
-   dipakai. Pertimbangkan `--fps 4` (bukan 10): 320 hanya sanggup 4,6 Hz, jadi
-   `--fps 10` berarti worker berjalan 100% duty tanpa menghasilkan frame
-   tambahan — hanya menambah panas.
-3. **Pantau `pi_temp` di telemetry GUI selama trial.** Sudah dikirim
-   `rov_agent.py`; jadikan itu angka yang diawasi pilot.
+`pi_temp` sudah dikirim `rov_agent.py` ke telemetry GUI — jadikan angka yang
+diawasi pilot selama trial.
+
+### Laju inferensi nyata setelah terpasang
+
+CPU per worker ~1 core penuh (core 2-3 dipakai habis oleh keduanya). Karena itu:
+
+| Kondisi | Worker aktif | Laju per worker |
+|---|---|---|
+| FSM idle / manual (gate fail-open) | keduanya | ~2,3 Hz |
+| `M5_QR_DOCK`, `M5_HOOK_ALIGN` | **satu** | **~4,6 Hz** |
+| `M5_YOLO_SEARCH` | keduanya | ~2,3 Hz |
+
+Inilah alasan gate `vision_want` berarti: pada fase docking yang menentukan,
+worker yang bekerja mendapat KEDUA core dan berjalan ~4,6 Hz — di atas gate QR
+3 Hz. Di `M5_YOLO_SEARCH` keduanya berbagi, jadi pengintipan QR di state itu
+lebih jarang berhasil (jalan pintas ke M5_QR_DOCK jadi kurang sering terpakai —
+bukan kegagalan, alur hook tetap jalan).
 
 ### Pilih ukuran model (jalankan ulang bila model berubah)
 
