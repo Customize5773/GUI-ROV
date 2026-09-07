@@ -82,7 +82,7 @@ mission:
   search_sweep_s: 2.0
   approach_surge: -100
   servo_timeout_s: 3.0
-  lost_timeout_s: 2.0
+  lost_timeout_s: 10.0
   gripper_hold_s: 1.5
   rise_m: 0.5
   rise_wait_s: 3.0

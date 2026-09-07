@@ -57,7 +57,7 @@ mission:
   search_sweep_s: 2.0
   approach_surge: -100
   servo_timeout_s: 3.0
-  lost_timeout_s: 2.0
+  lost_timeout_s: 10.0
   gripper_hold_s: 1.5
   rise_m: 0.5
   rise_wait_s: 3.0
@@ -559,7 +559,9 @@ class UrutanMisi(_ServoBase):
         self.assert_stopped()
         self.assertEqual(self.commands("gripper"), [])
 
-    def test_hilang_sementara_nol_seketika_lebih_dua_detik_abort(self):
+    def test_hilang_sementara_nol_seketika_lebih_sepuluh_detik_abort(self):
+        # Isolasi watchdog QR dari timeout CASE 4 produksi (3 detik).
+        self.cm.AUTO_STEPS[4] = (20.0, *self.cm.AUTO_STEPS[4][1:])
         self.cm.enter_case(4)
         self.vision(fraction=0.01)
         self.step()
@@ -567,7 +569,12 @@ class UrutanMisi(_ServoBase):
         self.step(1.01)
         self.assertFalse(self.cm.auto_finished)
         self.assertEqual([self.sent[-1][a] for a in self.cm.AXES], [0] * 4)
-        self.step(1.0)
+        self.now = self.cm.last_hook_time + 10.0
+        self.state()
+        self.cm.autonomous_control()
+        self.assertFalse(self.cm.auto_finished)
+        self.assertEqual([self.sent[-1][a] for a in self.cm.AXES], [0] * 4)
+        self.step(0.01)
         self.assert_stopped()
         self.assertEqual(self.commands("gripper"), [])
 

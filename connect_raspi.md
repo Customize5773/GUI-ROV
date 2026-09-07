@@ -529,7 +529,8 @@ mode autonomous dinyalakan. `rov_pid.py`, mixing ArduSub, jalur F310, dan kontra
 
 CASE 5 hanya dicapai oleh pemicu visual, tidak pernah oleh timeout pencarian
 atau timeout servo. Ini mengikuti aturan **hentikan gerak, tahan kedalaman,
-akhiri urutan**. Durasi diam sesudah close mengikuti tabel misi (1.5 detik);
+akhiri urutan**. Timeout CASE 4 tetap 3 detik dan dapat mengakhiri CASE
+lebih dahulu daripada batas kehilangan QR 10 detik. Durasi diam sesudah close mengikuti tabel misi (1.5 detik);
 10 tick syarat visual sekitar 0.5 detik mendahului close.
 
 Syarat close adalah `abs(ex) < center_tol_norm` **dan**
@@ -557,7 +558,7 @@ oleh konsumen visi baru, sehingga pencarian berakhir dengan timeout aman.
 Tidak ada deployment atau uji gerak hardware yang dilakukan oleh perubahan ini.
 
 Saat deteksi melewati `max_age`, surge dan sway langsung nol. Lebih dari
-`lost_timeout_s` (2 detik) → urutan selesai tanpa pencarian ulang. Abort memakai
+`lost_timeout_s` (10 detik) → urutan selesai tanpa pencarian ulang. Abort memakai
 `depth_apply` pada depth aktual yang masih segar. Jika telemetry depth hilang,
 command motion nol dan target native terakhir dibiarkan; tidak ada tebakan depth
 baru. Setelah perintah close terkirim, kehilangan QR tidak membatalkan CASE naik
