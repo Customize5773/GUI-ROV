@@ -229,6 +229,12 @@ master_lock = threading.Lock()
 # mode ArduSub di bawah — yang ini menentukan siapa yang boleh memerintah,
 # bukan hukum kendali apa yang dipakai wahana.
 current_control_mode = "manual"
+# ============================================================
+# CONTROL MAIN WATCHDOG
+# ============================================================
+
+last_control_main_heartbeat = 0.0
+CONTROL_MAIN_HEARTBEAT_TIMEOUT = 1.0
 
 # Mission5 FSM (misi 5 autonomous). Dibuat saat pertama kali dibutuhkan di
 # connect_pixhawk(), dinyalakan/dimatikan oleh toggle control_mode di
@@ -933,6 +939,8 @@ def command_listener():
     global latest_hook_vision_received
     global latest_qr_vision
     global latest_qr_vision_received
+    global current_control_mode
+    global last_control_main_heartbeat
 
     print(f"[UDP] Listening command on 0.0.0.0:{UDP_CMD_PORT}")
     while True:
@@ -952,6 +960,14 @@ def command_listener():
 
         name = msg.get("name")
         value = msg.get("value")
+
+        # ========================================================
+        # CONTROL MAIN HEARTBEAT
+        # ========================================================
+
+        if name == "control_main_heartbeat":
+            last_control_main_heartbeat = time.monotonic()
+            continue
 
         # axis datang ~15 Hz — jangan di-log supaya tidak membanjiri console.
         # Gripper analog (nilai angka dari axis gamepad) juga bisa datang cepat;
@@ -986,51 +1002,44 @@ def command_listener():
 
                 if requested == "autonomous":
 
-                    # Arah fisik saat tombol diklik menjadi 0 derajat. Update
-                    # state langsung agar tick pertama MOTION tidak sempat
-                    # membaca heading lama sebelum ATTITUDE berikutnya tiba.
+                    last_control_main_heartbeat = time.monotonic()
+
                     heading_zero = float(latest_yaw)
                     state["heading_compass"] = heading_zero
                     state["heading"] = 0.0
-                    print(f"[HEADING] AUTONOMOUS -> zero = {heading_zero:.2f}°")
 
-                    # Axis FSM dinolkan DULU: sisa setpoint dari sesi
-                    # sebelumnya tidak boleh ikut terbawa saat FSM baru mulai.
                     with fsm_axes_lock:
-                        fsm_axes.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
-
-                    # Axis OPERATOR juga dinolkan — sisa >1,5% dari sesi manual
-                    # sebelumnya langsung dibaca gerbang kill-switch di
-                    # joystick_sender sebagai "operator nyetir" dan abort pada
-                    # detik yang sama dengan toggle, sebelum FSM sempat
-                    # menggerakkan apa pun. Kill-switch harus memicu pada
-                    # gerakan BARU; nilai basi bukan gerakan.
-                    with joystick_lock:
-                        joystick.update({"surge": 0, "sway": 0, "yaw": 0, "heave": 0})
-
-                    # Mode dipindah SESUDAH start() berhasil. Kalau lebih dulu,
-                    # joystick_sender melihat "autonomous" selama ~1 detik yang
-                    # dihabiskan VisionPipeline.start() membuka kamera — dan
-                    # stop() dari kill-switch di jendela itu menemukan _fsm
-                    # masih None, lalu diam, meninggalkan thread FSM yatim yang
-                    # jalan sampai timeout tanpa satu pun perintahnya dipakai.
-                    if mission5_runner is None:
-                        print("[M5] runner tidak tersedia — toggle autonomous "
-                              "tidak menjalankan FSM (kontrol manual tetap normal)")
-
-                    elif not mission5_runner.start():
-                        print("[M5] start GAGAL — tetap di mode manual")
-                        send_to_gui({
-                            "type": "event",
-                            "text": mission5_runner.last_error or "Mission 5 gagal dimulai",
-                            "level": "warn",
+                        fsm_axes.update({
+                            "surge": 0,
+                            "sway": 0,
+                            "yaw": 0,
+                            "heave": 0
                         })
-                        continue
+
+                    with joystick_lock:
+                        joystick.update({
+                            "surge": 0,
+                            "sway": 0,
+                            "yaw": 0,
+                            "heave": 0
+                        })
+
                     current_control_mode = "autonomous"
+
+                    print("[CONTROL] AUTONOMOUS -> control_main")
                 else:
                     current_control_mode = "manual"
-                    if mission5_runner is not None:
-                        mission5_runner.stop()
+
+                    last_control_main_heartbeat = 0.0
+                    with fsm_axes_lock:
+                        fsm_axes.update({
+                            "surge": 0,
+                            "sway": 0,
+                            "yaw": 0,
+                            "heave": 0
+                        })
+
+                    print("[CONTROL] MANUAL")
 
             elif name == "mission5_motion":
                 # Tuning hanya boleh dilakukan saat FSM berhenti. Nilai fisik
@@ -2380,6 +2389,98 @@ def drop_link(reason):
         except Exception:
             pass
 
+# ============================================================
+# CONTROL MAIN WATCHDOG
+# ============================================================
+
+def control_main_watchdog():
+    global current_control_mode
+    global last_control_main_heartbeat
+    global last_joystick_update
+
+    while True:
+
+        time.sleep(0.2)
+
+        # Watchdog hanya aktif saat AUTONOMOUS.
+        if current_control_mode != "autonomous":
+            continue
+
+        age = time.monotonic() - last_control_main_heartbeat
+
+        if age <= CONTROL_MAIN_HEARTBEAT_TIMEOUT:
+            continue
+
+        print(
+            f"[WATCHDOG] control_main heartbeat timeout "
+            f"({age:.2f}s) -> AUTONOMOUS STOP"
+        )
+
+        # ----------------------------------------------------
+        # 1. Hentikan otoritas autonomous
+        # ----------------------------------------------------
+
+        current_control_mode = "manual"
+
+        # ----------------------------------------------------
+        # 2. Netralisasi autonomous axes
+        # ----------------------------------------------------
+
+        with fsm_axes_lock:
+            fsm_axes.update({
+                "surge": 0,
+                "sway": 0,
+                "yaw": 0,
+                "heave": 0
+            })
+
+        # ----------------------------------------------------
+        # 3. Netralisasi joystick
+        # ----------------------------------------------------
+
+        with joystick_lock:
+            joystick.update({
+                "surge": 0,
+                "sway": 0,
+                "yaw": 0,
+                "heave": 0
+            })
+
+            # Paksa joystick dianggap stale.
+            last_joystick_update = 0.0
+
+        # ----------------------------------------------------
+        # 4. Hentikan gripper
+        # ----------------------------------------------------
+
+        if gripper is not None:
+            try:
+                gripper.stop()
+            except Exception as e:
+                print(f"[WATCHDOG] gripper.stop error: {e}")
+
+            try:
+                gripper.rotate_stop()
+            except Exception as e:
+                print(f"[WATCHDOG] gripper.rotate_stop error: {e}")
+
+        # ----------------------------------------------------
+        # 5. Beritahu GUI
+        # ----------------------------------------------------
+
+        try:
+            send_to_gui({
+                "type": "event",
+                "text": "control_main heartbeat timeout - autonomous dihentikan",
+                "level": "err"
+            })
+        except Exception:
+            pass
+
+        # Reset timestamp agar tidak spam.
+        last_control_main_heartbeat = 0.0
+
+        print("[WATCHDOG] ROV kembali ke MANUAL")
 
 def main():
     global prev_attitude_ts
@@ -2394,6 +2495,15 @@ def main():
     threading.Thread(target=joystick_sender, daemon=True).start()
     threading.Thread(target=qgc_command_receiver, daemon=True).start()
     threading.Thread(target=telemetry_sender, daemon=True).start()
+
+    # ========================================================
+    # CONTROL MAIN WATCHDOG
+    # ========================================================
+    threading.Thread(
+        target=control_main_watchdog,
+        daemon=True,
+        name="ControlMainWatchdog",
+    ).start()
 
     last_hb = 0
     last_rx = time.time()
@@ -2651,3 +2761,4 @@ if __name__ == "__main__":
         print("\n[EXIT] rov_agent stopped by user")
     except Exception as e:
         print("[FATAL]", e)
+

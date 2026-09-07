@@ -1811,14 +1811,11 @@ function neutralizeGamepadAxes() {
   for (const a of ["surge", "sway", "yaw", "heave"]) {
     gpLast[a] = 0;
     setAxis(a, 0);
-    sendCmd(a, 0, true);
   }
 
   for (const k in gpBtnPrev) delete gpBtnPrev[k];
-  // Tanpa ini, tombol repeat yang sedang ditahan saat operator pindah ke
-  // Keyboard akan langsung "jatuh tempo" begitu kembali ke Gamepad.
-  for (const k in gpRepeatAt) delete gpRepeatAt[k];
 
+  for (const k in gpRepeatAt) delete gpRepeatAt[k];
 }
 
 function executeJoystickAction(action, mode = "toggle") {
@@ -2252,13 +2249,13 @@ function pollGamepad() {
   // Kirim saat berubah, ATAU secara periodik (~15 Hz) walau axis ditahan,
   // agar MANUAL_CONTROL di Pi terus mengalir dan tidak masuk fail-safe.
   const nowT = performance.now();
+
   if (changed || nowT - gpLastSent >= GP_SEND_INTERVAL) {
     gpLastSent = nowT;
-    for (const a of ["surge", "sway", "yaw", "heave"]) {
-      sendCmd(a, gpLast[a], true);
-    }
-  }
 
+    // GUI hanya membaca dan menampilkan joystick.
+    // TIDAK mengirim axis joystick ke server/ROV.
+  }
   commitButtonCache();
 }
 

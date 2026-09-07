@@ -24,6 +24,17 @@ const WS_PORT  = parseInt(process.env.WS_PORT  || "8080", 10);
 const UDP_IN   = parseInt(process.env.UDP_IN   || "14551", 10); // telemetry dari ROV
 const UDP_OUT  = parseInt(process.env.UDP_OUT  || "14550", 10); // command ke ROV
 const RPI_ADDR = process.env.RPI_ADDR || "192.168.2.2";
+
+// UDP dari control_main.py
+const CONTROL_MAIN_IN = parseInt(
+    process.env.CONTROL_MAIN_IN || "14601",
+    10
+);
+
+const CONTROL_MODE_PORT = 14602;
+
+const controlModeUdp = dgram.createSocket("udp4");
+
 /* console.log di Node itu SINKRON ke stdout: kalau terminal lambat (atau
    di-pipe ke file di disk sibuk), event loop ikut tertahan. Jalur telemetry
    (10/s) dan command (60/s) karena itu bisu kecuali DEBUG=1. */
@@ -770,8 +781,53 @@ wss.on("connection", (ws, req) => {
       return;
     }
 
+    if (msg.name === "control_mode") {
+
+        const mode = String(msg.value).toLowerCase();
+
+        if (
+            mode !== "manual" &&
+            mode !== "autonomous"
+        ) {
+            console.warn(
+                `[MODE] mode tidak valid: ${mode}`
+            );
+            return;
+        }
+
+        const modePacket = Buffer.from(
+            JSON.stringify({
+                type: "control_mode",
+                value: mode,
+                t: Date.now()
+            })
+        );
+
+        controlModeUdp.send(
+            modePacket,
+            CONTROL_MODE_PORT,
+            "127.0.0.1"
+        );
+
+        console.log(
+            `[MODE] GUI -> control_main: ${mode}`
+        );
+
+        // Tetap teruskan ke ROV seperti sebelumnya
+    }
+    
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
+
+      if (
+        msg.name === "surge" ||
+        msg.name === "sway" ||
+        msg.name === "heave" ||
+        msg.name === "yaw"
+      ) {
+        console.log(`[WS BLOCK] GUI axis ditolak: ${msg.name}=${msg.value}`);
+        return;
+      }
       /* ================= MANIPULATOR ================= */
 
       if (msg.name === "manipulator") {
@@ -851,6 +907,154 @@ wss.on("connection", (ws, req) => {
 
 /* ----------------------- UDP (telemetry masuk) ----------------------- */
 const udp = dgram.createSocket("udp4");
+
+// ============================================================
+// CONTROL MAIN UDP
+// control_main.py -> server.js
+// UDP :14601
+// ============================================================
+
+const controlMainUdp = dgram.createSocket("udp4");
+
+function sendToRpi(name, value) {
+    const command = {
+        name: name,
+        value: value,
+        t: Date.now()
+    };
+
+    const packet = Buffer.from(
+        JSON.stringify(command)
+    );
+
+    udp.send(
+        packet,
+        UDP_OUT,
+        RPI_ADDR,
+        (err) => {
+            if (err && DEBUG) {
+                console.error(
+                    "[CONTROL MAIN -> RPI] gagal:",
+                    err.message
+                );
+            }
+        }
+    );
+}
+
+controlMainUdp.on("message", (buf, rinfo) => {
+
+    let msg;
+
+    try {
+        msg = JSON.parse(buf.toString());
+    } catch (err) {
+        if (DEBUG) {
+            console.error(
+                "[CONTROL MAIN] JSON ERROR:",
+                err.message
+            );
+        }
+        return;
+    }
+
+    if (!msg || typeof msg.type !== "string") {
+        return;
+    }
+
+    // ========================================================
+    // 1. HEARTBEAT
+    // ========================================================
+
+    if (msg.type === "control_main_heartbeat") {
+
+        sendToRpi(
+            "control_main_heartbeat",
+            true
+        );
+
+        if (DEBUG) {
+            console.log(
+                `[HEARTBEAT] ${rinfo.address}:${rinfo.port}`
+            );
+        }
+
+        return;
+    }
+
+    // ========================================================
+    // 2. MOTION CONTROL
+    // ========================================================
+
+    if (msg.type === "control") {
+
+        const axes = {
+            surge: clampAxis("surge", msg.surge),
+            sway: clampAxis("sway", msg.sway),
+            heave: clampAxis("heave", msg.heave),
+            yaw: clampAxis("yaw", msg.yaw)
+        };
+
+        for (const [name, value] of Object.entries(axes)) {
+            sendToRpi(name, value);
+        }
+
+        if (DEBUG) {
+            console.log(
+                `[CONTROL] ${rinfo.address}:${rinfo.port} | ` +
+                `surge=${axes.surge} ` +
+                `sway=${axes.sway} ` +
+                `heave=${axes.heave} ` +
+                `yaw=${axes.yaw}`
+            );
+        }
+
+        return;
+    }
+
+    // ========================================================
+    // 3. AUTONOMOUS COMMAND
+    // gripper / depth_target
+    // ========================================================
+
+    if (msg.type === "command") {
+
+        if (
+            msg.name === "gripper" ||
+            msg.name === "depth_apply"
+        ) {
+            sendToRpi(
+                msg.name,
+                msg.value
+            );
+
+            if (DEBUG) {
+                console.log(
+                    `[CONTROL CMD] ${msg.name}=${msg.value}`
+                );
+            }
+        }
+
+        return;
+    }
+});
+
+controlMainUdp.on("error", (err) => {
+    console.error(
+        "[CONTROL MAIN UDP ERROR]",
+        err.message
+    );
+});
+
+controlMainUdp.bind(
+    CONTROL_MAIN_IN,
+    "0.0.0.0",
+    () => {
+        console.log(
+            `[CONTROL MAIN] listening on 0.0.0.0:${CONTROL_MAIN_IN}`
+        );
+    }
+);
 
 udp.on("message", (buf, rinfo) => {
   let data;
