@@ -277,6 +277,28 @@ class RegionTanpaDecode(_ServoBase):
 
 class Sway(_ServoBase):
 
+    def test_gripper_offset_changes_servo_reference(self):
+        self.cm.servo_cfg['target_x_norm'] = 0.65
+        self.lihat_hook(0.30)
+        surge, sway, centered = self.tick()
+        self.assertEqual(sway, 0)
+        self.assertNotEqual(surge, 0)
+        self.cm.servo_reset()
+        self.lihat_hook(0.0)
+        surge, sway, centered = self.tick()
+        self.assertLess(sway, 0)
+        self.assertEqual(surge, 0)
+
+    def test_invalid_gripper_offset_stops_config(self):
+        import yaml
+        for value in (float('nan'), -0.1, 1.1):
+            cfg = yaml.safe_load(CONFIG_UJI.format(source='qr', invert='false', ticks=3))
+            cfg['servo_hook']['target_x_norm'] = value
+            with open(self.tmp.name, 'w') as f:
+                yaml.safe_dump(cfg, f)
+            self.cm.load_servo_config()
+            self.assertIsNone(self.cm.servo_cfg)
+
     def test_hook_di_kanan_menghasilkan_sway_positif(self):
         self.lihat_hook(0.5)
         _surge, sway, _ = self.tick()

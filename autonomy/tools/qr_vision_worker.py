@@ -42,8 +42,15 @@ def _jsonable(value):
 
 
 def build_arg_parser():
+    from vision.qr_gripper import parse_roi
     ap = argparse.ArgumentParser(description='Laptop-side YOLO QR worker')
     ap.add_argument('--camera', required=True)
+    ap.add_argument('--gripper-roi', type=parse_roi,
+                    default=os.environ.get('QR_GRIPPER_ROI', '0.25,0.10,0.75,0.80'),
+                    help='area gripper x1,y1,x2,y2, fraksi frame asli')
+    ap.add_argument('--proposal-conf', type=float,
+                    default=float(os.environ.get('QR_PROPOSAL_CONF', 0.1)),
+                    help='kandidat di bawah --conf wajib berhasil decode')
     ap.add_argument('--model', required=True)
     ap.add_argument('--calib', default=None,
                     help='npz kalibrasi CAM BOTTOM; tanpa ini pose=None dan '
@@ -88,12 +95,15 @@ def main():
     try:
         import cv2
         import numpy as np
-        from vision.qr_detect import (_decode_tracked_roi, _order_quad_points,
+        from vision.qr_detect import (_order_quad_points,
                                       estimate_pose_pts, parse_payload, wall_from_qr)
         from vision.yolo_hook import make_detector
         # Detektor dipakai apa adanya: untuk model detect-only blok keypoint-nya
         # menghasilkan None di kedua backend, jadi jalur hook/pose tak tersentuh.
-        detector = make_detector(args.model, conf=args.conf, imgsz=args.imgsz)
+        from vision.qr_gripper import detect_gripper_qr
+        if not 0 < args.proposal_conf <= args.conf <= 1:
+            raise ValueError('require 0 < proposal-conf <= conf <= 1')
+        detector = make_detector(args.model, conf=args.proposal_conf, imgsz=args.imgsz)
         K = dist = None
         calibration = None
         if args.calib:
@@ -163,11 +173,8 @@ def main():
                               'reason': 'kalibrasi %s != stream %dx%d' % (
                                   calibration.get('image_size'), w, h),
                               'timestamp': time.time()})
-                detection = detector.detect(frame)
-                decoded = (_decode_tracked_roi(frame,
-                                               _quad_from_bbox(detection['bbox']),
-                                               full_cascade=True)
-                           if detection is not None else None)
+                detection, decoded = detect_gripper_qr(
+                    detector, frame, args.gripper_roi, args.conf)
                 if not decoded:
                     # Tanpa teks QR, FSM Mission 5 tak boleh menggerakkan apa
                     # pun — jadi `qr_vision` TETAP kosong di sini, kontraknya

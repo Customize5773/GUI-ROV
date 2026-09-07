@@ -23,6 +23,8 @@ servo_hook:
   #           servo tetap punya acuan justru saat air paling keruh.
   #   hook -> best_pose.pt @ CAM WALL, hook candy-cane (`hook_xy`).
   source: qr
+  # Pusat mulut gripper / lebar frame. 0.5 sementara; kalibrasi di kamera asli.
+  target_x_norm: 0.5
 
   # ── ARAH — VERIFIKASI DULU SEBELUM MENYENTUH ANGKA LAIN ────────────────
   # Kalau tandanya terbalik, gejalanya BUKAN "koreksi kurang kuat": ROV akan

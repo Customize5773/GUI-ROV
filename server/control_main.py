@@ -468,6 +468,9 @@ def load_servo_config():
                 or type(cfg["invert_sway"]) is not bool
                 or type(cfg["centered_ticks"]) is not int or cfg["centered_ticks"] < 1):
             raise ValueError("batas servo tidak valid")
+        target_x = float(cfg.get('target_x_norm', 0.5))
+        if not math.isfinite(target_x) or not 0 < target_x < 1:
+            raise ValueError('target_x_norm harus di antara 0 dan 1')
         thresholds = {}
         for key in ("close_area_frac_decoded", "close_area_frac_region"):
             value = cfg[key]
@@ -496,6 +499,7 @@ def load_servo_config():
 
         cfg = {
             **thresholds,
+            "target_x_norm": target_x,
             "source": source,
             "invert_sway": bool(cfg["invert_sway"]),
             "max_speed": float(cfg["max_speed"]),
@@ -580,7 +584,7 @@ def servo_step(surge_step):
 
     servo_seen_hook = True
     center_x, frame_w = det
-    ex = (center_x - frame_w / 2.0) / (frame_w / 2.0)
+    ex = (center_x - frame_w * servo_cfg["target_x_norm"]) / (frame_w / 2.0)
 
     sign = -1.0 if servo_cfg["invert_sway"] else 1.0
     sway = clamp(sign * servo_pid.step(ex, dt) * 10.0)
