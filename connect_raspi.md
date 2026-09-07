@@ -555,7 +555,8 @@ menyamakan jam laptop. Data decoded dan region bisa sama-sama ada di cache
 telemetry meskipun worker hanya mengirim satu kanal per frame.
 **Update Pi diperlukan** untuk metadata ini; versi lama tanpa metadata ditolak
 oleh konsumen visi baru, sehingga pencarian berakhir dengan timeout aman.
-Tidak ada deployment atau uji gerak hardware yang dilakukan oleh perubahan ini.
+Pada verifikasi lokal awal belum ada deployment; pembaruan Pi berikutnya
+dicatat di bagian status deployment di bawah. Belum ada uji gerak hardware.
 
 Saat deteksi melewati `max_age`, surge dan sway langsung nol. Lebih dari
 `lost_timeout_s` (10 detik) → urutan selesai tanpa pencarian ulang. Abort memakai
@@ -587,3 +588,84 @@ Empat kegagalan autonomy yang sudah ada: `test_make_detector_picks_backend_by_ex
 profil joystick, sehingga skrip setelahnya tidak dijalankan. Python compile,
 Node syntax check, dan `git diff --check` lulus. Ini bukti lokal, bukan bukti
 keberhasilan grasp, naik di air, atau deployment Pi.
+
+
+### Status deployment Pi — 8 Sep 2026, 01:48 WIB
+
+`rov_agent.py` sudah dipasang di `/home/hydroships/rov-agent/rov_agent.py` pada
+`hydroships@192.168.2.2`. Diff terhadap file Pi sebelumnya hanya 13 baris
+metadata `vision_receipts`; kontrol manual milik tim tetap utuh. Backup:
+`/home/hydroships/rov-agent/rov_agent.py.before-qr-metadata-20260908-0148`.
+
+SHA256 lokal dan Pi identik:
+`3c792bad4316873ae1bcbc8aced0513df8b0eef3db14fc52888d4dda05d920e4`.
+Sintaks diperiksa dengan interpreter venv Pi sebelum pemasangan. Service
+`rov-agent` direstart dan terverifikasi `active/running`, `NRestarts=0`;
+`rov-vision-qr` dan `rov-vision-hook` tetap aktif tanpa restart.
+
+Telemetry UDP live sebelum dan sesudah deploy: `armed=false`, mode `MANUAL`,
+`control_mode=manual`, T1–T6 semua PWM 1500. Metadata `vision_receipts` hadir;
+receipt cache tetap sama sementara age bertambah pada paket berikutnya.
+Tidak ada perintah ARM, autonomous, thruster, atau gripper yang dikirim untuk
+verifikasi ini. Stack laptop tidak dinyalakan/restart pada deploy ini;
+`control_main.py` dan YAML tetap merupakan file sisi laptop.
+
+Trial gerak belum dilakukan: suhu Pi 84.7–85.7 C, `throttled=0xe0006` saat
+pemeriksaan. Dinginkan Pi dan pastikan kesiapan operator/area sebelum trial.
+Kedua ambang close masih null dan arah sway belum diverifikasi di kolam.
+
+### Trial Thruster Test T6 — 8 Sep 2026, 01:52–01:54 WIB
+
+Sesudah operator menyatakan ROV di kolam dan area aman, dilakukan percobaan
+terbatas melalui bridge GUI (`CONTROL_STACK=0`), bukan misi autonomous.
+Target: motor 6 forward, 10%, 0.5 detik; STOP otomatis dan batas waktu firmware.
+
+- Percobaan awal DISARM ditolak firmware: `Arm motors before testing motors.`
+  Log: `logs/trial_sway_t6_2026-09-07T18-52-37-738Z.jsonl`.
+- Percobaan kedua meminta ARM normal (tanpa force flag), diterima dengan
+  `result=0` dan `armed=true` di telemetry. Namun **DO_MOTOR_TEST ditolak,
+  result=4**. `motor_test_ack.ok=true` dari agent hanya bukti pengiriman.
+  Log: `logs/trial_sway_t6_2026-09-07T18-53-52-014Z.jsonl`.
+- Telemetry kedua sempat berisi PWM `[0,0,0,0,0,0]`, lalu kembali netral;
+  tidak ada bukti pulsa T6 valid atau arah gerak. Firmware juga melaporkan
+  `Compass performance degraded` dan `Motor test timed out!`.
+- STOP/DISARM diterima; telemetry akhir berulang menunjukkan DISARM, MANUAL,
+  `control_mode=manual`, T1–T6 semuanya 1500. Suhu Pi terakhir 86.7 C.
+
+Kesimpulan **belum berhasil memverifikasi arah sway**. Tidak menaikkan daya,
+tidak mengubah `invert_sway`, tidak menjalankan CASE atau tuning servo.
+Bridge GUI tetap aktif di port 8080 dengan control stack otomatis dimatikan.
+Log trial tersimpan lokal dalam folder `logs/` yang diabaikan Git.
+
+
+### Perbaikan penolakan motor test — 8 Sep 2026, sekitar 02:00 WIB
+
+Pada `MOTOR_TEST_ORDER_BOARD`, ArduSub menggunakan indeks output mulai 0:
+T6 harus dikirim sebagai 5. Selain itu, persen rentang penuh tidak sama dengan
+persen dorongan reversible dari netral. `run_motor_test()` kini memakai
+`MOTOR_TEST_THROTTLE_PWM` dengan `1500 + signed_throttle * 5`; forward 10%
+menjadi 1550, reverse 10% menjadi 1450, maksimum tetap ±20% (1400–1600).
+Perubahan hanya pada tiga argumen motor test; kontrol manual tetap utuh.
+
+Deploy Pi terverifikasi SHA256
+`9792cb649d1dc6b3df579ff7162916b2e9a2018b83c2f43644c7b37d4b100d86`.
+Backup sebelum fix: `/home/hydroships/rov-agent/rov_agent.py.before-motor-fix-20260908`.
+Trial ulang mendapat **ACK firmware DO_MOTOR_TEST result=0**, berbeda dari
+result=4 sebelumnya. Log: `logs/trial_sway_t6_2026-09-07T19-00-02-643Z.jsonl`.
+STOP/DISARM akhir terkonfirmasi, T1–T6 kembali 1500.
+
+Batas bukti: telemetry selama trial masih hanya menangkap 0/1500, belum 1550,
+sehingga output fisik dan arah belum terbukti. Source ArduSub mengabaikan
+param4 duration dan memakai watchdog 500 ms; percobaan ini hanya satu pulsa
+0.5 detik, bukan validasi semua pilihan durasi di panel. Jangan mengubah
+failsafe atau menaikkan daya untuk menutupi hasil tersebut.
+
+Pembacaan parameter live: `FRAME_CONFIG=0`, `SERVO6_FUNCTION=38`,
+`SERVO6_REVERSED=0`, **`MOT_6_DIRECTION=-1`**. Raw PWM motor test melewati
+koreksi arah mixer, sehingga hasil arah raw T6 tidak boleh langsung dianggap
+sebagai tanda sway positif. `invert_sway` tetap belum diubah.
+
+Verifikasi: 9 test motor-test dan 53 test kontrol lulus. Suite `test_rov_*`
+198 test dengan 6 kegagalan lama; npm tetap 4 kegagalan profil; autonomy tetap
+415 passed, 19 skipped, 4 failed. Nama kegagalan identik baseline, tidak ada
+kegagalan baru. Compile dan `git diff --check` lulus.

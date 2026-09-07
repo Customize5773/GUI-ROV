@@ -1751,9 +1751,9 @@ def run_motor_test(payload):
                 master.target_component,
                 mavutil.mavlink.MAV_CMD_DO_MOTOR_TEST,
                 0,
-                motor,
-                mavutil.mavlink.MOTOR_TEST_THROTTLE_PERCENT,
-                signed_throttle,
+                motor - 1,  # BOARD: T1..T6 -> indeks output 0..5
+                mavutil.mavlink.MOTOR_TEST_THROTTLE_PWM,
+                1500 + signed_throttle * 5,  # ±20% -> 1400..1600, netral 1500
                 duration,
                 0,
                 # param6 = motor test order. ArduSub menolak apa pun selain BOARD
