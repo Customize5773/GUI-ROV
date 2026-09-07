@@ -50,12 +50,11 @@ servo_hook:
   max_speed: 35.0        # batas command (%) sebelum diskalakan ke ±1000
 
   # ── Ambang tengah ──────────────────────────────────────────────────────
-  # center_tol_norm membuka gate surge DAN menghitung selesainya CASE 4.
+  # center_tol_norm membuka gate surge; close juga wajib melewati ambang area.
   # 0.08 = 8% setengah-lebar frame.
   center_tol_norm: 0.08
-  # Berapa tick 20 Hz "di tengah" (dgn histeresis) sebelum CASE 4 dianggap
-  # selesai. Ini juga yang menentukan berapa lama surge sempat berjalan setelah
-  # gate terbuka: 10 tick ≈ 0,5 detik maju.
+  # Berapa tick 20 Hz centered DAN area cukup besar secara BERUNTUN.
+  # 10 tick ≈ 0,5 detik; meleset/basi mereset penghitung.
   centered_ticks: 10
 
   # ── Umur deteksi ───────────────────────────────────────────────────────
@@ -64,3 +63,27 @@ servo_hook:
   # deteksi hilang, tak ada satu pun cara mengetahui ROV sudah bergeser berapa,
   # jadi menebak dari error terakhir = menggerakkan wahana secara buta.
   max_age: 1.0
+
+  # WAJIB DIUKUR di jarak jangkauan gripper. null = tidak boleh close.
+  # Decoded: contourArea empat sudut. Region: luas bbox YOLO (lebih besar).
+  # Log [SERVO] mencetak channel dan area_frac untuk kalibrasi terpisah.
+  close_area_frac_decoded: null
+  close_area_frac_region: null
+
+mission:
+  settle_s: 3.0
+  depth_m: 1.0
+  depth_wait_s: 3.0
+  depth_tol_m: 0.1
+  search_timeout_s: 8.0
+  # Command ±1000, placeholder pelan: wajib trial kolam. Search TANPA sway.
+  search_yaw: 100
+  search_surge: -100
+  search_sweep_s: 2.0
+  approach_surge: -100
+  servo_timeout_s: 3.0
+  lost_timeout_s: 2.0
+  gripper_hold_s: 1.5
+  rise_m: 0.5
+  rise_wait_s: 3.0
+  telemetry_max_age: 1.0

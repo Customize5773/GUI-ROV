@@ -1149,18 +1149,18 @@ udp.on("message", (buf, rinfo) => {
     );
   }
 
-  /* Cabang ke control_main: hanya frame yang BENAR-BENAR membawa deteksi.
-     Telemetry mengalir 10 Hz walau qr_vision/hook_xy null; meneruskan yang null
-     cuma akan me-refresh stempel waktu di sisi sana dan membuat deteksi basi
-     terlihat segar — persis yang tidak boleh terjadi kalau kamera mati.
+  /* Cabang ke control_main: geometri beserta umur/identitas penerimaan Pi.
+     Telemetry 10 Hz mengulang cache, bukan selalu pengamatan kamera baru.
+     control_main menolak receipt berulang/lama dan menghitung umur lokal
+     ditambah umur asal Pi. Null tidak memperbarui pengamatan terakhir.
 
      Tiga sumber diteruskan; control_main yang memilih lewat
      `servo_hook.source` di control_config.yaml:
        qr_vision — best_new @ CAM BOTTOM, kotak QR yang BERHASIL di-decode
        qr_region — best_new @ CAM BOTTOM, kotak QR terdeteksi TANPA decode
        hook_xy   — best_pose @ CAM WALL, hook candy-cane
-     qr_vision & qr_region tak pernah datang untuk frame yang sama: worker
-     mengirim salah satu, tergantung decode berhasil atau tidak. */
+     Worker mengirim satu kanal per frame, tetapi kedua cache dapat hadir
+     di telemetry yang sama; receipt menentukan pengamatan paling baru. */
   for (const [type, value, punyaGeometri] of [
     ["qr_vision", data.qr_vision, data.qr_vision && data.qr_vision.center],
     ["qr_region", data.qr_region, data.qr_region && data.qr_region.center],
@@ -1168,7 +1168,8 @@ udp.on("message", (buf, rinfo) => {
   ]) {
     if (!punyaGeometri) continue;
 
-    const paket = Buffer.from(JSON.stringify({ type, value, t: Date.now() }));
+    const receipt = data.vision_receipts && data.vision_receipts[type];
+    const paket = Buffer.from(JSON.stringify({ type, value, ...receipt }));
 
     controlModeUdp.send(paket, CONTROL_HOOK_PORT, "127.0.0.1", (err) => {
       if (err && DEBUG) {
@@ -1176,6 +1177,13 @@ udp.on("message", (buf, rinfo) => {
       }
     });
   }
+
+  controlModeUdp.send(Buffer.from(JSON.stringify({
+    type: "vehicle_state",
+    value: { depth: data.depth, armed: data.armed },
+  })), CONTROL_HOOK_PORT, "127.0.0.1", (err) => {
+    if (err && DEBUG) console.error("[STATE -> control_main] gagal:", err.message);
+  });
 
   broadcast({ type: "telemetry", data, recv: Date.now() });
 });

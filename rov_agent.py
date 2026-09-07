@@ -671,6 +671,19 @@ def send_telemetry():
     state["qr_vision"] = latest_qr_vision
     state["qr_region"] = latest_qr_region
 
+    # Metadata aditif: cache yang dikirim ulang bukan pengamatan kamera baru.
+    # Jam monotonic Pi hanya dipakai sebagai identitas/urutan di laptop;
+    # umur dihitung DI PI agar tidak membutuhkan sinkronisasi jam.
+    vision_now = time.monotonic()
+    state["vision_receipts"] = {
+        channel: {"received": received, "age": max(0.0, vision_now - received)}
+        for channel, received in (
+            ("hook_vision", latest_hook_vision_received),
+            ("qr_vision", latest_qr_vision_received),
+            ("qr_region", latest_qr_region_received),
+        )
+    }
+
     send_to_gui(state)
     send_to_vision_workers(state)
 

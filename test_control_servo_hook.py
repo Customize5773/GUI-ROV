@@ -25,6 +25,7 @@ import os
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -43,6 +44,24 @@ servo_hook:
   center_tol_norm: 0.08
   centered_ticks: {ticks}
   max_age: 1.0
+  close_area_frac_decoded: 0.10
+  close_area_frac_region: 0.20
+mission:
+  settle_s: 3.0
+  depth_m: 1.0
+  depth_wait_s: 3.0
+  depth_tol_m: 0.1
+  search_timeout_s: 8.0
+  search_yaw: 100
+  search_surge: -100
+  search_sweep_s: 2.0
+  approach_surge: -100
+  servo_timeout_s: 3.0
+  lost_timeout_s: 2.0
+  gripper_hold_s: 1.5
+  rise_m: 0.5
+  rise_wait_s: 3.0
+  telemetry_max_age: 1.0
 """
 
 FRAME_W = 640.0
@@ -64,6 +83,7 @@ class _ServoBase(unittest.TestCase):
 
     def setUp(self):
         self.cm = _load_control_main()
+        self.addCleanup(self.cm.out_sock.close)
         self.sent = []
         self.cm.send_packet = self.sent.append
 
@@ -77,6 +97,8 @@ class _ServoBase(unittest.TestCase):
         self.cm.SERVO_CONFIG_PATH = self.tmp.name
         self.cm.load_servo_config()
         self.cm.servo_reset()
+        self.cm.vehicle_state = {"depth": 1.0, "armed": True}
+        self.cm.last_vehicle_time = time.monotonic()
         self.assertIsNotNone(self.cm.servo_cfg, "config uji gagal dimuat")
 
     def lihat_hook(self, ex, umur=0.0):
@@ -84,6 +106,7 @@ class _ServoBase(unittest.TestCase):
         center_x = FRAME_W / 2.0 + ex * (FRAME_W / 2.0)
         self.cm.latest_hook = (center_x, FRAME_W)
         self.cm.last_hook_time = time.monotonic() - umur
+        self.cm.latest_qr_metric = ("qr_vision", 0.15)
 
     def tick(self, surge_step=-500):
         return self.cm.servo_step(surge_step)
@@ -341,13 +364,7 @@ class GateSurge(_ServoBase):
         self.assertGreater(surge_pertama, -500)
 
     def test_kehilangan_deteksi_menutup_surge_lagi(self):
-        """Surge turun ke nol — TAPI lewat slew, tidak seperti sway.
-
-        Sway wajib nol seketika karena acuannya hilang. Surge tidak: menghentikan
-        dorongan maju secara mendadak justru sentakan yang diredam slew (sentak
-        -> ROV miring -> kamera ikut miring). Yang dijaga di sini adalah ia
-        benar-benar SAMPAI nol dan tidak membeku di nilai terakhir.
-        """
+        """Acuan basi menghentikan seluruh gerak seketika."""
         self.lihat_hook(0.0)
         for _ in range(20):
             self.tick()
@@ -359,7 +376,7 @@ class GateSurge(_ServoBase):
 
         jejak = [self.tick()[0] for _ in range(60)]
 
-        self.assertGreater(jejak[0], surge_awal, "surge membeku, tidak melandai")
+        self.assertEqual(jejak[0], 0, "surge wajib nol seketika")
         self.assertEqual(jejak[-1], 0, "surge tidak pernah sampai nol")
 
 
@@ -378,7 +395,7 @@ class AlurCase(_ServoBase):
         self.case_servo = next(
             i for i, step in enumerate(self.cm.AUTO_STEPS) if step[7])
         self.cm.auto_index = self.case_servo
-        self.cm.auto_step_start = time.time()
+        self.cm.auto_step_start = time.monotonic()
         self.sent.clear()
 
     def test_hook_di_tengah_menyelesaikan_case_sebelum_timeout(self):
@@ -390,17 +407,18 @@ class AlurCase(_ServoBase):
 
         self.assertEqual(self.cm.auto_index, self.case_servo + 1)
 
-    def test_hook_tak_pernah_terlihat_tetap_lanjut_saat_timeout(self):
+    def test_hook_tak_pernah_terlihat_mengakhiri_urutan(self):
         durasi = self.cm.AUTO_STEPS[self.case_servo][0]
         self.cm.autonomous_control()
         self.assertEqual(self.cm.auto_index, self.case_servo,
                          "CASE tidak boleh selesai sebelum timeout")
 
-        self.cm.auto_step_start = time.time() - (durasi + 0.1)
+        self.cm.auto_step_start = time.monotonic() - (durasi + 0.1)
         self.cm.autonomous_control()
 
-        # Lanjut, bukan menggantung — walau tak satu pun hook terdeteksi.
-        self.assertEqual(self.cm.auto_index, self.case_servo + 1)
+        # Selesai aman, tidak maju ke gripper.
+        self.assertEqual(self.cm.auto_index, self.case_servo)
+        self.assertTrue(self.cm.auto_finished)
         self.assertFalse(self.cm.servo_seen_hook)
 
     def test_case_servo_tetap_mengirim_frame_bertag_fsm(self):
@@ -412,21 +430,284 @@ class AlurCase(_ServoBase):
         self.assertTrue(motion)
         self.assertEqual(motion[-1]["src"], "fsm")
 
-    def test_servo_mati_membuat_case_jadi_langkah_waktu_biasa(self):
-        # PyYAML hilang / config rusak tidak boleh mematikan autonomous.
+    def test_servo_mati_menghentikan_urutan(self):
+        # Config rusak wajib menghentikan autonomous, manual tetap tersedia.
         self.cm.SERVO_CONFIG_PATH = os.path.join(ROOT, "tidak-ada.yaml")
         self.cm.load_servo_config()
         self.assertIsNone(self.cm.servo_cfg)
 
-        self.cm.auto_step_start = time.time()
+        self.cm.auto_step_start = time.monotonic()
         self.sent.clear()
         self.cm.autonomous_control()
 
         motion = [p for p in self.sent if p["type"] == "control"]
-        # surge konstan dari tabel, sway 0 — persis perilaku sebelum YOLO.
-        self.assertEqual(motion[-1]["surge"],
-                         self.cm.AUTO_STEPS[self.case_servo][1])
+        # Tidak boleh jatuh ke surge konstan saat servo mati.
+        self.assertEqual(motion[-1]["surge"], 0)
+        self.assertTrue(self.cm.auto_finished)
         self.assertEqual(motion[-1]["sway"], 0)
+
+
+class UrutanMisi(_ServoBase):
+    """Clock palsu + packet capture: tidak ARM atau menghubungi Pi."""
+
+    def setUp(self):
+        super().setUp()
+        self.now = 100.0
+        clock = patch.object(self.cm.time, "monotonic", side_effect=lambda: self.now)
+        clock.start()
+        self.addCleanup(clock.stop)
+        self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
+        self.state()
+        self.sent.clear()
+
+    def state(self, depth=1.0, armed=True):
+        self.cm.accept_vision_message({"type": "vehicle_state",
+                                      "value": {"depth": depth, "armed": armed}})
+
+    def vision(self, channel="qr_vision", fraction=0.15, ex=0.0, age=0.0, receipt=None):
+        self.cm.accept_vision_message({
+            "type": channel, "received": self.now if receipt is None else receipt,
+            "age": age, "value": {"center": [320 + ex * 320, 240],
+                                    "frame_w": 640, "frame_h": 480,
+                                    "area": fraction * 640 * 480}})
+
+    def step(self, dt=0.05, depth=1.0):
+        self.now += dt
+        self.state(depth)
+        self.cm.autonomous_control()
+
+    def commands(self, name):
+        return [p["value"] for p in self.sent
+                if p["type"] == "command" and p["name"] == name]
+
+    def assert_stopped(self):
+        self.assertTrue(self.cm.auto_finished)
+        frames = [p for p in self.sent if p["type"] == "control"]
+        self.assertTrue(frames)
+        self.assertEqual([frames[-1][a] for a in self.cm.AXES], [0] * 4)
+        self.assertEqual(frames[-1]["src"], "fsm")
+
+    def test_alur_lengkap_close_sekali_qr_hilang_lanjut_naik_relatif(self):
+        self.step(3.01)
+        self.assertEqual(self.cm.auto_index, 1)
+        self.step(depth=0.7)
+        self.assertEqual(self.commands("depth_apply"), [1.0])
+        self.assertEqual(self.cm.auto_index, 1)
+        self.step(depth=0.95)
+        self.assertEqual(self.cm.auto_index, 2)
+        self.step()
+        frame = self.sent[-1]
+        self.assertLess(frame["surge"], 0)
+        self.assertGreater(frame["yaw"], 0)
+        self.assertEqual(frame["sway"], 0)
+        self.step(2.01)
+        self.assertLess(self.sent[-1]["yaw"], 0)
+        self.vision()
+        self.step()
+        self.assertEqual(self.cm.auto_index, 4)  # CASE 3 dilewati
+        for _ in range(self.ticks):
+            self.vision()
+            self.step()
+        self.assertEqual(self.cm.auto_index, 5)
+        self.assertEqual(self.commands("gripper"), ["close"])
+        self.step(1.4)
+        self.assertEqual(self.cm.auto_index, 5)
+        self.step(0.11)
+        self.assertEqual(self.cm.auto_index, 6)
+        self.step(depth=0.9)
+        self.assertAlmostEqual(self.commands("depth_apply")[-1], 0.4)
+        self.step(3.01, depth=0.45)
+        self.assert_stopped()
+        # Jangan mengganti target 0.4 dengan depth aktual pada akhir timer.
+        self.assertAlmostEqual(self.commands("depth_apply")[-1], 0.4)
+        self.assertEqual(self.commands("gripper"), ["close"])
+
+    def test_settle_dimulai_setelah_arm_dan_tidak_mengirim_arm(self):
+        self.state(armed=False)
+        self.cm.autonomous_control()
+        self.now += 10
+        self.state(armed=False)
+        self.cm.autonomous_control()
+        self.step(0.05)
+        self.assertEqual(self.cm.auto_index, 0)
+        self.step(3.01)
+        self.assertEqual(self.cm.auto_index, 1)
+        self.assertEqual(self.commands("arm"), [])
+
+    def test_case1_timeout_tetap_memulai_pencarian(self):
+        self.cm.enter_case(1)
+        self.step(depth=0.3)
+        self.step(3.01, depth=0.4)
+        self.assertEqual(self.cm.auto_index, 2)
+        self.assertEqual(self.commands("depth_apply"), [1.0])
+
+    def test_search_timeout_tidak_pernah_menutup_gripper(self):
+        self.cm.enter_case(2)
+        self.step(8.01, depth=0.82)
+        self.assert_stopped()
+        self.assertEqual(self.commands("gripper"), [])
+        self.assertEqual(self.commands("depth_apply"), [0.82])
+        self.vision()
+        self.step()
+        self.assert_stopped()  # tidak otomatis mulai ulang
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_servo_timeout_centered_tapi_terlalu_jauh_berhenti(self):
+        self.cm.enter_case(4)
+        self.vision(fraction=0.01)
+        self.step(3.01)
+        self.assert_stopped()
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_hilang_sementara_nol_seketika_lebih_dua_detik_abort(self):
+        self.cm.enter_case(4)
+        self.vision(fraction=0.01)
+        self.step()
+        self.assertLess(self.sent[-1]["surge"], 0)
+        self.step(1.01)
+        self.assertFalse(self.cm.auto_finished)
+        self.assertEqual([self.sent[-1][a] for a in self.cm.AXES], [0] * 4)
+        self.step(1.0)
+        self.assert_stopped()
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_threshold_per_kanal_dan_streak_wajib_beruntun(self):
+        self.cm.enter_case(4)
+        for channel, frac, expected in [
+                ("qr_vision", 0.15, 1), ("qr_vision", 0.15, 2),
+                ("qr_region", 0.15, 0),  # cukup decoded, BELUM cukup region
+                ("qr_region", 0.25, 1), ("qr_vision", 0.15, 2)]:
+            self.vision(channel, frac)
+            self.step()
+            self.assertEqual(self.cm.servo_hits, expected)
+            self.assertEqual(self.cm.auto_index, 4)
+        self.vision("qr_region", 0.25)
+        self.step()
+        self.assertEqual(self.cm.auto_index, 5)
+        self.assertEqual(self.commands("gripper"), ["close"])
+
+    def test_area_sama_ambang_dan_lateral_meleset_tidak_close(self):
+        self.cm.enter_case(4)
+        for ex, fraction in [(0, 0.1)] * 5 + [(0.4, 0.9)] * 5:
+            self.vision(ex=ex, fraction=fraction)
+            self.step()
+        self.assertEqual(self.cm.servo_hits, 0)
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_threshold_null_tidak_menutup(self):
+        self.cm.servo_cfg["close_area_frac_decoded"] = None
+        self.cm.servo_cfg["close_area_frac_region"] = None
+        self.cm.enter_case(4)
+        for channel in ["qr_vision", "qr_region"] * 5:
+            self.vision(channel, 0.9)
+            self.step()
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_cache_ulang_kanal_lama_dan_umur_pi_tidak_menyegarkan(self):
+        self.vision("qr_region", 0.25, receipt=95, age=0.2)
+        accepted_time = self.cm.last_hook_time
+        self.now += 0.1
+        self.vision("qr_region", 0.25, receipt=95, age=0.3)
+        self.vision("qr_vision", 0.15, receipt=94, age=0.1)
+        self.assertEqual(self.cm.last_hook_time, accepted_time)
+        self.assertEqual(self.cm.latest_qr_metric, ("qr_region", 0.25))
+        self.assertAlmostEqual(accepted_time, 99.8)
+        self.vision(receipt=96, age=1.1)
+        self.assertEqual(self.cm.last_hook_time, accepted_time)
+
+    def test_pi_lama_tanpa_metadata_dan_geometri_cacat_ditolak(self):
+        for value in (float("nan"), float("inf"), -0.1, 1.1):
+            self.vision(fraction=value)
+            self.assertIsNone(self.cm.latest_hook)
+        self.cm.accept_vision_message({"type": "qr_region", "value": {
+            "center": [320, 240], "frame_w": 640, "frame_h": 480, "area": 10000}})
+        self.assertIsNone(self.cm.latest_hook)
+        for center in (float("nan"), float("inf"), -1):
+            self.assertIsNone(self.cm.qr_center_from_telemetry({
+                "center": [center, 240], "frame_w": 640}))
+
+    def test_depth_basi_abort_tanpa_target_tebakan(self):
+        self.cm.enter_case(2)
+        self.now += 1.1  # jangan refresh vehicle_state
+        self.cm.autonomous_control()
+        self.assert_stopped()
+        self.assertEqual(self.commands("depth_apply"), [])
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_disarm_saat_search_mengakhiri_urutan(self):
+        self.cm.enter_case(2)
+        self.state(armed=False)
+        self.cm.autonomous_control()
+        self.assert_stopped()
+        self.assertEqual(self.commands("depth_apply"), [])
+
+    def test_reset_mode_membuang_streak_latch_dan_deteksi(self):
+        self.vision()
+        self.cm.auto_gripped = True
+        self.cm.servo_hits = 2
+        self.cm.set_mode(self.cm.MODE_MANUAL)
+        self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
+        self.assertFalse(self.cm.auto_gripped)
+        self.assertEqual(self.cm.servo_hits, 0)
+        self.assertIsNone(self.cm.latest_hook)
+        self.assertEqual(self.cm.auto_index, 0)
+
+    def test_case_close_tidak_bisa_dimasuki_tanpa_pemicu(self):
+        self.cm.enter_case(5)
+        self.step()
+        self.assert_stopped()
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_config_tidak_finite_menghentikan_tanpa_motion(self):
+        import yaml
+        for section, key, value in [
+                ("servo_hook", "close_area_frac_region", float("nan")),
+                ("servo_hook", "close_area_frac_decoded", 0),
+                ("servo_hook", "centered_ticks", 0),
+                ("mission", "search_sweep_s", 0),
+                ("mission", "search_yaw", 1001)]:
+            with self.subTest(key=key):
+                cfg = yaml.safe_load(CONFIG_UJI.format(source="qr", invert="false", ticks=3))
+                cfg[section][key] = value
+                with open(self.tmp.name, "w") as f:
+                    yaml.safe_dump(cfg, f)
+                self.cm.autonomous_reset()
+                self.cm.autonomous_control()
+                self.assertIsNone(self.cm.servo_cfg)
+                self.assert_stopped()
+                self.assertEqual(self.commands("gripper"), [])
+
+
+class MetadataPi(unittest.TestCase):
+    def test_cache_telem_tidak_memperbarui_waktu_penerimaan_vision(self):
+        # Jalankan blok overlay/metadata asli tanpa mengimpor koneksi MAVLink.
+        from types import SimpleNamespace
+        with open(os.path.join(ROOT, "rov_agent.py")) as f:
+            tree = ast.parse(f.read())
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                  and n.name == "send_telemetry")
+        start = next(i for i, n in enumerate(fn.body)
+                     if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Subscript)
+                     and isinstance(n.targets[0].slice, ast.Constant)
+                     and n.targets[0].slice.value == "hook_xy")
+        end = next(i for i, n in enumerate(fn.body) if isinstance(n, ast.Expr)
+                   and isinstance(n.value, ast.Call)
+                   and getattr(n.value.func, "id", None) == "send_to_gui")
+        code = compile(ast.Module(body=fn.body[start:end], type_ignores=[]), "overlay", "exec")
+        now = [100.0]
+        env = {"state": {}, "time": SimpleNamespace(monotonic=lambda: now[0]),
+               "latest_hook_vision": {"bbox": [1, 2, 3, 4]},
+               "latest_qr_vision": {"data": "QR1"}, "latest_qr_region": {"area": 100},
+               "latest_hook_vision_received": 98.0,
+               "latest_qr_vision_received": 99.0, "latest_qr_region_received": 99.5}
+        exec(code, env)
+        self.assertEqual(env["state"]["vision_receipts"]["qr_region"],
+                         {"received": 99.5, "age": 0.5})
+        now[0] = 103.0
+        exec(code, env)
+        self.assertEqual(env["state"]["vision_receipts"]["qr_region"],
+                         {"received": 99.5, "age": 3.5})
+        self.assertEqual(env["state"]["qr_vision"], {"data": "QR1"})
 
 
 if __name__ == "__main__":

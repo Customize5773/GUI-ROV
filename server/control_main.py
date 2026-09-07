@@ -27,16 +27,15 @@ Catatan:
 """
 
 import json
+import math
 import os
 import socket
 import sys
 import threading
 import time
 
-# Peredam servo dipakai ULANG dari stack autonomy — deadband, D ter-filter,
-# slew, dan gerbang approach di sana sudah dibayar dengan trial kolam
-# (lihat docstring PID di control/visual_servo.py). Menyalinnya ke sini berarti
-# dua tuning yang perlahan menyimpang.
+# Peredam dipakai ulang dari stack autonomy. Parameter untuk wahana/kamera
+# ini tetap belum tervalidasi di kolam.
 sys.path.insert(
     0,
     os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -97,7 +96,7 @@ AXES = ("surge", "sway", "yaw", "heave")
 # ============================================================
 
 control_mode = MODE_MANUAL
-mode_lock = threading.Lock()
+mode_lock = threading.RLock()
 
 joystick = {
     "surge": 0,
@@ -113,6 +112,10 @@ last_joystick_time = 0.0
 # basi, tak ada apa pun yang tahu ROV sudah bergeser berapa.
 latest_hook = None
 last_hook_time = 0.0
+latest_qr_metric = None  # (kanal, area_frac); bukan luas lintas kanal
+last_vision_receipt = 0.0
+vehicle_state = {}
+last_vehicle_time = 0.0
 hook_lock = threading.Lock()
 
 running = True
@@ -153,18 +156,16 @@ def set_mode(mode):
 
     with mode_lock:
         old = control_mode
+        # Publish mode setelah reset/config siap. Main loop memakai lock yang
+        # sama agar toggle tidak berpotongan dengan tick yang menutup gripper.
+        if old != mode and mode == MODE_AUTONOMOUS:
+            autonomous_reset()
         control_mode = mode
+        if old != mode and mode == MODE_MANUAL:
+            send_motion(0, 0, 0, 0)
 
     if old != mode:
         print(f"[MODE] {old.upper()} -> {mode.upper()}")
-
-        # Saat pindah mode, autonomous dimulai dari state 0.
-        if mode == MODE_AUTONOMOUS:
-            autonomous_reset()
-
-        # Saat kembali MANUAL, autonomous langsung dihentikan.
-        if mode == MODE_MANUAL:
-            send_motion(0, 0, 0, 0)
 
 
 def send_packet(packet):
@@ -289,7 +290,7 @@ def hook_center_from_telemetry(det):
     except (TypeError, KeyError, ValueError):
         return None
 
-    if frame_w <= 0 or w <= 0:
+    if not all(math.isfinite(v) for v in (x, w, frame_w)) or frame_w <= 0 or w <= 0:
         return None
 
     return (x + w / 2.0, frame_w)
@@ -310,7 +311,7 @@ def qr_center_from_telemetry(det):
     except (TypeError, KeyError, IndexError, ValueError):
         return None
 
-    if frame_w <= 0:
+    if not all(math.isfinite(v) for v in (center_x, frame_w)) or frame_w <= 0 or not 0 <= center_x <= frame_w:
         return None
 
     return (center_x, frame_w)
@@ -330,20 +331,60 @@ VISION_PARSERS = {
 }
 
 
-def vision_listener():
-    """Terima deteksi visi dari server.js. Pola sama dgn joystick/mode listener."""
-    global latest_hook
-    global last_hook_time
+def accept_vision_message(msg):
+    """Terima geometri + umur Pi; paket cache/reorder tidak menyegarkan deteksi."""
+    global latest_hook, latest_qr_metric, last_hook_time, last_vision_receipt
+    global vehicle_state, last_vehicle_time
+    if not isinstance(msg, dict):
+        return
+    now = time.monotonic()
+    if msg.get("type") == "vehicle_state":
+        value = msg.get("value")
+        if isinstance(value, dict):
+            with hook_lock:
+                vehicle_state = dict(value)
+                last_vehicle_time = now
+        return
+    if servo_cfg is None:
+        return
+    types, parser = VISION_PARSERS[servo_cfg["source"]]
+    channel = msg.get("type")
+    if channel not in types:
+        return
+    value = msg.get("value")
+    center = parser(value)
+    try:
+        age, receipt = float(msg["age"]), float(msg["received"])
+        if (center is None or not math.isfinite(age) or not math.isfinite(receipt)
+                or age < 0 or age > servo_cfg["max_age"] or receipt <= 0):
+            return
+    except (KeyError, TypeError, ValueError):
+        return
+    metric = None
+    if channel in ("qr_vision", "qr_region"):
+        try:
+            area = float(value["area"])
+            height = float(value["frame_h"])
+            fraction = area / (center[1] * height)
+            if not math.isfinite(fraction) or height <= 0 or not 0 < fraction <= 1:
+                return
+            metric = (channel, fraction)
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            return
+    with hook_lock:
+        if receipt <= last_vision_receipt:
+            return
+        latest_hook, latest_qr_metric = center, metric
+        last_hook_time = now - age
+        last_vision_receipt = receipt
 
+
+def vision_listener():
+    """Visi dan depth lewat kanal UDP yang sama; tidak menjalankan worker baru."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     sock.bind((HOOK_LISTEN_IP, HOOK_LISTEN_PORT))
     sock.settimeout(0.2)
-
-    print(
-        f"[VISI] menunggu deteksi YOLO "
-        f"di {HOOK_LISTEN_IP}:{HOOK_LISTEN_PORT}"
-    )
-
+    print(f"[VISI] menunggu telemetry di {HOOK_LISTEN_IP}:{HOOK_LISTEN_PORT}")
     while running:
         try:
             data, _ = sock.recvfrom(8192)
@@ -351,31 +392,10 @@ def vision_listener():
             continue
         except OSError:
             break
-
         try:
-            msg = json.loads(data.decode("utf-8"))
-        except Exception:
+            accept_vision_message(json.loads(data.decode("utf-8")))
+        except (ValueError, UnicodeError):
             continue
-
-        # Sumber yang tidak dipilih DIBUANG, bukan disimpan: dua sumber
-        # mengisi satu slot berarti servo diam-diam mengikuti kamera yang salah.
-        # servo_cfg None (config gagal / servo mati) -> tak ada yang disimpan.
-        if servo_cfg is None:
-            continue
-
-        tipe, parser = VISION_PARSERS[servo_cfg["source"]]
-
-        if msg.get("type") not in tipe:
-            continue
-
-        acuan = parser(msg.get("value"))
-
-        if acuan is None:
-            continue
-
-        with hook_lock:
-            latest_hook = acuan
-            last_hook_time = time.monotonic()
 
 
 # ============================================================
@@ -396,7 +416,8 @@ def vision_listener():
 # ikut melompat, dan servo bisa mengejar bayangannya sendiri — itulah kenapa
 # slew di config bukan knob kenyamanan melainkan pemutus umpan balik.
 
-servo_cfg = None          # None = servo mati; CASE servo jadi langkah waktu biasa
+servo_cfg = None          # None = urutan berhenti aman
+mission_cfg = None
 servo_pid = None
 servo_hits = 0
 servo_last_t = None
@@ -407,8 +428,9 @@ servo_seen_hook = False
 def load_servo_config():
     """Baca ulang tuning dari yaml. Dipanggil tiap autonomous dinyalakan."""
     global servo_cfg
-    global servo_pid
+    global servo_pid, mission_cfg, AUTO_STEPS
 
+    mission_cfg = None
     servo_cfg = None
     servo_pid = None
 
@@ -417,7 +439,43 @@ def load_servo_config():
 
     try:
         with open(SERVO_CONFIG_PATH, encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)["servo_hook"]
+            document = yaml.safe_load(f)
+            cfg = document["servo_hook"]
+            mission = document["mission"]
+
+        for key in ("settle_s", "depth_m", "depth_wait_s", "depth_tol_m",
+                    "search_timeout_s", "search_yaw", "search_surge",
+                    "search_sweep_s", "approach_surge", "servo_timeout_s",
+                    "lost_timeout_s", "gripper_hold_s", "rise_m", "rise_wait_s",
+                    "telemetry_max_age"):
+            mission[key] = float(mission[key])
+            if not math.isfinite(mission[key]):
+                raise ValueError(f"mission.{key} harus finite")
+            if key not in ("search_yaw", "search_surge", "approach_surge") and mission[key] <= 0:
+                raise ValueError(f"mission.{key} harus positif")
+        for key in ("search_yaw", "search_surge", "approach_surge"):
+            if abs(mission[key]) > 1000:
+                raise ValueError(f"mission.{key} di luar axis range")
+        for key in ("kp_sway", "kd_sway", "d_lpf", "deadband_norm", "slew",
+                    "max_speed", "center_tol_norm", "max_age"):
+            cfg[key] = float(cfg[key])
+            if not math.isfinite(cfg[key]) or cfg[key] < 0:
+                raise ValueError(f"servo_hook.{key} tidak valid")
+        if (not 0 < cfg["max_speed"] <= 100 or cfg["slew"] <= 0
+                or not 0 < cfg["center_tol_norm"] <= 1
+                or not 0 < cfg["max_age"] < mission["lost_timeout_s"]
+                or cfg["d_lpf"] > 1 or cfg["deadband_norm"] > 1
+                or type(cfg["invert_sway"]) is not bool
+                or type(cfg["centered_ticks"]) is not int or cfg["centered_ticks"] < 1):
+            raise ValueError("batas servo tidak valid")
+        thresholds = {}
+        for key in ("close_area_frac_decoded", "close_area_frac_region"):
+            value = cfg[key]
+            if value is not None:
+                value = float(value)
+                if not math.isfinite(value) or not 0 < value <= 1:
+                    raise ValueError(f"{key} harus null atau 0 < fraksi <= 1")
+            thresholds[key] = value
 
         servo_pid = PID(
             float(cfg["kp_sway"]),
@@ -437,6 +495,7 @@ def load_servo_config():
                 f"source={source!r} tidak dikenal, pilih {sorted(VISION_PARSERS)}")
 
         cfg = {
+            **thresholds,
             "source": source,
             "invert_sway": bool(cfg["invert_sway"]),
             "max_speed": float(cfg["max_speed"]),
@@ -447,11 +506,21 @@ def load_servo_config():
         }
     except Exception as e:
         print(f"[SERVO] {SERVO_CONFIG_PATH} tidak terpakai ({e}) — "
-              f"servo hook MATI, CASE servo jadi langkah waktu biasa")
+              f"urutan autonomous dihentikan")
         servo_pid = None
         return
 
     servo_cfg = cfg
+    mission_cfg = mission
+    AUTO_STEPS = [
+        (mission["settle_s"], 0, 0, 0, 0, None, None, False),
+        (mission["depth_wait_s"], 0, 0, 0, 0, None, mission["depth_m"], False),
+        (mission["search_timeout_s"], mission["search_surge"], 0, mission["search_yaw"], 0, None, None, False),
+        (0, 0, 0, 0, 0, None, None, False),  # CASE 3 cadangan; dilewati
+        (mission["servo_timeout_s"], mission["approach_surge"], 0, 0, 0, None, None, True),
+        (mission["gripper_hold_s"], 0, 0, 0, 0, "close", None, False),
+        (mission["rise_wait_s"], 0, 0, 0, 0, None, None, False),
+    ]
     print(f"[SERVO] tuning dimuat: source={cfg['source']} "
           f"invert_sway={cfg['invert_sway']} "
           f"tol={cfg['center_tol_norm']} max_age={cfg['max_age']}s")
@@ -473,7 +542,7 @@ def servo_reset():
 
 
 def servo_step(surge_step):
-    """Satu tick servo. Return (surge, sway, sudah_di_tengah).
+    """Satu tick servo. Return (surge, sway, boleh_tutup_gripper).
 
     `surge_step` adalah nilai surge dari AUTO_STEPS — di-gate, bukan dipakai
     langsung: maju sambil masih menyamping membuat ROV melewati hook.
@@ -495,6 +564,7 @@ def servo_step(surge_step):
     with hook_lock:
         det = latest_hook
         age = now - last_hook_time
+        metric = latest_qr_metric
 
     slew_axis = servo_cfg["slew"] * 10.0     # config dlm %, axis dlm ±1000
 
@@ -503,10 +573,10 @@ def servo_step(surge_step):
         # sensor posisi lateral yang bisa membenarkan tebakan itu. Surge ikut
         # ditutup karena gerbangnya justru dihitung dari error yang hilang.
         servo_pid.reset()
-        servo_hits = _tally(servo_hits, False)
-        servo_surge_out = _slew_limit(servo_surge_out, 0.0, slew_axis, dt)
+        servo_hits = 0
+        servo_surge_out = 0.0
 
-        return clamp(servo_surge_out), 0, False
+        return 0, 0, False
 
     servo_seen_hook = True
     center_x, frame_w = det
@@ -516,7 +586,18 @@ def servo_step(surge_step):
     sway = clamp(sign * servo_pid.step(ex, dt) * 10.0)
 
     di_tengah = abs(ex) < servo_cfg["center_tol_norm"]
-    servo_hits = _tally(servo_hits, di_tengah)
+    threshold = None
+    if metric is not None:
+        key = ("close_area_frac_decoded" if metric[0] == "qr_vision"
+               else "close_area_frac_region")
+        threshold = servo_cfg[key]
+    close_ready = di_tengah and threshold is not None and metric[1] > threshold
+    # _tally normal punya peluruhan; capit butuh N tick BERUNTUN.
+    servo_hits = _tally(servo_hits, True) if close_ready else 0
+    if servo_hits == 1 or (int(now * 2) != int((now - dt) * 2)):
+        print(f"[SERVO] channel={metric[0] if metric else None} ex={ex:.4f} "
+              f"area_frac={metric[1] if metric else None} threshold={threshold} "
+              f"close_ticks={servo_hits}/{servo_cfg['centered_ticks']}")
 
     # Gerbang surge. Transisi 0 -> penuh tetap lewat slew: lompatan command
     # menyentak rangka, dan sentakan itu jatuh persis saat ROV paling dekat hook.
@@ -531,25 +612,8 @@ def servo_step(surge_step):
 # AUTONOMOUS - FULL COUNTER
 # ============================================================
 
-# Kolom `servo` menandai CASE yang menyetir sway dari deteksi hook. Ditandai
-# per-langkah, bukan lewat nomor CASE, supaya urutan boleh diubah tanpa ada
-# indeks ajaib yang diam-diam ikut bergeser.
-AUTO_STEPS = [
-    # duration, surge, sway, yaw, heave, gripper, depth, servo
-    (3.0, 0, 0, 0, 0, None, None, False),
-    (2.0, 0, 0, 0, 0, None, None, False),
-
-    # contoh struktur command non-motion
-    (1.0, 0, 0, 0, 0, None, None, False),
-    (2.0, 0, 0, 0, 0, None, 1.0, False),
-
-    # CASE 4 — satu-satunya yang bergerak. sway dihitung tiap tick dari hook,
-    # surge di-gate sampai hook cukup di tengah, dan 3 detik adalah TIMEOUT:
-    # CASE selesai lebih awal begitu hook terkunci di tengah.
-    (3.0, -500, 0, 0, 0, None, None, True),
-
-    (1.0, 0, 0, 0, 0, None, None, False),
-]
+# Diisi dari YAML saat autonomous_reset; kolom lama tetap dipertahankan.
+AUTO_STEPS = []
 
 
 auto_index = 0
@@ -557,6 +621,8 @@ auto_step_start = 0.0
 auto_gripper_sent = False
 auto_depth_sent = False
 auto_finished = False
+auto_gripped = False
+auto_depth_target = None
 
 
 def autonomous_reset():
@@ -564,10 +630,16 @@ def autonomous_reset():
     global auto_step_start
     global auto_gripper_sent
     global auto_depth_sent
-    global auto_finished
+    global auto_finished, auto_gripped, auto_depth_target
+    global latest_hook, latest_qr_metric, last_hook_time, last_vision_receipt
 
+    with hook_lock:
+        latest_hook = latest_qr_metric = None
+        last_hook_time = last_vision_receipt = 0.0
+    auto_gripped = False
+    auto_depth_target = None
     auto_index = 0
-    auto_step_start = time.time()
+    auto_step_start = time.monotonic()
     auto_gripper_sent = False
     auto_depth_sent = False
     auto_finished = False
@@ -580,12 +652,40 @@ def autonomous_reset():
     print("[AUTO] FSM reset -> CASE 0")
 
 
+def current_depth():
+    with hook_lock:
+        depth = vehicle_state.get("depth")
+        fresh = time.monotonic() - last_vehicle_time <= mission_cfg["telemetry_max_age"]
+    if isinstance(depth, (int, float)) and not isinstance(depth, bool) and math.isfinite(depth) and depth >= 0 and fresh:
+        return float(depth)
+    return None
+
+
+def finish_auto(reason, hold_here=True):
+    global auto_finished, auto_depth_target
+    send_motion(0, 0, 0, 0, src="fsm")
+    if hold_here and mission_cfg is not None:
+        depth = current_depth()
+        if depth is not None:
+            send_command("depth_apply", depth)
+            auto_depth_target = depth
+    auto_finished = True
+    print(f"[AUTO] selesai: {reason}; motion nol, tahan kedalaman")
+
+
+def enter_case(index):
+    global auto_index, auto_step_start, auto_gripper_sent, auto_depth_sent
+    send_motion(0, 0, 0, 0, src="fsm")
+    auto_index = index
+    auto_step_start = time.monotonic()
+    auto_gripper_sent = auto_depth_sent = False
+    servo_reset()
+    print(f"[AUTO] -> CASE {index}")
+
+
 def autonomous_control():
-    global auto_index
-    global auto_step_start
-    global auto_gripper_sent
-    global auto_depth_sent
-    global auto_finished
+    global auto_step_start, auto_gripper_sent, auto_depth_sent
+    global auto_gripped, auto_depth_target
 
     # ── Kill-switch operator ──────────────────────────────────────────────
     # Di arsitektur ini stik F310 TIDAK lagi sampai ke Pi saat autonomous
@@ -605,66 +705,79 @@ def autonomous_control():
         send_motion(0, 0, 0, 0, src="fsm")
         return
 
-    if auto_index >= len(AUTO_STEPS):
-        send_motion(0, 0, 0, 0, src="fsm")
-        auto_finished = True
-        print("[AUTO] FSM selesai")
+    if servo_cfg is None or mission_cfg is None:
+        finish_auto("config tidak valid", hold_here=False)
         return
 
-    (duration, surge, sway, yaw, heave,
-     gripper, depth_target, servo) = AUTO_STEPS[auto_index]
+    depth_now = current_depth()
+    with hook_lock:
+        armed = vehicle_state.get("armed") is True
+        vision_age = time.monotonic() - last_hook_time
+        fresh_vision = latest_hook is not None and vision_age <= servo_cfg["max_age"]
+    if depth_now is None:
+        finish_auto("telemetry depth hilang; target native terakhir dipertahankan", hold_here=False)
+        return
+    if not armed:
+        if auto_index == 0:
+            auto_step_start = time.monotonic()  # settle dihitung sesudah ARM
+            send_motion(0, 0, 0, 0, src="fsm")
+        else:
+            finish_auto("DISARM", hold_here=False)
+        return
 
-    elapsed = time.time() - auto_step_start
+    if auto_index >= len(AUTO_STEPS):
+        finish_auto("urutan selesai", hold_here=False)
+        return
+    if auto_index == 3:
+        enter_case(4)
+        return
+    duration, surge, sway, yaw, heave, gripper, depth_target, servo = AUTO_STEPS[auto_index]
+    elapsed = time.monotonic() - auto_step_start
 
-    # Command sekali saat memasuki CASE.
-    if not auto_gripper_sent and gripper is not None:
-        send_command("gripper", gripper)
-        auto_gripper_sent = True
-        print(f"[AUTO] CASE {auto_index} -> gripper={gripper}")
+    if auto_index == 2:
+        if elapsed >= duration:
+            finish_auto("QR TIDAK PERNAH terdeteksi: timeout pencarian")
+            return
+        if fresh_vision:
+            enter_case(4)
+            return
+        yaw *= 1 if int(elapsed / mission_cfg["search_sweep_s"]) % 2 == 0 else -1
 
+    if servo:
+        if elapsed >= duration or vision_age > mission_cfg["lost_timeout_s"]:
+            finish_auto("timeout servo / QR hilang > batas")
+            return
+        surge, sway, ready = servo_step(surge)
+        if ready:
+            enter_case(5)
+            send_command("gripper", AUTO_STEPS[5][5])
+            auto_gripper_sent = True
+            auto_gripped = True  # perintah close terkirim, bukan bukti grip fisik
+            return
+
+    if auto_index in (5, 6) and not auto_gripped:
+        finish_auto("CASE gripper/naik tanpa pemicu visual")
+        return
+    if auto_index == 6 and not auto_depth_sent:
+        depth_target = max(0.0, depth_now - mission_cfg["rise_m"])
     if not auto_depth_sent and depth_target is not None:
         send_command("depth_apply", float(depth_target))
+        auto_depth_target = float(depth_target)
         auto_depth_sent = True
-        print(
-            f"[AUTO] CASE {auto_index} -> "
-            f"depth_target={float(depth_target):.2f} m"
-        )
+    if not auto_gripper_sent and gripper is not None:
+        send_motion(0, 0, 0, 0, src="fsm")
+        send_command("gripper", gripper)
+        auto_gripper_sent = True
 
-    # CASE servo menimpa surge & sway dari deteksi hook; sisanya (yaw, heave)
-    # tetap dari tabel. Kalau servo mati (config/ import gagal), CASE ini
-    # berjalan sebagai langkah waktu biasa seperti sebelum YOLO disambungkan.
-    selesai = elapsed >= duration
-    alasan = "timeout"
-
-    if servo and servo_cfg is not None:
-        surge, sway, di_tengah = servo_step(surge)
-
-        if di_tengah:
-            selesai = True
-            alasan = "hook di tengah"
-
-    # Motion dikirim terus selama CASE aktif.
+    # CASE 2/4 punya cabang sukses/abort sendiri; timeout tak boleh menutup capit.
+    if auto_index not in (2, 4) and (elapsed >= duration or (
+            auto_index == 1 and abs(depth_now - depth_target) < mission_cfg["depth_tol_m"])):
+        if auto_index == 6:
+            finish_auto("naik selesai; target kedalaman tetap aktif", hold_here=False)
+        else:
+            enter_case(auto_index + 1)
+        return
     send_motion(surge, sway, yaw, heave, src="fsm")
-
-    if selesai:
-        print(
-            f"[AUTO] CASE {auto_index} selesai ({alasan}) | "
-            f"motion=({surge},{sway},{yaw},{heave})"
-        )
-
-        # Hook tak pernah terlihat sepanjang CASE: lanjut ke CASE berikutnya,
-        # jangan menggantung. Dicatat supaya trial yang "jalan tapi tidak
-        # mengoreksi apa pun" bisa dibedakan dari trial yang servonya bekerja.
-        if servo and servo_cfg is not None and not servo_seen_hook:
-            print(f"[SERVO] CASE {auto_index}: hook TIDAK PERNAH terdeteksi "
-                  f"— tidak ada koreksi sway sama sekali, lanjut ke CASE "
-                  f"{auto_index + 1}")
-
-        auto_index += 1
-        auto_step_start = time.time()
-        auto_gripper_sent = False
-        auto_depth_sent = False
-        servo_reset()
 
 
 # ============================================================
@@ -763,13 +876,12 @@ def main():
     try:
         while True:
 
-            mode = get_mode()
-
-            if mode == MODE_MANUAL:
-                manual_control()
-
-            elif mode == MODE_AUTONOMOUS:
-                autonomous_control()
+            with mode_lock:
+                mode = get_mode()
+                if mode == MODE_MANUAL:
+                    manual_control()
+                elif mode == MODE_AUTONOMOUS:
+                    autonomous_control()
 
             time.sleep(LOOP_DT)
 
