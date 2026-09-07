@@ -1771,8 +1771,24 @@ class Mission5FSM:
                     return self._reject('keypoint_conf_missing:%d' % index)
                 x, y = float(item['x']), float(item['y'])
                 frame_w, frame_h = float(det['frame_w']), float(det['frame_h'])
-                if (not math.isfinite(x) or not math.isfinite(y)
-                        or x < 0 or y < 0 or x > frame_w or y > frame_h):
+                # Batang hook (id 0/1) BOLEH keluar frame — dan justru itu yang
+                # terjadi saat ROV paling dekat, momen paling penting untuk
+                # docking. Docstring di atas sudah menyatakannya sejak awal;
+                # kodenya yang belum ikut. Sebelum ini satu titik batang di
+                # y = -2,9 px membuang SELURUH record, termasuk ujung "J"
+                # (id 5) yang membidik servo — persis alasan validator di
+                # rov_agent._validate_hook_vision dilonggarkan 7 Sep 2026
+                # ("keputusan layak-gerak ada di _hook_skeleton").
+                #
+                # Yang DIJAGA tetap sama: batas kewarasan angka untuk semua
+                # titik, dan id 2..5 wajib DI DALAM frame plus lolos
+                # confidence & margin tepi di blok `required` di bawah.
+                if not math.isfinite(x) or not math.isfinite(y):
+                    return self._reject('keypoint_non_finite:%d' % index)
+                if not (-frame_w <= x <= 2 * frame_w and -frame_h <= y <= 2 * frame_h):
+                    return self._reject('keypoint_absurd:%d@%.1f,%.1f' % (index, x, y))
+                if index in (2, 3, 4, 5) and (x < 0 or y < 0
+                                              or x > frame_w or y > frame_h):
                     return self._reject('keypoint_out_of_frame:%d@%.1f,%.1f'
                                         % (index, x, y))
                 points[index] = (x, y)

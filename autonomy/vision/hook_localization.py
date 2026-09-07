@@ -325,6 +325,48 @@ def load_calibration(path: str) -> dict:
             'image_size': size, 'name': path}
 
 
+def verify_calib_size(calibration, frame) -> bool:
+    """False bila kalibrasi dibuat pada resolusi LAIN dari frame nyata.
+
+    Kenapa ini ada DI SINI dan bukan hanya di qr_detect.VisionPipeline: penjaga
+    yang lama (`VisionPipeline._verify_calib_size`, dibuat setelah bug 22 Agu
+    2026) hidup di jalur laptop. Sejak vision pindah ke Pi (7 Sep 2026) kedua
+    worker memuat K/dist lewat `load_calibration()` lalu memakainya LANGSUNG —
+    VisionPipeline tak pernah dibangun, jadi penjaga itu tak pernah berjalan
+    sekali pun di produksi. Yang tersisa: mengubah `-r` di unit ustreamer
+    (satu baris) membuat pose diam-diam salah.
+
+    Kenapa MEMATIKAN pose, bukan menskala K: kalau aspect ratio ikut berubah,
+    field-of-view berubah dan menskala K TIDAK benar — hanya menukar error yang
+    kelihatan dengan error yang tersembunyi. z ~ fx*W/w_px, jadi fx yang 1,5x
+    terlalu besar membuat PBVS mengira QR 1,5x lebih jauh dan ROV menabrak
+    payload alih-alih berhenti di depannya.
+
+    Terukur 7 Sep 2026: ustreamer-cam1 & cam2 SAMA-SAMA `-r 1280x720`, dan
+    bottom.npz/wall.npz sama-sama image_size=[1280,720] — jadi saat ini COCOK.
+    Penjaga ini menjaga supaya tetap begitu, bukan menambal kerusakan.
+    """
+    if calibration is None or frame is None:
+        return False
+    size = calibration.get('image_size')
+    name = calibration.get('name', '?')
+    if size is None:
+        log.warning("[vision] %s tanpa field image_size — resolusi TIDAK bisa "
+                    "diperiksa; kalibrasi ulang dgn tools/calibrate_camera.py "
+                    "supaya penjaga ini berguna", name)
+        return True
+    frame_h, frame_w = frame.shape[0], frame.shape[1]
+    calib_w, calib_h = size
+    if (calib_w, calib_h) == (frame_w, frame_h):
+        return True
+    log.error("[vision] KALIBRASI DITOLAK: %s dibuat pada %dx%d, frame nyata "
+              "%dx%d — K/dist tidak valid, POSE DIMATIKAN. Samakan resolusi "
+              "stream (ustreamer -r) dengan resolusi kalibrasi, atau kalibrasi "
+              "ulang pada resolusi stream.",
+              name, calib_w, calib_h, frame_w, frame_h)
+    return False
+
+
 # ══ Filter temporal ═══════════════════════════════════════════════════════════
 
 class HookTracker:

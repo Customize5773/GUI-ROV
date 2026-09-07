@@ -250,9 +250,21 @@ class OnnxHookDetector:
             for kp_index in range(self.n_keypoints):
                 kx, ky, kv = row[5 + kp_index * 3: 8 + kp_index * 3]
                 px, py = unmap(kx, ky)
-                # Sengaja TIDAK di-clamp ke frame, sama seperti Ultralytics:
-                # FSM sendiri yang menolak keypoint di luar margin tepi
-                # (_hook_skeleton di fsm/mission5.py).
+                # Sengaja TIDAK di-clamp ke frame — dan di sinilah kita SENGAJA
+                # BERBEDA dari Ultralytics, yang meng-clamp keypoint ke tepi
+                # gambar. (Komentar lama di baris ini mengklaim keduanya sama;
+                # itu keliru, terukur 7 Sep 2026: pada fixture hook nyata
+                # Ultralytics melaporkan kp0 y=0.00 sedangkan nilai decode
+                # sebenarnya y=-24.85. Nilai x identik sampai 0.00 px, jadi
+                # yang beda memang cuma clamping, bukan matematikanya.)
+                #
+                # Tidak meng-clamp itu pilihan yang disengaja: y=-24.85 memberi
+                # tahu FSM bahwa batang hook menerus 25 px DI ATAS frame,
+                # sedangkan 0.00 berbohong bahwa titiknya persis di tepi — dan
+                # kebohongan itu justru menabrak cek margin tepi di
+                # _hook_skeleton. Keputusan layak-gerak tetap di FSM, yang
+                # mewajibkan id 2..5 di dalam frame + lolos margin, sementara
+                # batang (id 0/1) memang boleh keluar frame.
                 keypoints.append({'id': kp_index, 'x': px, 'y': py,
                                   'confidence': float(kv)})
 

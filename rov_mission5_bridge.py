@@ -297,7 +297,7 @@ class Mission5Runner:
         runlog = self._new_runlog("CUSTOM")
         self._custom_stop.clear()
         self._custom_state = "STARTING"
-
+        
         def run():
             try:
                 for case in self.custom_cases:

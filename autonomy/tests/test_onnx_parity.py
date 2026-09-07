@@ -35,6 +35,13 @@ import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _AUTONOMY = os.path.dirname(_HERE)
 _FIXTURES = os.path.join(_HERE, "fixtures", "real_hard_cases")
+# Korpus KEDUA, terpisah dengan sengaja: real_hard_cases/ punya makna
+# spesifik milik test QR (QR TERLIHAT tapi decode_qr GAGAL), jadi
+# menaruh frame hook di sana mengubah arti hasil test itu. live_hook/
+# berisi frame CAM WALL sungguhan (192.168.2.2:8080, 7 Sep 2026) dengan
+# hook di dalam frame — inilah yang membuat paritas pose benar-benar
+# terbandingkan, bukan ter-skip.
+_LIVE_HOOK = os.path.join(_HERE, "fixtures", "live_hook")
 _VISION = os.path.join(_AUTONOMY, "vision")
 
 if _AUTONOMY not in sys.path:
@@ -43,7 +50,7 @@ if _AUTONOMY not in sys.path:
 cv2 = pytest.importorskip("cv2", reason="paritas butuh OpenCV")
 pytest.importorskip("ultralytics", reason="paritas hanya jalan di laptop (butuh ultralytics)")
 
-from vision.yolo_hook import OnnxHookDetector, YOLOHookDetector  # noqa: E402
+from vision.yolo_hook import OnnxHookDetector, YOLOHookDetector, _pack  # noqa: E402
 
 # (stem .pt, stem .onnx, conf, jumlah keypoint) — SEMUA varian ukuran diuji,
 # karena imgsz graf ONNX itu tetap dan dipilih saat export: varian 320/416
@@ -69,7 +76,8 @@ MAX_KP_PX = 0.5
 
 
 def _fixtures():
-    return sorted(glob.glob(os.path.join(_FIXTURES, "*.png")))
+    return (sorted(glob.glob(os.path.join(_FIXTURES, "*.png")))
+            + sorted(glob.glob(os.path.join(_LIVE_HOOK, "*.png"))))
 
 
 def _pair(pt_stem, onnx_stem, conf):
@@ -116,9 +124,15 @@ def _reference(pt_detector, onnx_detector, frame):
                 "id": kp_index, "x": px, "y": py,
                 "confidence": confidences[kp_index] if confidences else None,
             })
+    # bbox dilewatkan _pack() YANG SAMA dengan jalur ONNX, bukan dihitung
+    # sendiri: _pack meng-clamp kotak ke dalam frame, jadi menghitungnya manual
+    # di sini membandingkan kotak ter-clamp lawan kotak mentah dan melaporkan
+    # "beda 3,07 px" untuk perbedaan yang sebenarnya cuma clamping.
+    h, w = frame.shape[:2]
+    packed = _pack(ux1, uy1, ux2, uy2, float(boxes.conf[index]), keypoints, w, h)
     return {
-        "bbox": (ux1, uy1, ux2 - ux1, uy2 - uy1),
-        "confidence": float(boxes.conf[index]),
+        "bbox": packed["bbox"],
+        "confidence": packed["confidence"],
         "keypoints": keypoints,
     }
 
@@ -228,3 +242,89 @@ def test_make_detector_picks_backend_by_extension():
         pytest.skip("best_new.onnx belum diekspor")
     assert isinstance(make_detector(onnx, conf=0.5), OnnxHookDetector)
     assert isinstance(make_detector(onnx.upper(), conf=0.5), OnnxHookDetector)
+
+
+# ── Paritas DECODER MURNI: graf yang sama, dua pembaca ────────────────────────
+# Test di atas membandingkan .pt lawan .onnx dengan preprocessing disamakan —
+# berguna, tapi masih membandingkan DUA graf berbeda, jadi setiap selisih selalu
+# bisa dijelaskan sebagai "ya memang beda model". Blok di bawah menutup celah
+# itu: Ultralytics disuruh memuat FILE .onnx YANG SAMA yang dibaca
+# OnnxHookDetector. Bobot sama, graf sama, preprocessing sama-sama letterbox
+# sendiri. Yang tersisa HANYA kode decode kita. Karena itu toleransinya nyaris
+# nol, bukan "cukup dekat".
+#
+# Terukur 7 Sep 2026 pada frame hook LIVE (CAM WALL 192.168.2.2:8080):
+# best_pose.onnx dan best_pose_320.onnx keduanya cocok 0.00 px di SEMUA
+# keypoint dan 0.0000 di confidence. Decode terbukti benar — bukan diasumsikan.
+DECODER_KP_PX = 0.05
+DECODER_CONF = 1e-4
+
+POSE_ONNX = ["best_pose", "best_pose_416", "best_pose_320"]
+
+
+def _ultralytics_on_onnx(weights, frame, imgsz, conf):
+    """Ultralytics membaca .onnx yang sama. CPU dipaksa: provider CUDA di mesin
+    ini gagal dibuat lalu melempar error binding, dan itu tak ada hubungannya
+    dengan yang sedang diuji."""
+    from ultralytics import YOLO
+    result = YOLO(weights, task="pose").predict(source=frame, imgsz=imgsz, conf=conf,
+                                                device="cpu", verbose=False)[0]
+    if result.boxes is None or len(result.boxes) == 0:
+        return None
+    index = int(result.boxes.conf.argmax())
+    pose = getattr(result, "keypoints", None)
+    return {
+        "confidence": float(result.boxes.conf[index]),
+        "keypoints": (pose.xy[index].tolist()
+                      if pose is not None and getattr(pose, "xy", None) is not None
+                      else None),
+    }
+
+
+@pytest.mark.parametrize("onnx_stem", POSE_ONNX)
+def test_decoder_matches_ultralytics_on_same_onnx(onnx_stem):
+    """Decode tangan kita == decode Ultralytics, pada graf yang SAMA PERSIS."""
+    from vision.yolo_hook import _enhance
+    weights = os.path.join(_VISION, onnx_stem + ".onnx")
+    if not os.path.exists(weights):
+        pytest.skip(f"{weights} belum diekspor")
+    detector = OnnxHookDetector(weights, conf=0.01, enhance_underwater=True)
+
+    compared = 0
+    for path in _fixtures():
+        frame = cv2.imread(path)
+        assert frame is not None, path
+        mine = detector.detect(frame)
+        theirs = _ultralytics_on_onnx(weights, _enhance(frame), detector.imgsz, 0.01)
+        name = os.path.basename(path)
+        if mine is None or theirs is None:
+            assert (mine is None) == (theirs is None), (
+                f"{name}: satu sisi mendeteksi, sisi lain tidak "
+                f"(mine={mine is not None}, ultralytics={theirs is not None})")
+            continue
+        compared += 1
+        assert abs(mine["confidence"] - theirs["confidence"]) <= DECODER_CONF, (
+            f"{name}: confidence beda {abs(mine['confidence'] - theirs['confidence']):.6f}")
+        assert theirs["keypoints"] is not None, f"{name}: ultralytics tanpa keypoint"
+        height, width = frame.shape[:2]
+        for kp in mine["keypoints"]:
+            ux, uy = theirs["keypoints"][kp["id"]]
+            # Ultralytics MENG-CLAMP keypoint ke tepi gambar; kita sengaja
+            # tidak (lihat catatan di vision/yolo_hook.py). Itu beda KEBIJAKAN,
+            # bukan beda decode, jadi dikeluarkan dari perbandingan dengan
+            # menerapkan clamp yang sama ke sisi kita — bukan dengan
+            # melonggarkan toleransi, yang justru akan menyembunyikan bug asli.
+            mx = min(max(kp["x"], 0.0), float(width))
+            my = min(max(kp["y"], 0.0), float(height))
+            delta = max(abs(mx - ux), abs(my - uy))
+            assert delta <= DECODER_KP_PX, (
+                f"{name}: keypoint {kp['id']} meleset {delta:.4f} px — "
+                f"BUG DECODE NYATA (graf & bobot identik, jadi tak bisa "
+                f"dijelaskan sebagai beda model). "
+                f"mine=({kp['x']:.2f},{kp['y']:.2f}) ultra=({ux:.2f},{uy:.2f})")
+
+    # TIDAK BOLEH lolos diam-diam: keypoint 2..5 menggerakkan servo docking ROV
+    # nyata, jadi "tak ada yang dibandingkan" adalah kegagalan, bukan skip.
+    assert compared > 0, (
+        f"{onnx_stem}.onnx: tak satu pun frame fixture dibandingkan — paritas "
+        f"decode TIDAK teruji. Tambahkan fixture yang model ini memang deteksi.")

@@ -12,6 +12,7 @@ TETAP jalan sebagai fallback — lihat _fresh_payload di fsm/mission5.py.
 
 import argparse
 import logging
+import os
 import sys
 import threading
 import time
@@ -40,7 +41,7 @@ def _jsonable(value):
     return value
 
 
-def main():
+def build_arg_parser():
     ap = argparse.ArgumentParser(description='Laptop-side YOLO QR worker')
     ap.add_argument('--camera', required=True)
     ap.add_argument('--model', required=True)
@@ -51,9 +52,21 @@ def main():
                     help='sisi QR dalam meter (spesifikasi KKI 4 cm)')
     # 0.6 = puncak F1 dari report training best_new.pt. Titik awal, BUKAN angka
     # mati: air kolam menurunkan confidence, jadi setel lewat QR_VISION_CONF.
-    ap.add_argument('--conf', type=float, default=0.6)
-    ap.add_argument('--imgsz', type=int, default=640)
-    ap.add_argument('--fps', type=float, default=10.0)
+    #
+    # 7 Sep 2026: sebelum baris ini, QR_VISION_CONF/IMGSZ/FPS disebut di
+    # KOMENTAR tapi tak pernah dibaca os.environ di mana pun (grep seluruh
+    # repo) — unit systemd menghardcode --conf 0.6 langsung di ExecStart,
+    # jadi "setel lewat QR_VISION_CONF" tak pernah benar-benar bisa
+    # dilakukan. CLI flag tetap menang kalau eksplisit diberikan (seperti
+    # ExecStart saat ini), jadi menambah default env di sini TIDAK
+    # mengubah perilaku yang sudah di-deploy — baru berlaku begitu unit
+    # file dilepas dari --conf/--imgsz/--fps eksplisit (lihat A7).
+    ap.add_argument('--conf', type=float,
+                    default=float(os.environ.get('QR_VISION_CONF', 0.6)))
+    ap.add_argument('--imgsz', type=int,
+                    default=int(os.environ.get('QR_VISION_IMGSZ', 640)))
+    ap.add_argument('--fps', type=float,
+                    default=float(os.environ.get('QR_VISION_FPS', 10.0)))
     # --- jalur Raspberry Pi -------------------------------------------------
     ap.add_argument('--emit-udp', default=None, metavar='HOST:PORT',
                     help='kirim hasil sbg UDP JSON ke rov_agent (mis. 127.0.0.1:14550)')
@@ -61,7 +74,11 @@ def main():
                     help='dengarkan telemetri rov_agent di port UDP ini (gate vision_want)')
     ap.add_argument('--cv-threads', type=int, default=2,
                     help='jumlah thread OpenCV; samakan dgn CPUAffinity unit systemd')
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_arg_parser().parse_args()
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                         format='[qr-worker] %(levelname)s %(message)s')
@@ -78,8 +95,9 @@ def main():
         # menghasilkan None di kedua backend, jadi jalur hook/pose tak tersentuh.
         detector = make_detector(args.model, conf=args.conf, imgsz=args.imgsz)
         K = dist = None
+        calibration = None
         if args.calib:
-            from vision.hook_localization import load_calibration
+            from vision.hook_localization import load_calibration, verify_calib_size
             calibration = load_calibration(args.calib)
             K, dist = calibration['K'], calibration['dist']
         else:
@@ -87,6 +105,8 @@ def main():
     except Exception as exc:
         emit({'status': 'worker_error', 'reason': str(exc), 'timestamp': time.time()})
         return 2
+
+    calib_checked = [False]
 
     def _open_camera():
         new_cap = cv2.VideoCapture(args.camera)
@@ -130,6 +150,19 @@ def main():
                           'timestamp': time.time()}
             else:
                 h, w = frame.shape[:2]
+                # Sekali saja, pada frame NYATA pertama: kalibrasi yang dibuat
+                # di resolusi lain membuat pose PBVS meleset sebanding rasionya
+                # — dan pose itulah yang menggerakkan servo docking. Diperiksa
+                # di sini, bukan saat load, karena resolusi stream baru
+                # diketahui setelah frame pertama tiba.
+                if calibration is not None and not calib_checked[0]:
+                    calib_checked[0] = True
+                    if not verify_calib_size(calibration, frame):
+                        K = dist = None
+                        emit({'status': 'calib_mismatch',
+                              'reason': 'kalibrasi %s != stream %dx%d' % (
+                                  calibration.get('image_size'), w, h),
+                              'timestamp': time.time()})
                 detection = detector.detect(frame)
                 decoded = (_decode_tracked_roi(frame,
                                                _quad_from_bbox(detection['bbox']),

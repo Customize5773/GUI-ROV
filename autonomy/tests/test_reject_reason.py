@@ -238,6 +238,35 @@ def test_hook_skeleton_names_the_collapsed_span(fsm):
     assert fsm.telemetry_out['reject_reason'].startswith('skeleton_collapsed:4-5:')
 
 
+def test_stem_keypoint_outside_frame_does_not_block_tip(fsm):
+    """A3: batang hook (id 0/1) menerus keluar frame justru saat ROV PALING
+    dekat. Membuang seluruh record karenanya = buta tepat saat docking."""
+    record = _hook()
+    record['keypoints'][0]['y'] = -2.9
+    record['keypoints'][1]['x'] = -14.0
+    assert fsm._hook_tip(record) is not None, (
+        "id 0/1 di luar frame membuang ujung J yang valid — "
+        "docstring _hook_skeleton sendiri menyatakan ini boleh")
+
+
+@pytest.mark.parametrize("kp_id", [2, 3, 4, 5])
+def test_control_keypoints_still_must_be_inside_frame(fsm, kp_id):
+    """A3 bukan pelonggaran: titik yang MENGGERAKKAN servo tetap wajib di dalam
+    frame. Kalau ini ikut longgar, ROV membidik ke luar gambar."""
+    record = _hook()
+    record['keypoints'][kp_id]['y'] = -1.0
+    assert fsm._hook_tip(record) is None
+    assert fsm.telemetry_out['reject_reason'].startswith('keypoint_out_of_frame:%d' % kp_id)
+
+
+def test_absurd_stem_keypoint_still_rejected(fsm):
+    """Batas kewarasan tetap ada — 'boleh keluar frame' bukan 'boleh apa saja'."""
+    record = _hook()
+    record['keypoints'][0]['y'] = -99999.0
+    assert fsm._hook_tip(record) is None
+    assert fsm.telemetry_out['reject_reason'].startswith('keypoint_absurd:0')
+
+
 def test_healthy_skeleton_passes(fsm):
     """Kalau fixture sehat pun ditolak, semua uji di atas kehilangan makna."""
     assert fsm._hook_tip(_hook()) is not None

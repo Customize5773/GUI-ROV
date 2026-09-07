@@ -443,6 +443,64 @@ def _zxing_qr(gray, scale=1.0):
     return out
 
 
+def estimate_module_px(gray):
+    """Perkiraan piksel-per-modul QR TANPA perlu decode berhasil.
+
+    Kenapa ini ada: keputusan "QR di luar jarak kerja" vs "model tak mampu"
+    (autonomy/tools/replay_reject_qr.py) butuh angka, tapi decode_qr() hanya
+    mengembalikan sesuatu kalau SUDAH berhasil — persis kasus yang mau
+    dijelaskan adalah saat ia gagal. Fungsi ini mengukur pola finder (tiga
+    kotak bersarang di sudut QR: hitam 7x7 → putih 5x5 → hitam 3x3) yang
+    sering tetap tersegmentasi Otsu walau seluruh decoder gagal membaca isi.
+
+    Metode: threshold Otsu -> cv2.findContours(RETR_TREE) -> cari kontur
+    CUCU (depth 2: anak dari anak) — itulah lapis PUTIH 5x5 di tengah finder
+    pattern, dipilih karena tervalidasi paling stabil terhadap noise foto
+    dibanding lapis hitam 3x3 (terlalu kecil, gampang hilang di blur) atau
+    lapis luar 7x7 (gampang menyatu dgn modul data tetangga). module_px =
+    sisi_persegi_termuat(kontur) / 5.
+
+    Divalidasi pada QR sintetis (segno) ber-module_px=8 diketahui: metode ini
+    mengukur 7.8 px (galat 2.5%) — lihat demo() di bawah / test_module_px.py.
+
+    Return: list float module_px (satu per kandidat finder pattern yang
+    ditemukan, BUKAN dirata-rata — foto miring/blur bisa membuat kandidat
+    palsu, jadi pemanggil yang menilai sebaran, bukan fungsi ini menyembunyikannya
+    di balik satu angka). Kosong = tak ada kandidat finder yang tersegmentasi.
+    """
+    if not CV2_OK:
+        return []
+    if gray.ndim == 3:
+        gray = cv2.cvtColor(gray, cv2.COLOR_BGR2GRAY)
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    contours, hierarchy = cv2.findContours(binary, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    if hierarchy is None:
+        return []
+    hierarchy = hierarchy[0]
+
+    def _depth(index):
+        d, j = 0, index
+        while hierarchy[j][3] != -1:
+            j = hierarchy[j][3]
+            d += 1
+        return d
+
+    out = []
+    for index, contour in enumerate(contours):
+        if cv2.contourArea(contour) < 9:   # lebih kecil dari 3x3 px, pasti derau
+            continue
+        if _depth(index) != 2:
+            continue
+        (_, _), (w, h), _ = cv2.minAreaRect(contour)
+        side = (w + h) / 2.0
+        # Persegi hampir sama sisi = kandidat sehat. Rasio jomplang berarti
+        # dua modul tetangga menyatu jadi satu blob (Otsu di foto berderau),
+        # bukan finder pattern asli — buang, jangan dilaporkan sbg pengukuran.
+        if side > 0 and min(w, h) / max(w, h) >= 0.6:
+            out.append(side / 5.0)
+    return out
+
+
 def decode_qr(frame, enhance=True):
     """Deteksi QR robust dari 1 frame. Kembalikan list {'data': str,
     'pts': ndarray(N,2) koordinat frame ASLI}.

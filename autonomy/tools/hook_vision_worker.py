@@ -20,6 +20,7 @@ jadi tidak ada cabang "kalau di Pi" di file ini.
 import argparse
 import json
 import logging
+import os
 import socket
 import sys
 import threading
@@ -240,7 +241,7 @@ def inference_wanted(state, lock, camera, grace=2.0):
     return camera in want
 
 
-def main():
+def build_arg_parser():
     ap = argparse.ArgumentParser(description='Laptop-side YOLO Hook worker')
     ap.add_argument('--camera', required=True)
     ap.add_argument('--model', required=True)
@@ -250,8 +251,13 @@ def main():
     # masuk sejak confidence rendah agar rangka 2..5 tetap dapat divalidasi
     # oleh FSM; ini bukan izin bergerak tanpa keypoint yang kuat.
     ap.add_argument('--conf', type=float, default=0.10)
-    ap.add_argument('--imgsz', type=int, default=640)
-    ap.add_argument('--fps', type=float, default=10.0)
+    # Default lewat env, BUKAN hardcode (aturan tuning repo ini) — CLI flag
+    # tetap menang kalau eksplisit diberikan, jadi unit systemd yang sudah
+    # menulis --imgsz/--fps langsung tidak berubah perilakunya.
+    ap.add_argument('--imgsz', type=int,
+                    default=int(os.environ.get('HOOK_VISION_IMGSZ', 640)))
+    ap.add_argument('--fps', type=float,
+                    default=float(os.environ.get('HOOK_VISION_FPS', 10.0)))
     ap.add_argument('--no-tta', action='store_true', help='matikan test-time augmentation')
     ap.add_argument('--no-underwater-enhance', action='store_true',
                     help='matikan CLAHE untuk haze underwater')
@@ -265,7 +271,11 @@ def main():
     ap.add_argument('--cv-threads', type=int, default=2,
                     help='jumlah thread OpenCV; samakan dgn jumlah core di '
                          'CPUAffinity unit systemd (default 2)')
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    args = build_arg_parser().parse_args()
 
     logging.basicConfig(stream=sys.stderr, level=logging.INFO,
                         format='[hook-worker] %(levelname)s %(message)s')
@@ -277,7 +287,9 @@ def main():
         enable_udp_emit(args.emit_udp, 'hook_vision')
     try:
         import cv2
-        from vision.hook_localization import HookTracker, load_calibration, load_hook_map, localize_hook
+        from vision.hook_localization import (HookTracker, load_calibration,
+                                              load_hook_map, localize_hook,
+                                              verify_calib_size)
         from vision.yolo_hook import make_detector
         detector = make_detector(
             args.model, conf=args.conf, imgsz=args.imgsz,
@@ -289,6 +301,8 @@ def main():
     except Exception as exc:
         emit({'status': 'worker_error', 'reason': str(exc), 'timestamp': time.time()})
         return 2
+
+    calib_checked = [False]
 
     def _open_camera():
         new_cap = cv2.VideoCapture(args.camera)
@@ -339,6 +353,20 @@ def main():
                 result = {'status': 'camera_error', 'reason': 'frame gagal dibaca',
                           'timestamp': time.time()}
             else:
+                # Sekali saja, pada frame NYATA pertama — lihat verify_calib_size().
+                # Lokalisasi hook cuma PENGAMAT (tak ada state FSM yang memakainya
+                # untuk bergerak), jadi mismatch TIDAK mematikan worker: ia
+                # diturunkan ke relative_only dengan membuang hook_map, supaya
+                # tak ada pose-di-peta yang diklaim dari K yang salah.
+                if not calib_checked[0]:
+                    calib_checked[0] = True
+                    if not verify_calib_size(calibration, frame):
+                        hook_map = None
+                        emit({'status': 'calib_mismatch',
+                              'reason': 'kalibrasi %s != stream %dx%d' % (
+                                  calibration.get('image_size'),
+                                  frame.shape[1], frame.shape[0]),
+                              'timestamp': time.time()})
                 detection = detector.detect(frame)
                 if detection is None:
                     result = {'status': 'no_detection', 'timestamp': time.time()}

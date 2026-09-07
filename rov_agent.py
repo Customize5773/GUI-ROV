@@ -1941,16 +1941,24 @@ def _fsm_read_state():
 # di bawah ambang decode robust (~4-5px minimum). Diagnosis dgn ROV
 # terkoneksi: BUKAN exposure (sudah disweep 5-156, tak menolong; kamera
 # exploreHD juga TANPA kontrol fokus) — murni kurang piksel dari sensor +
-# blur optik jarak kerja. ustreamer-cam2 (bottom, port 8081) dinaikkan
-# permanen ke 1920x1080 (native, sama FOV/aspect 16:9 — bukan crop beda) →
-# module_px terukur naik ke ~4.8px, sesuai prediksi skala 1.5x. bottom.npz
-# di atas SUDAH diskalakan ke 1920x1080 via tools/rescale_calib.py (K×1.5,
-# dist tak berubah — valid krn downscale-sama-FOV, lihat docstring tool
-# itu) — bottom_720p_backup.npz simpan versi lama bila cam2 dikembalikan ke
-# 720p. rms=-1 di file berarti "diskalakan, belum diverifikasi ulang via
-# checkerboard sungguhan di 1080p" — jalankan tools/select_calib_frames.py +
-# calibrate_camera.py ulang di resolusi ini saat sempat. wall.npz (kamera
-# WALL, port 8080) TETAP di 720p, tak disentuh.
+# blur optik jarak kerja. Rencana saat itu: naikkan cam2 ke 1920x1080 dan
+# skalakan bottom.npz K×1.5 (prediksi module_px ~4.8px).
+#
+# DIPERIKSA ULANG 7 Sep 2026 — RENCANA ITU TIDAK PERNAH TERPASANG, dan versi
+# komentar ini yang lama menyatakannya seolah sudah. Fakta yang diukur:
+#   - ustreamer-cam1 (WALL, 8080)  : -r 1280x720   (systemctl cat, Pi hidup)
+#   - ustreamer-cam2 (BOTTOM, 8081): -r 1280x720   (bukan 1920x1080)
+#   - bottom.npz : image_size=[1280,720], rms=1.02  (bukan hasil rescale;
+#                  K/dist/rms-nya identik dgn bottom_video_720p_20260830.npz)
+#   - wall.npz   : image_size=[1280,720], rms=0.97
+# Jadi kalibrasi dan stream SAMA-SAMA 720p — COCOK, tidak ada error skala
+# 1,5x. bottom_720p_backup.npz tidak diperlukan untuk saat ini.
+#
+# Konsekuensi yang MASIH berlaku: module_px ~3.2px di 720p tetap di bawah
+# ambang decode robust. Kalau cam2 jadi dinaikkan ke 1080p nanti, kalibrasi
+# WAJIB ikut diganti — dan sejak 7 Sep hal itu tidak lagi senyap:
+# vision/hook_localization.verify_calib_size() dipanggil kedua worker Pi pada
+# frame nyata pertama dan MEMATIKAN pose bila resolusinya tak cocok.
 #
 # Override lewat env M5_CALIB_BOTTOM / M5_CALIB_WALL; set ke string kosong
 # utk mematikan PBVS sama sekali (IBVS murni, tak butuh kalibrasi).
