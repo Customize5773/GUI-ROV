@@ -1,0 +1,752 @@
+<title>Topologi GUI-ROV</title>
+<style>
+  :root{
+    --bg:#f5f2ea;
+    --surface:#ffffff;
+    --surface-2:#efe9db;
+    --ink:#182226;
+    --muted:#5c6b6a;
+    --line:#d7d0bd;
+    --accent:#1c7a68;      /* teal — jalur air / hardware */
+    --accent-soft:#e4f0ec;
+    --accent2:#c4711f;     /* amber/rust — SITL / simulasi */
+    --accent2-soft:#f6ead9;
+    --grey-line:#9aa39c;
+    --mono-chip:#efe4cf;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#10171a;
+      --surface:#161f22;
+      --surface-2:#1c262a;
+      --ink:#eef1ea;
+      --muted:#9fb0ac;
+      --line:#2a3438;
+      --accent:#4fd1b3;
+      --accent-soft:#173029;
+      --accent2:#e79a4d;
+      --accent2-soft:#2e2417;
+      --grey-line:#5b6a67;
+      --mono-chip:#26302f;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#10171a;
+    --surface:#161f22;
+    --surface-2:#1c262a;
+    --ink:#eef1ea;
+    --muted:#9fb0ac;
+    --line:#2a3438;
+    --accent:#4fd1b3;
+    --accent-soft:#173029;
+    --accent2:#e79a4d;
+    --accent2-soft:#2e2417;
+    --grey-line:#5b6a67;
+    --mono-chip:#26302f;
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Arial,sans-serif;
+  }
+  .wrap{
+    max-width:1320px;
+    margin:0 auto;
+    padding:48px 32px 80px;
+  }
+  h1,h2{
+    font-family:"IBM Plex Sans Condensed","IBM Plex Sans",system-ui,sans-serif;
+    text-wrap:balance;
+    margin:0;
+  }
+  .eyebrow{
+    font-family:"IBM Plex Mono",ui-monospace,monospace;
+    font-size:11.5px;
+    letter-spacing:.12em;
+    text-transform:uppercase;
+    color:var(--accent);
+    margin:0 0 10px;
+  }
+  h1{
+    font-size:clamp(28px,4vw,40px);
+    font-weight:700;
+    color:var(--ink);
+  }
+  .lede{
+    max-width:66ch;
+    color:var(--muted);
+    font-size:15.5px;
+    line-height:1.6;
+    margin:14px 0 0;
+  }
+  code{
+    font-family:"IBM Plex Mono",ui-monospace,monospace;
+    background:var(--mono-chip);
+    color:var(--ink);
+    padding:1px 5px;
+    border-radius:3px;
+    font-size:.92em;
+  }
+
+  /* legend */
+  .legend{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px 22px;
+    margin:28px 0 6px;
+    padding:16px 20px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:6px;
+  }
+  .legend-item{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    font-size:12.5px;
+    color:var(--muted);
+  }
+  .legend-item svg{flex:none;}
+  .legend-item b{color:var(--ink); font-weight:600;}
+
+  /* diagram frame */
+  .diagram-card{
+    margin-top:28px;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:8px;
+    padding:8px 8px 4px;
+    overflow-x:auto;
+  }
+  .diagram-card svg{
+    display:block;
+    width:100%;
+    height:auto;
+    min-width:960px;
+  }
+  figcaption{
+    padding:14px 18px 18px;
+    font-size:13px;
+    color:var(--muted);
+    border-top:1px solid var(--line);
+    margin-top:6px;
+  }
+
+  /* svg text defaults */
+  .box-title{font:700 15px/1.3 "IBM Plex Sans",sans-serif; fill:var(--ink);}
+  .box-sub{font:400 11.5px/1.5 "IBM Plex Mono",monospace; fill:var(--muted);}
+  .lane-label{font:700 12px/1 "IBM Plex Sans Condensed",sans-serif; letter-spacing:.08em; text-transform:uppercase;}
+  .edge-label{font:500 11px/1 "IBM Plex Mono",monospace; fill:var(--muted);}
+  .edge-label-strong{font:600 11px/1 "IBM Plex Mono",monospace;}
+  .net-label{font:700 12px/1 "IBM Plex Mono",monospace; letter-spacing:.02em; fill:var(--ink);}
+
+  /* reference table */
+  .ref-head{
+    display:flex;
+    align-items:baseline;
+    justify-content:space-between;
+    gap:16px;
+    margin:44px 0 14px;
+  }
+  .ref-head h2{font-size:19px; font-weight:700;}
+  .ref-head span{font-size:12.5px; color:var(--muted);}
+  table{
+    width:100%;
+    border-collapse:collapse;
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:8px;
+    overflow:hidden;
+    font-size:13px;
+  }
+  .table-scroll{overflow-x:auto; border-radius:8px;}
+  thead th{
+    text-align:left;
+    font-family:"IBM Plex Sans Condensed",sans-serif;
+    font-weight:700;
+    font-size:11.5px;
+    letter-spacing:.06em;
+    text-transform:uppercase;
+    color:var(--muted);
+    background:var(--surface-2);
+    padding:11px 16px;
+    border-bottom:1px solid var(--line);
+    white-space:nowrap;
+  }
+  tbody td{
+    padding:11px 16px;
+    border-bottom:1px solid var(--line);
+    vertical-align:top;
+    color:var(--ink);
+  }
+  tbody tr:last-child td{border-bottom:none;}
+  td.mono, .port-cell{
+    font-family:"IBM Plex Mono",monospace;
+    font-variant-numeric:tabular-nums;
+    white-space:nowrap;
+    font-size:12.5px;
+  }
+  .tag{
+    display:inline-block;
+    font-family:"IBM Plex Mono",monospace;
+    font-size:10.5px;
+    padding:2px 7px;
+    border-radius:4px;
+    background:var(--accent-soft);
+    color:var(--accent);
+    font-weight:600;
+  }
+  .tag.sitl{background:var(--accent2-soft); color:var(--accent2);}
+  .tag.aux{background:var(--mono-chip); color:var(--muted);}
+  td.desc{color:var(--muted); max-width:34ch;}
+
+  footer{
+    margin-top:36px;
+    padding-top:18px;
+    border-top:1px solid var(--line);
+    font-size:12px;
+    color:var(--muted);
+    display:flex;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+
+  /* section nav + section headers (2 & 3) */
+  .toc{
+    display:flex;
+    flex-wrap:wrap;
+    gap:6px 10px;
+    margin:18px 0 0;
+    font-family:"IBM Plex Mono",monospace;
+    font-size:12px;
+  }
+  .toc a{
+    color:var(--muted);
+    text-decoration:none;
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:5px 12px;
+  }
+  .toc a:hover, .toc a:focus-visible{ color:var(--accent); border-color:var(--accent); }
+  .section-head{
+    margin:64px 0 4px;
+    padding-top:28px;
+    border-top:1px solid var(--line);
+  }
+  .section-head .eyebrow{ margin-bottom:8px; }
+  .section-head h2{
+    font-size:clamp(22px,3vw,28px);
+    font-weight:700;
+  }
+  .mini-legend{
+    display:flex;
+    flex-wrap:wrap;
+    gap:8px 20px;
+    margin:16px 0 0;
+    font-size:12px;
+    color:var(--muted);
+  }
+  .mini-legend span{ display:inline-flex; align-items:center; gap:6px; }
+</style>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+
+<div class="wrap">
+
+  <p class="eyebrow" id="sistem">GUI-ROV &middot; Peta Sistem</p>
+  <h1>Topologi Keseluruhan Sistem</h1>
+  <p class="lede">
+    Tiga peta, tiga skala: jalur jaringan end-to-end, lalu dua zoom-in ke bagian yang paling
+    sering disalahpahami — rantai vision/otonomi di dalam <code>Mission5FSM</code>, dan struktur
+    modul di sisi <code>public/js</code>.
+  </p>
+  <nav class="toc" aria-label="Lompat ke bagian">
+    <a href="#sistem">① Sistem keseluruhan</a>
+    <a href="#vision">② Pipeline vision &amp; otonomi</a>
+    <a href="#frontend">③ Struktur frontend</a>
+  </nav>
+
+  <div class="legend" aria-hidden="true">
+    <div class="legend-item"><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke="var(--accent)" stroke-width="2.5"/></svg><b>Jalur hardware kolam</b> — WS / UDP / MAVLink serial</div>
+    <div class="legend-item"><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke="var(--accent2)" stroke-width="2.5" stroke-dasharray="5 3"/></svg><b>Jalur SITL / simulasi</b> — MAVLink UDP ke ArduSub palsu</div>
+    <div class="legend-item"><svg width="26" height="10"><line x1="1" y1="5" x2="25" y2="5" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5"/></svg><b>Spawn / import / log</b> — subprocess, shared code, ssh</div>
+    <div class="legend-item"><svg width="14" height="14"><rect x="1" y="1" width="12" height="12" rx="2" fill="none" stroke="var(--grey-line)" stroke-width="1.4" stroke-dasharray="2 2"/></svg><b>Belum terhubung</b> — komponen berdiri sendiri</div>
+  </div>
+
+  <figure class="diagram-card">
+    <svg viewBox="0 0 1440 1000" role="img" aria-label="Diagram topologi: GUI browser terhubung lewat WebSocket ke server.js di laptop, yang men-spawn dua worker vision dan mengirim/menerima JSON lewat UDP ke salah satu backend kendaraan — rov_agent.py di Raspberry Pi menuju Pixhawk/ArduSub asli dan QGroundControl, atau rov_link.py menuju ArduSub SITL dan Gazebo — keduanya memakai Mission5FSM yang sama dari autonomy/fsm/mission5.py. raspi_server.py TCP:5000 tampil terpisah, belum terhubung ke jalur perintah.">
+
+      <defs>
+        <marker id="arrH" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/>
+        </marker>
+        <marker id="arrA" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--accent2)"/>
+        </marker>
+        <marker id="arrG" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="var(--grey-line)"/>
+        </marker>
+      </defs>
+
+      <!-- ============ GUI Browser ============ -->
+      <rect x="40" y="36" width="360" height="92" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="60" y="66" class="box-title">GUI Browser (Dashboard)</text>
+      <text x="60" y="86" class="box-sub">public/index.html · app.js · scene.js</text>
+      <text x="60" y="102" class="box-sub">3D pose · 2 kamera live · joystick · panel Misi 5</text>
+
+      <!-- Browser -> server.js -->
+      <line x1="220" y1="128" x2="220" y2="192" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrH)"/>
+      <text x="234" y="150" class="edge-label-strong" fill="var(--accent)">WebSocket :8080</text>
+      <text x="234" y="164" class="edge-label">telemetri ↓ · command ↑</text>
+
+      <!-- ============ server.js ============ -->
+      <rect x="40" y="192" width="360" height="150" rx="5" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.4"/>
+      <text x="60" y="222" class="box-title">server.js (Node · laptop)</text>
+      <text x="60" y="242" class="box-sub">bridge WebSocket ↔ UDP</text>
+      <text x="60" y="260" class="box-sub">spawn worker vision (Python)</text>
+      <text x="60" y="278" class="box-sub">/api/runs → tarik log Pi</text>
+      <text x="60" y="296" class="box-sub">recording.js → rekam 2 kamera</text>
+
+      <!-- server.js -> vision workers -->
+      <line x1="400" y1="228" x2="456" y2="228" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5" marker-end="url(#arrG)"/>
+      <line x1="400" y1="292" x2="456" y2="292" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5" marker-end="url(#arrG)"/>
+      <text x="404" y="218" class="edge-label">spawn</text>
+      <text x="404" y="282" class="edge-label">spawn</text>
+
+      <rect x="460" y="200" width="300" height="58" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="478" y="223" class="box-title" font-size="13.5">hook_vision_worker.py</text>
+      <text x="478" y="240" class="box-sub">YOLO-pose best_pose.pt · cam :8080/stream</text>
+
+      <rect x="460" y="264" width="300" height="58" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="478" y="287" class="box-title" font-size="13.5">qr_vision_worker.py</text>
+      <text x="478" y="304" class="box-sub">YOLO-detect best_new.pt + decode · cam :8081/stream</text>
+
+      <!-- server.js -> log pull -->
+      <rect x="800" y="200" width="300" height="58" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2" stroke-dasharray="3 3"/>
+      <text x="818" y="223" class="box-title" font-size="13.5">Log trial (Pi)</text>
+      <text x="818" y="240" class="box-sub">rov-agent/logs/*.jsonl</text>
+      <line x1="800" y1="229" x2="762" y2="229" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5" marker-end="url(#arrG)"/>
+      <text x="812" y="270" class="edge-label">ssh + rsync</text>
+
+      <!-- ============ network band ============ -->
+      <line x1="20" y1="400" x2="1420" y2="400" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="2 5"/>
+      <text x="40" y="392" class="net-label">TETHER / WI-FI &nbsp; 192.168.2.1 (laptop) ⇄ 192.168.2.2 (Pi)</text>
+
+      <!-- server.js down through band, forking to two backends -->
+      <line x1="200" y1="342" x2="200" y2="420" stroke="var(--accent)" stroke-width="2"/>
+      <line x1="240" y1="420" x2="240" y2="342" stroke="var(--accent)" stroke-width="2"/>
+      <text x="204" y="378" class="edge-label-strong" fill="var(--accent)">UDP cmd :14550 →</text>
+      <text x="244" y="378" class="edge-label-strong" fill="var(--accent)">← UDP telem :14551</text>
+
+      <line x1="200" y1="420" x2="200" y2="466" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrH)"/>
+      <line x1="240" y1="466" x2="240" y2="420" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrH)"/>
+
+      <line x1="960" y1="420" x2="960" y2="342" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="6 4"/>
+      <line x1="1000" y1="342" x2="1000" y2="420" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="6 4"/>
+      <text x="880" y="378" class="edge-label-strong" fill="var(--accent2)">← sama, port identik</text>
+
+      <line x1="960" y1="466" x2="960" y2="420" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrA)"/>
+      <line x1="1000" y1="420" x2="1000" y2="466" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrA)"/>
+
+      <text x="600" y="415" text-anchor="middle" class="edge-label" font-style="italic">— pilih salah satu backend kendaraan —</text>
+
+      <!-- ============ lane labels ============ -->
+      <text x="40" y="452" class="lane-label" fill="var(--accent)">Hardware Kolam</text>
+      <text x="1400" y="452" text-anchor="end" class="lane-label" fill="var(--accent2)">SITL / Simulasi</text>
+
+      <!-- ============ rov_agent.py ============ -->
+      <rect x="40" y="466" width="460" height="150" rx="5" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.6"/>
+      <text x="60" y="494" class="box-title">rov_agent.py (Raspberry Pi)</text>
+      <text x="60" y="514" class="box-sub">rov_mission5_bridge.py → CUSTOM_CASES</text>
+      <text x="60" y="532" class="box-sub">GripperController · AttitudeFilter · RateLimiter</text>
+      <text x="60" y="550" class="box-sub">forward MAVLink → QGroundControl</text>
+      <text x="60" y="568" class="box-sub">MAVLink serial /dev/ttyACM0 @115200</text>
+
+      <!-- rov_agent -> raspi_server.py (unconnected) -->
+      <rect x="520" y="486" width="200" height="80" rx="5" fill="none" stroke="var(--grey-line)" stroke-width="1.4" stroke-dasharray="3 3"/>
+      <text x="536" y="510" class="box-title" font-size="13">raspi_server.py</text>
+      <text x="536" y="528" class="box-sub">TCP :5000</text>
+      <text x="536" y="544" class="box-sub" fill="var(--muted)">berdiri sendiri —</text>
+      <text x="536" y="558" class="box-sub" fill="var(--muted)">belum ke rov_agent.py</text>
+
+      <!-- rov_agent -> Pixhawk -->
+      <line x1="270" y1="616" x2="270" y2="656" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrH)"/>
+      <text x="284" y="642" class="edge-label-strong" fill="var(--accent)">MAVLink serial</text>
+
+      <rect x="40" y="656" width="460" height="86" rx="5" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.6"/>
+      <text x="60" y="684" class="box-title">Pixhawk + ArduSub (hardware asli)</text>
+      <text x="60" y="702" class="box-sub">ALT_HOLD/STABILIZE · mixing 6DOF · PWM thruster+gripper</text>
+      <text x="60" y="720" class="box-sub">Frame 3-2-1: 2 surge · 3 heave · 1 sway</text>
+
+      <!-- Pixhawk -> QGC -->
+      <line x1="500" y1="699" x2="536" y2="699" stroke="var(--accent)" stroke-width="1.6" marker-end="url(#arrH)"/>
+      <rect x="540" y="656" width="180" height="86" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="556" y="686" class="box-title" font-size="13.5">QGroundControl</text>
+      <text x="556" y="704" class="box-sub">MAVLink :14561</text>
+      <text x="556" y="720" class="box-sub">masuk :14560</text>
+
+      <!-- ============ rov_link.py ============ -->
+      <rect x="780" y="466" width="460" height="150" rx="5" fill="var(--surface)" stroke="var(--accent2)" stroke-width="1.6"/>
+      <text x="800" y="494" class="box-title">rov_link.py (bridge dev/SITL)</text>
+      <text x="800" y="514" class="box-sub">embed Mission5FSM langsung</text>
+      <text x="800" y="532" class="box-sub">embed VisionPipeline (qr_detect.py)</text>
+      <text x="800" y="550" class="box-sub">kontrak JSON identik dgn rov_agent.py</text>
+      <text x="800" y="568" class="box-sub">--vision rtsp ← kamera simulasi</text>
+
+      <!-- rov_link -> ArduSub SITL -->
+      <line x1="960" y1="616" x2="960" y2="656" stroke="var(--accent2)" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#arrA)"/>
+      <text x="838" y="642" class="edge-label-strong" fill="var(--accent2)">MAVLink udpin :14555</text>
+
+      <rect x="780" y="656" width="280" height="86" rx="5" fill="var(--surface)" stroke="var(--accent2)" stroke-width="1.6"/>
+      <text x="800" y="684" class="box-title" font-size="14">ArduSub SITL / sitl_mock.py</text>
+      <text x="800" y="702" class="box-sub">sim_vehicle.py -v ArduSub</text>
+      <text x="800" y="718" class="box-sub">atau mock murni (tanpa fisika)</text>
+
+      <!-- Gazebo -> rov_link -->
+      <rect x="1090" y="656" width="270" height="86" rx="5" fill="var(--surface)" stroke="var(--accent2)" stroke-width="1.4" stroke-dasharray="6 4"/>
+      <text x="1106" y="684" class="box-title" font-size="13.5">Gazebo (ros2_ws)</text>
+      <text x="1106" y="702" class="box-sub">arena kolam simulasi</text>
+      <text x="1106" y="718" class="box-sub">run_gazebo_backend.sh → gui_bridge</text>
+      <line x1="1090" y1="699" x2="1064" y2="699" stroke="var(--accent2)" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arrA)"/>
+      <text x="972" y="640" class="edge-label" fill="var(--accent2)"></text>
+
+      <!-- ============ shared FSM ============ -->
+      <rect x="460" y="862" width="520" height="90" rx="5" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.2"/>
+      <text x="480" y="890" class="box-title">autonomy/fsm/mission5.py — Mission5FSM</text>
+      <text x="480" y="908" class="box-sub">SEARCH → APPROACH_QR → DOCK → GRIP → SURFACE</text>
+      <text x="480" y="924" class="box-sub">satu state machine, dipakai KEDUA bridge di atas</text>
+
+      <line x1="300" y1="616" x2="500" y2="862" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5" marker-end="url(#arrG)"/>
+      <line x1="920" y1="616" x2="760" y2="862" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5" marker-end="url(#arrG)"/>
+      <text x="330" y="770" class="edge-label" transform="rotate(58 330 770)">import</text>
+      <text x="870" y="770" class="edge-label" transform="rotate(-58 870 770)">import</text>
+
+    </svg>
+    <figcaption>
+      GUI di browser bicara ke <code>server.js</code> lewat satu WebSocket; dari situ perintah dan telemetri
+      lewat UDP JSON ke <b>salah satu</b> backend kendaraan — <code>rov_agent.py</code> di kolam nyata menuju Pixhawk,
+      atau <code>rov_link.py</code> menuju ArduSub SITL/Gazebo saat pengembangan. Kedua backend memanggil
+      <code>Mission5FSM</code> yang sama untuk logika otonom Misi 5, jadi state machine-nya tidak pernah bercabang dua.
+    </figcaption>
+  </figure>
+
+  <div class="ref-head">
+    <h2>Referensi Port &amp; Protokol</h2>
+    <span>diambil langsung dari kode, bukan tebakan</span>
+  </div>
+  <div class="table-scroll">
+  <table>
+    <thead>
+      <tr><th>Jalur</th><th>Arah</th><th>Keterangan</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td class="port-cell"><span class="tag">WS</span> :8080</td>
+        <td class="mono">Browser ⇄ server.js</td>
+        <td class="desc">Telemetri turun, command naik — payload JSON.</td>
+      </tr>
+      <tr>
+        <td class="port-cell"><span class="tag">UDP</span> :14550</td>
+        <td class="mono">server.js → rov_agent.py / rov_link.py</td>
+        <td class="desc">Command JSON: <code>{"name","value","t"}</code>.</td>
+      </tr>
+      <tr>
+        <td class="port-cell"><span class="tag">UDP</span> :14551</td>
+        <td class="mono">rov_agent.py / rov_link.py → server.js</td>
+        <td class="desc">Telemetri: heading, roll, pitch, depth, dst.</td>
+      </tr>
+      <tr>
+        <td class="port-cell"><span class="tag sitl">MAVLink</span> udpin:14555</td>
+        <td class="mono">rov_link.py ⇄ ArduSub SITL/mock</td>
+        <td class="desc">Sengaja beda port dari 14550/14551 agar tak bentrok.</td>
+      </tr>
+      <tr>
+        <td class="port-cell">Serial /dev/ttyACM0 @115200</td>
+        <td class="mono">rov_agent.py ⇄ Pixhawk</td>
+        <td class="desc">MAVLink ke hardware ArduSub asli.</td>
+      </tr>
+      <tr>
+        <td class="port-cell">MAVLink :14561 / :14560</td>
+        <td class="mono">Pixhawk ⇄ QGroundControl</td>
+        <td class="desc">Forward independen, terpisah dari port dashboard.</td>
+      </tr>
+      <tr>
+        <td class="port-cell"><span class="tag">HTTP</span> :8080 &amp; :8081 /stream</td>
+        <td class="mono">Kamera Pi → worker vision (laptop)</td>
+        <td class="desc">MJPEG — hook-cam &amp; QR-cam, dua worker terpisah.</td>
+      </tr>
+      <tr>
+        <td class="port-cell"><span class="tag aux">TCP</span> :5000</td>
+        <td class="mono">raspi_server.py</td>
+        <td class="desc">Command server berdiri sendiri, belum disambung ke jalur FSM.</td>
+      </tr>
+      <tr>
+        <td class="port-cell"><span class="tag aux">SSH/rsync</span></td>
+        <td class="mono">server.js → Pi (rov-agent/logs)</td>
+        <td class="desc">Menarik log trial JSONL untuk endpoint <code>/api/runs</code>.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="section-head">
+    <p class="eyebrow" id="vision">② Zoom-in</p>
+    <h2>Pipeline Vision &amp; Otonomi Internal</h2>
+    <p class="lede">
+      Ini isi dalam kotak <code>Mission5FSM</code> di diagram ①: dua kamera terpisah memberi makan
+      dua detektor, detektor itu memicu grup state tertentu (bukan satu jalur linear), dan hanya
+      saat FSM berada di state docking barulah <code>visual_servo.py</code> mengubah error piksel
+      menjadi perintah axis.
+    </p>
+    <div class="mini-legend" aria-hidden="true">
+      <span><svg width="20" height="8"><line x1="1" y1="4" x2="19" y2="4" stroke="var(--accent)" stroke-width="2.5"/></svg> dari kamera WALL / hook</span>
+      <span><svg width="20" height="8"><line x1="1" y1="4" x2="19" y2="4" stroke="var(--accent2)" stroke-width="2.5"/></svg> dari kamera BOTTOM / QR</span>
+      <span><svg width="20" height="8"><line x1="1" y1="4" x2="19" y2="4" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5"/></svg> urutan state / opsional</span>
+    </div>
+  </div>
+
+  <figure class="diagram-card">
+    <svg viewBox="0 0 1440 700" role="img" aria-label="Diagram pipeline vision dan otonomi: kamera WALL memberi hook_detect.py, kamera BOTTOM memberi qr_detect.py; hook_detect memicu state NAV_WALL, HANG, M5_YOLO_SEARCH dan M5_HOOK_ALIGN, sedang qr_detect memicu SCAN_QR dan M5_QR_DOCK di dalam rantai Mission5FSM (Misi 1 sampai Misi 5). Saat FSM berada di state docking, control/visual_servo.py mengubah error piksel ex, ey, ea menjadi perintah axis sway, vert, surge, yaw yang dikirim keluar sebagai JSON ke rov_link.py atau rov_agent.py.">
+      <defs>
+        <marker id="arrH2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        <marker id="arrA2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent2)"/></marker>
+        <marker id="arrG2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--grey-line)"/></marker>
+        <marker id="arrI2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+      </defs>
+
+      <!-- kamera -->
+      <rect x="40" y="50" width="260" height="70" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="56" y="78" class="box-title" font-size="14">Kamera WALL :8080</text>
+      <text x="56" y="96" class="box-sub">hook PVC di dinding</text>
+
+      <rect x="40" y="190" width="260" height="70" rx="5" fill="var(--accent2-soft)" stroke="var(--accent2)" stroke-width="1.4"/>
+      <text x="56" y="218" class="box-title" font-size="14">Kamera BOTTOM :8081</text>
+      <text x="56" y="236" class="box-sub">QR payload di lantai</text>
+
+      <!-- detektor -->
+      <line x1="300" y1="85" x2="360" y2="85" stroke="var(--accent)" stroke-width="2" marker-end="url(#arrH2)"/>
+      <rect x="360" y="50" width="300" height="70" rx="5" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="378" y="78" class="box-title" font-size="14">hook_detect.py</text>
+      <text x="378" y="96" class="box-sub">contour/hough/color → {center,area,pose}</text>
+
+      <line x1="300" y1="225" x2="360" y2="225" stroke="var(--accent2)" stroke-width="2" marker-end="url(#arrA2)"/>
+      <rect x="360" y="190" width="300" height="70" rx="5" fill="var(--surface)" stroke="var(--accent2)" stroke-width="1.4"/>
+      <text x="378" y="218" class="box-title" font-size="14">qr_detect.py</text>
+      <text x="378" y="236" class="box-sub">cv2 + fallback pyzbar → {data,payload,pose}</text>
+
+      <!-- hook_localization opsional -->
+      <line x1="510" y1="120" x2="510" y2="280" stroke="var(--grey-line)" stroke-width="1.6" stroke-dasharray="1.5 3.5" marker-end="url(#arrG2)"/>
+      <rect x="360" y="280" width="300" height="66" rx="5" fill="none" stroke="var(--grey-line)" stroke-width="1.3" stroke-dasharray="3 3"/>
+      <text x="378" y="304" class="box-title" font-size="12.5">hook_localization.py (opsional)</text>
+      <text x="378" y="320" class="box-sub">pose ROV di map — TAK PERNAH kirim command</text>
+      <text x="378" y="335" class="box-sub">aktif hanya bila --hook-map diberikan</text>
+
+      <!-- detektor -> FSM -->
+      <line x1="660" y1="72" x2="720" y2="230" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#arrH2)"/>
+      <line x1="660" y1="98" x2="720" y2="378" stroke="var(--accent)" stroke-width="1.8" marker-end="url(#arrH2)"/>
+      <text x="500" y="42" class="edge-label" fill="var(--accent)">→ Misi 3 (NAV_WALL·HANG), Misi 5 (SEARCH·ALIGN)</text>
+
+      <line x1="660" y1="212" x2="720" y2="82" stroke="var(--accent2)" stroke-width="1.8" marker-end="url(#arrA2)"/>
+      <line x1="660" y1="238" x2="720" y2="392" stroke="var(--accent2)" stroke-width="1.8" marker-end="url(#arrA2)"/>
+      <text x="500" y="258" class="edge-label" fill="var(--accent2)">→ Misi 1 (SCAN_QR), Misi 5 (QR_DOCK)</text>
+
+      <!-- kolom FSM -->
+      <text x="720" y="32" class="lane-label" fill="var(--ink)">Mission5FSM — rantai state (autonomy/fsm/mission5.py)</text>
+
+      <rect x="720" y="50" width="380" height="64" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="736" y="74" class="box-title" font-size="13.5">Misi 1 — DIVE → SCAN_QR</text>
+      <text x="736" y="92" class="box-sub">turun ke dasar, baca QR arena</text>
+
+      <line x1="910" y1="114" x2="910" y2="124" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI2)"/>
+      <rect x="720" y="124" width="380" height="64" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="736" y="148" class="box-title" font-size="13.5">Misi 2 — GRAB</text>
+      <text x="736" y="166" class="box-sub">ambil payload dari lantai</text>
+
+      <line x1="910" y1="188" x2="910" y2="198" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI2)"/>
+      <rect x="720" y="198" width="380" height="64" rx="5" fill="var(--surface)" stroke="var(--accent)" stroke-width="1.4"/>
+      <text x="736" y="222" class="box-title" font-size="13.5">Misi 3 — NAV_WALL → HANG</text>
+      <text x="736" y="240" class="box-sub">navigasi dinding, gantung payload di hook</text>
+
+      <line x1="910" y1="262" x2="910" y2="272" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI2)"/>
+      <rect x="720" y="272" width="380" height="64" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="736" y="296" class="box-title" font-size="13.5">Misi 4 — SURFACE → DOCK</text>
+      <text x="736" y="314" class="box-sub">naik, docking sisi dinding</text>
+
+      <line x1="910" y1="336" x2="910" y2="346" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI2)"/>
+      <rect x="720" y="346" width="380" height="64" rx="5" fill="var(--surface)" stroke="var(--accent2)" stroke-width="1.4"/>
+      <text x="736" y="368" class="box-title" font-size="12.5">Misi 5 (jalur lomba) — YOLO_SEARCH→HOOK_ALIGN→QR_DOCK→GRIP</text>
+      <text x="736" y="384" class="box-sub">diserahkan CUSTOM_CASES bridge (rov_mission5_bridge.py)</text>
+
+      <line x1="910" y1="410" x2="910" y2="420" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI2)"/>
+      <rect x="720" y="420" width="380" height="64" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="736" y="444" class="box-title" font-size="13.5">M5_UNHOOK → M5_ASCEND → DONE</text>
+      <text x="736" y="462" class="box-sub">lepas dari hook, naik bawa payload</text>
+
+      <line x1="1000" y1="336" x2="1000" y2="500" stroke="var(--grey-line)" stroke-width="1.5" stroke-dasharray="4 3" marker-end="url(#arrG2)"/>
+      <rect x="720" y="500" width="380" height="50" rx="5" fill="none" stroke="var(--grey-line)" stroke-width="1.3" stroke-dasharray="3 3"/>
+      <text x="736" y="522" class="box-title" font-size="12.5">ABORT / M5_FALLBACK</text>
+      <text x="736" y="538" class="box-sub">timeout / servo gagal → jalur timed (degraded)</text>
+
+      <!-- FSM -> servo -->
+      <line x1="1100" y1="378" x2="1140" y2="300" stroke="var(--ink)" stroke-width="1.8" marker-end="url(#arrI2)"/>
+      <text x="1000" y="310" class="edge-label">state docking aktif</text>
+
+      <rect x="1140" y="210" width="260" height="150" rx="5" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.3"/>
+      <text x="1156" y="234" class="box-title" font-size="13.5">control/visual_servo.py</text>
+      <text x="1156" y="252" class="box-sub">PID IBVS: ex,ey,ea</text>
+      <text x="1156" y="268" class="box-sub">→ sway · vert · surge · yaw</text>
+      <text x="1156" y="286" class="box-sub">deadband+slew+D-filter</text>
+      <text x="1156" y="304" class="box-sub">(peredam approach, bukan teori)</text>
+      <text x="1156" y="322" class="box-sub">CommandSender → axis JSON</text>
+
+      <line x1="1400" y1="285" x2="1430" y2="285" stroke="var(--ink)" stroke-width="1.8" marker-end="url(#arrI2)"/>
+      <text x="1156" y="345" class="edge-label" font-style="italic">keluar ke rov_link.py / rov_agent.py — Diagram ①</text>
+    </svg>
+    <figcaption>
+      Detektor tidak memicu satu state saja: <code>hook_detect.py</code> dipakai ulang di Misi 3 (HANG)
+      <em>dan</em> Misi 5 (YOLO_SEARCH/HOOK_ALIGN); <code>qr_detect.py</code> dipakai di Misi 1 (scan arena)
+      <em>dan</em> Misi 5 (QR_DOCK) — dict hasil deteksi keduanya sengaja dibuat berbentuk sama
+      (<code>center/area/pose</code>) supaya satu <code>VisualServo</code> bisa melayani keduanya tanpa kelas baru.
+      <code>hook_localization.py</code> ada di jalur terpisah dan sifatnya murni observasi.
+    </figcaption>
+  </figure>
+
+  <div class="section-head">
+    <p class="eyebrow" id="frontend">③ Zoom-in</p>
+    <h2>Struktur Internal Frontend (public/js)</h2>
+    <p class="lede">
+      Bagaimana isi kotak "GUI Browser" di diagram ① tersusun: satu hub (<code>app.js</code>) yang
+      memasang halaman dan modul, dan satu folder (<code>shared/</code>) yang sengaja duduk
+      <em>di atas</em> batas proses browser↔Node supaya definisi mode/joystick/heading tidak
+      pernah dobel-tulis di dua bahasa.
+    </p>
+  </div>
+
+  <figure class="diagram-card">
+    <svg viewBox="0 0 1440 830" role="img" aria-label="Diagram struktur frontend: config.js memberi konstanta ke app.js, app.js mengimpor scene.js (dengan model.js di baliknya), core.js (dengan qr-worker.js sebagai web worker terpisah), manipulator/ (constants, protocol, state, grip, rotate), dan joystick-state.js, lalu memasang sembilan file pages/*.js. Di bagian bawah, folder shared/ berisi joystick-profile.js, rov-heading.js, dan rov-modes.js yang diimpor dari DUA sisi: browser (app.js, joystick-state.js) dan Node (server.js, server/joystick-config.js, server/test) — satu sumber kebenaran melintasi batas proses.">
+      <defs>
+        <marker id="arrI3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+      </defs>
+
+      <rect x="560" y="30" width="320" height="56" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="580" y="53" class="box-title" font-size="13.5">config.js</text>
+      <text x="580" y="70" class="box-sub">CONFIG: WS_URL, CAMERAS, MODEL_URL</text>
+      <line x1="720" y1="86" x2="720" y2="118" stroke="var(--ink)" stroke-width="1.8" marker-end="url(#arrI3)"/>
+
+      <rect x="520" y="120" width="400" height="80" rx="5" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.5"/>
+      <text x="540" y="150" class="box-title">app.js — orkestrator dashboard</text>
+      <text x="540" y="170" class="box-sub">DOM refs · lifecycle WebSocket · render loop</text>
+      <text x="540" y="186" class="box-sub">import ARDUSUB_MODE_TO_TAB dari shared/rov-modes.js</text>
+
+      <!-- spokes -->
+      <line x1="560" y1="200" x2="210" y2="278" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#arrI3)"/>
+      <line x1="640" y1="200" x2="560" y2="278" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#arrI3)"/>
+      <line x1="800" y1="200" x2="910" y2="278" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#arrI3)"/>
+      <line x1="900" y1="200" x2="1240" y2="278" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#arrI3)"/>
+
+      <!-- scene.js / model.js -->
+      <rect x="60" y="280" width="300" height="70" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="78" y="308" class="box-title" font-size="13.5">scene.js</text>
+      <text x="78" y="325" class="box-sub">THREE.Scene · kompas · follow-cam</text>
+      <text x="78" y="340" class="box-sub">three.js via importmap (index.html)</text>
+      <line x1="210" y1="350" x2="210" y2="378" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI3)"/>
+      <rect x="60" y="380" width="300" height="56" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="78" y="404" class="box-title" font-size="13">model.js</text>
+      <text x="78" y="420" class="box-sub">GLTF/FBXLoader, cache per-URL</text>
+
+      <!-- core.js / qr-worker.js -->
+      <rect x="410" y="280" width="300" height="70" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="428" y="304" class="box-title" font-size="13.5">core.js</text>
+      <text x="428" y="321" class="box-sub">log · sendCmd · wsSend · snapshot</text>
+      <text x="428" y="336" class="box-sub">camProxy · state QR client/Pi</text>
+      <line x1="560" y1="350" x2="560" y2="378" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI3)"/>
+      <text x="572" y="368" class="edge-label">postMessage(ImageBitmap)</text>
+      <rect x="410" y="380" width="300" height="56" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2" stroke-dasharray="4 3"/>
+      <text x="428" y="404" class="box-title" font-size="13">qr-worker.js — Web Worker</text>
+      <text x="428" y="420" class="box-sub">decode off-thread · vendor/jsqr.min.js</text>
+
+      <!-- manipulator/ -->
+      <rect x="760" y="280" width="320" height="106" rx="5" fill="none" stroke="var(--line)" stroke-width="1.3" stroke-dasharray="4 3"/>
+      <text x="778" y="304" class="box-title" font-size="13.5">manipulator/</text>
+      <text x="778" y="322" class="box-sub">manipulator.js — aggregator (class Manipulator)</text>
+      <text x="778" y="340" class="box-sub">constants · protocol · state</text>
+      <text x="778" y="356" class="box-sub">grip · rotate</text>
+      <text x="778" y="374" class="box-sub" fill="var(--muted)">dipasang app.js sebagai satu unit</text>
+
+      <!-- joystick-state.js -->
+      <rect x="1100" y="280" width="280" height="70" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="1118" y="304" class="box-title" font-size="13.5">joystick-state.js</text>
+      <text x="1118" y="321" class="box-sub">gamepad → axis mapping</text>
+      <text x="1118" y="336" class="box-sub">layer tombol aktif</text>
+
+      <!-- app.js -> pages, elbow route -->
+      <polyline points="920,200 1300,200 1300,440" fill="none" stroke="var(--ink)" stroke-width="1.5" marker-end="url(#arrI3)"/>
+      <text x="1310" y="330" class="edge-label" transform="rotate(90 1310 330)">import + mount()</text>
+
+      <!-- pages container -->
+      <rect x="40" y="440" width="1360" height="170" rx="5" fill="var(--surface-2)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="60" y="464" class="lane-label" fill="var(--ink)">pages/*.js — satu halaman = satu file</text>
+
+      <g>
+        <rect x="60" y="480" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="273" y="502" text-anchor="middle" class="box-sub">telemetry.js</text>
+        <rect x="506" y="480" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="719" y="502" text-anchor="middle" class="box-sub">mission.js</text>
+        <rect x="952" y="480" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="1165" y="502" text-anchor="middle" class="box-sub">camera.js</text>
+
+        <rect x="60" y="524" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="273" y="546" text-anchor="middle" class="box-sub">replay.js</text>
+        <rect x="506" y="524" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="719" y="546" text-anchor="middle" class="box-sub">replay-scene.js</text>
+        <rect x="952" y="524" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="1165" y="546" text-anchor="middle" class="box-sub">setup.js</text>
+
+        <rect x="60" y="568" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="273" y="590" text-anchor="middle" class="box-sub">vehicle.js</text>
+        <rect x="506" y="568" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="719" y="590" text-anchor="middle" class="box-sub">analyze.js</text>
+        <rect x="952" y="568" width="426" height="34" rx="4" fill="var(--surface)" stroke="var(--line)"/>
+        <text x="1165" y="590" text-anchor="middle" class="box-sub">joystick.js</text>
+      </g>
+
+      <!-- boundary -->
+      <line x1="20" y1="660" x2="1420" y2="660" stroke="var(--line)" stroke-width="1.4" stroke-dasharray="2 5"/>
+      <text x="40" y="652" class="net-label">BATAS PROSES &nbsp; Browser (ES module asli) ⇄ Node (server/)</text>
+
+      <rect x="560" y="625" width="320" height="70" rx="5" fill="var(--surface-2)" stroke="var(--ink)" stroke-width="1.5"/>
+      <text x="580" y="650" class="box-title" font-size="13.5">shared/*.js</text>
+      <text x="580" y="668" class="box-sub">joystick-profile · rov-heading · rov-modes</text>
+      <text x="580" y="683" class="box-sub">nol dependency, ES module portabel</text>
+
+      <line x1="620" y1="625" x2="620" y2="580" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI3)"/>
+      <text x="634" y="600" class="edge-label-strong">import — browser</text>
+      <text x="634" y="614" class="edge-label">app.js · joystick-state.js</text>
+
+      <line x1="620" y1="695" x2="620" y2="730" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrI3)"/>
+      <text x="634" y="715" class="edge-label-strong">import — Node</text>
+      <text x="634" y="729" class="edge-label">server.js · joystick-config.js · test</text>
+
+      <rect x="520" y="740" width="400" height="70" rx="5" fill="var(--surface)" stroke="var(--line)" stroke-width="1.2"/>
+      <text x="540" y="765" class="box-title" font-size="13.5">server/ (Node)</text>
+      <text x="540" y="783" class="box-sub">joystick-config.js · test/*.mjs</text>
+      <text x="540" y="798" class="box-sub">server.js — lihat Diagram ①</text>
+    </svg>
+    <figcaption>
+      <code>shared/</code> bukan folder biasa: komentarnya sendiri bilang ini dibuat setelah default
+      joystick sempat tertulis kembar di browser dan Node lalu tidak sinkron. Sekarang browser
+      meng-<code>import</code> langsung, Node meng-<code>await import()</code> lewat
+      <code>server/joystick-config.js</code> — satu file, dua runtime.
+      <code>chart-line.js</code> dipakai bareng oleh <code>pages/telemetry.js</code> dan
+      <code>pages/analyze.js</code> supaya kedua halaman menggambar grafik yang identik.
+    </figcaption>
+  </figure>
+
+  <footer>
+    <span>GUI-ROV — dibangun dari server.js, rov_agent.py, rov_link.py, autonomy/fsm/mission5.py, autonomy/vision/*, autonomy/control/visual_servo.py, public/js/*, shared/*</span>
+    <span>per commit 2ea460d8 · 7 Sep 2026</span>
+  </footer>
+
+</div>
