@@ -53,5 +53,35 @@ class TestValidateMotorTest(unittest.TestCase):
                 validate_motor_test({"motor": bad})
 
 
+class TestMotorTestWire(unittest.TestCase):
+    def test_board_index_dan_pwm_reversible(self):
+        import ast
+        import threading
+        from pathlib import Path
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        tree = ast.parse(Path(__file__).with_name('rov_agent.py').read_text())
+        fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef)
+                  and n.name == 'run_motor_test')
+        mav = Mock()
+        constants = SimpleNamespace(MAV_CMD_DO_MOTOR_TEST=209,
+                                    MOTOR_TEST_THROTTLE_PWM=1,
+                                    MOTOR_TEST_ORDER_BOARD=2)
+        env = {'validate_motor_test': validate_motor_test,
+               'master_lock': threading.Lock(),
+               'master': SimpleNamespace(target_system=1,target_component=1,mav=mav),
+               'mavutil': SimpleNamespace(mavlink=constants), 'send_to_gui': Mock()}
+        exec(compile(ast.Module(body=[fn],type_ignores=[]),'motor_test','exec'),env)
+        for motor, direction, throttle, pwm in [(6,'forward',10,1550),
+                                               (1,'reverse',10,1450),
+                                               (6,'forward',999,1600),
+                                               (6,'reverse',999,1400)]:
+            with self.subTest(motor=motor,direction=direction,throttle=throttle):
+                env['run_motor_test']({'motor':motor,'direction':direction,
+                                       'throttle':throttle,'duration':0.5})
+                self.assertEqual(mav.command_long_send.call_args.args,
+                                 (1,1,209,0,motor-1,1,pwm,0.5,0,2,0))
+
+
 if __name__ == "__main__":
     unittest.main()
