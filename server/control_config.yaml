@@ -25,6 +25,9 @@ servo_hook:
   source: qr
   # Pusat mulut gripper / lebar frame. 0.5 sementara; kalibrasi di kamera asli.
   target_x_norm: 0.5
+  # Area TANGKAP, bukan ROI pencarian YOLO. [x1,y1,x2,y2] / ukuran frame.
+  # Ukur saat payload tepat siap dijepit. null memblokir grab otomatis.
+  grab_roi_norm: null
 
   # ── ARAH — VERIFIKASI DULU SEBELUM MENYENTUH ANGKA LAIN ────────────────
   # Kalau tandanya terbalik, gejalanya BUKAN "koreksi kurang kuat": ROV akan
@@ -55,8 +58,8 @@ servo_hook:
   # center_tol_norm membuka gate surge; close juga wajib melewati ambang area.
   # 0.08 = 8% setengah-lebar frame.
   center_tol_norm: 0.08
-  # Berapa tick 20 Hz centered DAN area cukup besar secara BERUNTUN.
-  # 10 tick ≈ 0,5 detik; meleset/basi mereset penghitung.
+  # Jumlah deteksi BARU beruntun: centered, masuk area XY, luas cukup.
+  # 10 frame pada 10 FPS sekitar 1 detik; cache tidak menambah hitungan.
   centered_ticks: 10
 
   # ── Umur deteksi ───────────────────────────────────────────────────────

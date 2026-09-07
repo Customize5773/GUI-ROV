@@ -8,6 +8,10 @@ export const CONFIG = {
   //http://192.168.2.2:8080/?action=stream
   // CAM WALL menjadi tampilan awal Control karena ini sumber YOLO Hook.
   CAMERA_URL: "http://192.168.2.2:8080/stream",
+  // WALL snapshot 8 Sep: payload di mulut gripper, pusat QR ~608,396 @1280x720.
+  // Pusat visual 47.5%,55%; toleransi pratinjau +/-4% X, +/-4.5% Y.
+  // Estimasi visual (QR sebagian tertutup), BUKAN kalibrasi parameter kontrol.
+  GRAB_PREVIEW_ROI: [0.435, 0.505, 0.515, 0.595],
 
   // sumber kamera untuk halaman Camera (label + peran + url)
   // KKI 2026: camera 1 = bottom (lantai/QR), camera 2 = wall (dinding)

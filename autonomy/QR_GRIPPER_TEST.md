@@ -1,5 +1,27 @@
 # QR servo area gripper
 
+## Gate grab X–Y (kontrol autonomous CASE 4 di server/control_main.py)
+
+Grab sekarang mensyaratkan pusat QR berada dalam `servo_hook.grab_roi_norm`
+berformat `[x_min, y_min, x_max, y_max]`, masing-masing dibagi lebar/tinggi
+frame asli. ROI ini berbeda dari crop pencarian YOLO. Syarat lateral dan
+ambang luas per kanal tetap berlaku. `centered_ticks` kini menghitung
+deteksi baru, bukan tick kontrol atau paket cache yang diulang. Keluar area
+atau deteksi basi mereset streak. Y hanya menjadi gate grab, bukan perintah
+heave otomatis.
+
+Nilai produksi `grab_roi_norm: null` memblokir grab sampai area tangkap
+diukur. Tempatkan payload tepat pada posisi siap dijepit dan ukur batas
+pusat QR yang masih bisa dijepit; bagi X dengan lebar frame dan Y dengan
+tingginya. Isi empat batas tersebut beserta ambang luas hasil pengukuran.
+Video yang ada belum membuktikan satu posisi tangkap sukses sehingga batas
+tidak diisi dengan tebakan. Ini perubahan jalur server CASE 4, bukan
+perubahan FSM Mission 5 terpisah di autonomy/fsm/mission5.py.
+
+Validasi setelah perubahan gate: 181 tes + 18 subtest lulus, mencakup
+X benar/Y salah, N deteksi baru, cache tidak menambah streak, keluar area,
+deteksi basi, ROI belum diisi dan konfigurasi ROI tidak valid.
+
 Worker QR sekarang mencari kandidat YOLO pada crop area gripper. Default ROI
 `0.25,0.10,0.75,0.80` berarti x=25–75% dan y=10–80% frame asli.
 Ini profil awal dari rekaman meja, bukan kalibrasi kamera bawah air.

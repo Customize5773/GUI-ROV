@@ -34,6 +34,7 @@ ROOT = os.path.dirname(os.path.abspath(__file__))
 CONFIG_UJI = """
 servo_hook:
   source: {source}
+  grab_roi_norm: [0.4, 0.4, 0.6, 0.6]
   invert_sway: {invert}
   kp_sway: 45.0
   kd_sway: 0.0
@@ -107,6 +108,8 @@ class _ServoBase(unittest.TestCase):
         self.cm.latest_hook = (center_x, FRAME_W)
         self.cm.last_hook_time = time.monotonic() - umur
         self.cm.latest_qr_metric = ("qr_vision", 0.15)
+        self.cm.latest_qr_xy_norm = (center_x / FRAME_W, 0.5)
+        self.cm.last_vision_receipt += 1.0
 
     def tick(self, surge_step=-500):
         return self.cm.servo_step(surge_step)
@@ -705,6 +708,57 @@ class UrutanMisi(_ServoBase):
                 self.assertIsNone(self.cm.servo_cfg)
                 self.assert_stopped()
                 self.assertEqual(self.commands("gripper"), [])
+
+
+class GrabAreaXY(_ServoBase):
+    def frame(self, x=.5, y=.5):
+        self.lihat_hook(2*x-1)
+        self.cm.latest_qr_xy_norm = (x, y)
+        return self.tick()[2]
+
+    def test_centered_x_but_wrong_y_never_grabs(self):
+        for _ in range(10):
+            self.assertFalse(self.frame(y=.2))
+        self.assertEqual(self.cm.servo_hits, 0)
+
+    def test_new_frames_inside_area_grab(self):
+        self.assertFalse(self.frame())
+        self.assertFalse(self.frame())
+        self.assertTrue(self.frame())
+
+    def test_cached_frame_does_not_build_streak(self):
+        self.frame()
+        for _ in range(10):
+            self.assertFalse(self.tick()[2])
+        self.assertEqual(self.cm.servo_hits, 1)
+
+    def test_exit_and_stale_detection_reset_streak(self):
+        self.frame()
+        self.frame()
+        self.assertFalse(self.frame(y=.8))
+        self.assertEqual(self.cm.servo_hits, 0)
+        self.frame()
+        self.cm.last_hook_time -= 2
+        self.assertFalse(self.tick()[2])
+        self.assertEqual(self.cm.servo_hits, 0)
+
+    def test_uncalibrated_or_missing_xy_blocks_grab(self):
+        self.cm.servo_cfg['grab_roi_norm'] = None
+        for _ in range(5):
+            self.assertFalse(self.frame())
+        self.cm.servo_cfg['grab_roi_norm'] = (.4,.4,.6,.6)
+        self.cm.latest_qr_xy_norm = None
+        self.assertFalse(self.tick()[2])
+
+    def test_invalid_roi_disables_config(self):
+        import yaml
+        for roi in ([0,0,1], [0,0,float('nan'),1], [0,.8,1,.2], [-1,0,1,1]):
+            cfg = yaml.safe_load(CONFIG_UJI.format(source='qr', invert='false', ticks=3))
+            cfg['servo_hook']['grab_roi_norm'] = roi
+            with open(self.tmp.name, 'w') as f:
+                yaml.safe_dump(cfg, f)
+            self.cm.load_servo_config()
+            self.assertIsNone(self.cm.servo_cfg)
 
 
 class MetadataPi(unittest.TestCase):

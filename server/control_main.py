@@ -113,6 +113,8 @@ last_joystick_time = 0.0
 latest_hook = None
 last_hook_time = 0.0
 latest_qr_metric = None  # (kanal, area_frac); bukan luas lintas kanal
+latest_qr_xy_norm = None
+servo_counted_receipt = None
 last_vision_receipt = 0.0
 vehicle_state = {}
 last_vehicle_time = 0.0
@@ -335,6 +337,7 @@ def accept_vision_message(msg):
     """Terima geometri + umur Pi; paket cache/reorder tidak menyegarkan deteksi."""
     global latest_hook, latest_qr_metric, last_hook_time, last_vision_receipt
     global vehicle_state, last_vehicle_time
+    global latest_qr_xy_norm
     if not isinstance(msg, dict):
         return
     now = time.monotonic()
@@ -361,20 +364,26 @@ def accept_vision_message(msg):
     except (KeyError, TypeError, ValueError):
         return
     metric = None
+    xy = None
     if channel in ("qr_vision", "qr_region"):
         try:
             area = float(value["area"])
             height = float(value["frame_h"])
+            cy = float(value['center'][1])
+            if not math.isfinite(cy) or not 0 <= cy <= height:
+                return
             fraction = area / (center[1] * height)
             if not math.isfinite(fraction) or height <= 0 or not 0 < fraction <= 1:
                 return
             metric = (channel, fraction)
+            xy = (center[0] / center[1], cy / height)
         except (KeyError, TypeError, ValueError, ZeroDivisionError):
             return
     with hook_lock:
         if receipt <= last_vision_receipt:
             return
         latest_hook, latest_qr_metric = center, metric
+        latest_qr_xy_norm = xy
         last_hook_time = now - age
         last_vision_receipt = receipt
 
@@ -471,6 +480,15 @@ def load_servo_config():
         target_x = float(cfg.get('target_x_norm', 0.5))
         if not math.isfinite(target_x) or not 0 < target_x < 1:
             raise ValueError('target_x_norm harus di antara 0 dan 1')
+        grab_roi = cfg.get('grab_roi_norm')
+        if grab_roi is not None:
+            if not isinstance(grab_roi, (list, tuple)) or len(grab_roi) != 4:
+                raise ValueError('grab_roi_norm harus [x1,y1,x2,y2] atau null')
+            grab_roi = tuple(float(v) for v in grab_roi)
+            if (not all(math.isfinite(v) for v in grab_roi)
+                    or not 0 <= grab_roi[0] < grab_roi[2] <= 1
+                    or not 0 <= grab_roi[1] < grab_roi[3] <= 1):
+                raise ValueError('grab_roi_norm di luar batas frame')
         thresholds = {}
         for key in ("close_area_frac_decoded", "close_area_frac_region"):
             value = cfg[key]
@@ -500,6 +518,7 @@ def load_servo_config():
         cfg = {
             **thresholds,
             "target_x_norm": target_x,
+            "grab_roi_norm": grab_roi,
             "source": source,
             "invert_sway": bool(cfg["invert_sway"]),
             "max_speed": float(cfg["max_speed"]),
@@ -531,6 +550,8 @@ def load_servo_config():
 
 
 def servo_reset():
+    global servo_counted_receipt
+    servo_counted_receipt = None
     global servo_hits
     global servo_last_t
     global servo_surge_out
@@ -555,6 +576,7 @@ def servo_step(surge_step):
     global servo_last_t
     global servo_surge_out
     global servo_seen_hook
+    global servo_counted_receipt
 
     now = time.monotonic()
 
@@ -569,6 +591,8 @@ def servo_step(surge_step):
         det = latest_hook
         age = now - last_hook_time
         metric = latest_qr_metric
+        xy = latest_qr_xy_norm
+        receipt = last_vision_receipt
 
     slew_axis = servo_cfg["slew"] * 10.0     # config dlm %, axis dlm ±1000
 
@@ -595,13 +619,21 @@ def servo_step(surge_step):
         key = ("close_area_frac_decoded" if metric[0] == "qr_vision"
                else "close_area_frac_region")
         threshold = servo_cfg[key]
-    close_ready = di_tengah and threshold is not None and metric[1] > threshold
+    roi = servo_cfg['grab_roi_norm']
+    in_grab = (roi is not None and xy is not None
+               and roi[0] <= xy[0] <= roi[2] and roi[1] <= xy[1] <= roi[3])
+    close_ready = (di_tengah and in_grab and threshold is not None
+                   and metric[1] > threshold)
     # _tally normal punya peluruhan; capit butuh N tick BERUNTUN.
-    servo_hits = _tally(servo_hits, True) if close_ready else 0
+    if not close_ready:
+        servo_hits = 0
+    elif receipt != servo_counted_receipt:
+        servo_hits = _tally(servo_hits, True)
+    servo_counted_receipt = receipt
     if servo_hits == 1 or (int(now * 2) != int((now - dt) * 2)):
         print(f"[SERVO] channel={metric[0] if metric else None} ex={ex:.4f} "
               f"area_frac={metric[1] if metric else None} threshold={threshold} "
-              f"close_ticks={servo_hits}/{servo_cfg['centered_ticks']}")
+              f"xy={xy} in_grab={in_grab} close_frames={servo_hits}/{servo_cfg['centered_ticks']}")
 
     # Gerbang surge. Transisi 0 -> penuh tetap lewat slew: lompatan command
     # menyentak rangka, dan sentakan itu jatuh persis saat ROV paling dekat hook.
@@ -630,6 +662,7 @@ auto_depth_target = None
 
 
 def autonomous_reset():
+    global latest_qr_xy_norm
     global auto_index
     global auto_step_start
     global auto_gripper_sent
@@ -639,6 +672,7 @@ def autonomous_reset():
 
     with hook_lock:
         latest_hook = latest_qr_metric = None
+        latest_qr_xy_norm = None
         last_hook_time = last_vision_receipt = 0.0
     auto_gripped = False
     auto_depth_target = None
