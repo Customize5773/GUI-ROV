@@ -655,8 +655,17 @@ def send_telemetry():
     # Salin di bawah lock agar satu paket tidak memuat campuran dua tick.
     with fsm_axes_lock:
         state["mission5_axes"] = dict(fsm_axes)
+        state["autonomous_input"] = {
+            "axes": dict(fsm_axes),
+            "age_ms": round(max(0.0, time.time() - last_fsm_axes_update) * 1000, 1)
+                      if last_fsm_axes_update else None,
+        }
     now = time.time()
     global _last_pistat, _pi_snapshot
+    output = dict(state.get("control_output") or {})
+    output["age_ms"] = (round(max(0.0, now - output["sent_at"]) * 1000, 1)
+                        if output.get("sent_at") else None)
+    state["control_output"] = output
     if now - _last_pistat >= 1.0:
         _last_pistat = now
         pct, _pi_snapshot = read_cpu_percent(_pi_snapshot)
@@ -825,7 +834,7 @@ def _validate_qr_vision(value):
     geometri (center/area/pose), sedangkan teksnya hanya melewati gate
     {mission, type} di _is_target_payload.
     """
-    if not isinstance(value, dict) or value.get("method") != "yolo_qr":
+    if not isinstance(value, dict) or value.get("method") not in ("yolo_qr", "qr_decode"):
         return _reject_vision("qr", "bad_method")
     status = str(value.get("status", ""))[:40]
     data = value.get("data")
@@ -876,7 +885,7 @@ def _validate_qr_vision(value):
     last_vision_reject["qr"] = None
     return {
         "status": status,
-        "method": "yolo_qr",
+        "method": value['method'],
         "data": data,
         "payload": payload,
         "wall": wall,
@@ -2357,7 +2366,17 @@ def joystick_sender():
                     master.target_system,
                     mc["x"], mc["y"], mc["z"], mc["r"], mc["buttons"],
                 )
+            # Successful transport write, not confirmation of physical motion.
+            state["control_output"] = {
+                "source": current_control_mode, "stale": stale,
+                "axes": dict(scaled_axes), "manual_control": dict(mc),
+                "sent_at": time.time(), "error": None,
+            }
         except Exception as e:
+            state["control_output"] = {
+                "source": current_control_mode, "stale": stale,
+                "sent_at": None, "error": str(e),
+            }
             print("[JOY] gagal kirim MANUAL_CONTROL:", e)
 
         time.sleep(JOYSTICK_SEND_INTERVAL)

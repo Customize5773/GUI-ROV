@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backend YOLO worker: CAM BOTTOM -> qr_vision JSONL.
+"""Backend YOLO worker: CAM WALL by default -> qr_vision JSONL.
 
 Melokalisasi region QR dengan best_new.pt (model detect-only, 1 kelas), meng-crop
 ROI dari bbox itu, lalu men-decode QR DI DALAM crop — bukan memindai frame penuh.
@@ -45,6 +45,8 @@ def build_arg_parser():
     from vision.qr_gripper import parse_roi
     ap = argparse.ArgumentParser(description='Laptop-side YOLO QR worker')
     ap.add_argument('--camera', required=True)
+    ap.add_argument('--camera-role', choices=('WALL', 'BOTTOM'),
+                    default=os.environ.get('QR_CAMERA_ROLE', 'WALL'))
     ap.add_argument('--gripper-roi', type=parse_roi,
                     default=os.environ.get('QR_GRIPPER_ROI', '0.25,0.10,0.75,0.80'),
                     help='area gripper x1,y1,x2,y2, fraksi frame asli')
@@ -146,7 +148,7 @@ def main():
     try:
         while True:
             started = time.monotonic()
-            if not inference_wanted(state, lock, 'BOTTOM'):
+            if not inference_wanted(state, lock, args.camera_role):
                 # State FSM saat ini tidak membaca CAM BOTTOM — lihat VISION_WANT.
                 time.sleep(interval)
                 continue
@@ -174,7 +176,10 @@ def main():
                                   calibration.get('image_size'), w, h),
                               'timestamp': time.time()})
                 detection, decoded = detect_gripper_qr(
-                    detector, frame, args.gripper_roi, args.conf)
+                    detector, frame, args.gripper_roi, args.conf, live=True)
+                # Never publish geometry already older than the controller gate.
+                if time.time() - captured_at > 1.0:
+                    detection, decoded = None, []
                 if not decoded:
                     # Tanpa teks QR, FSM Mission 5 tak boleh menggerakkan apa
                     # pun — jadi `qr_vision` TETAP kosong di sini, kontraknya
@@ -202,7 +207,7 @@ def main():
                             'capture_ts': captured_at,
                             'age_ms': round((time.time() - captured_at) * 1000.0, 1),
                             'method': 'yolo_qr_region',
-                            'active_cam': 'BOTTOM',
+                            'active_cam': args.camera_role,
                         }, channel='qr_region')
                 else:
                     det = decoded[0]
@@ -217,7 +222,7 @@ def main():
                         'payload': parse_payload(data),
                         'wall': wall_from_qr(data),
                         'center': [float(pts[:, 0].mean()), float(pts[:, 1].mean())],
-                        'area': float(cv2.contourArea(pts.astype(np.int32))),
+                        'area': float(cv2.contourArea(pts.astype(np.float32))),
                         'pts': _jsonable(pts),
                         'pose': _jsonable(pose) if pose else None,
                         'confidence': detection.get('confidence'),
@@ -229,8 +234,8 @@ def main():
                         # inferensi + decode. Pi membuang yang basi sebelum
                         # boleh menggerakkan ROV.
                         'age_ms': round((time.time() - captured_at) * 1000.0, 1),
-                        'method': 'yolo_qr',
-                        'active_cam': 'BOTTOM',
+                        'method': detection['method'],
+                        'active_cam': args.camera_role,
                     }
 
             now = time.time()

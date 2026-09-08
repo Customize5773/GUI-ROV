@@ -2171,7 +2171,7 @@ class Mission5FSM:
         terima — pola yang sama dengan hook_vision.
         """
         det = self._qr_source()
-        return det if isinstance(det, dict) and det.get('method') == 'yolo_qr' else None
+        return det if isinstance(det, dict) and det.get('method') in ('yolo_qr', 'qr_decode') else None
 
     def _fresh_payload(self, max_age=0.5):
         """latest_qr yang TERVALIDASI sebagai payload target (else None) — dipakai

@@ -1,0 +1,12 @@
+{
+  "label": "Kalibrasi meja WALL 8 Sep 2026",
+  "camera": "WALL",
+  "frame_size": [1280, 720],
+  "target_data": "C",
+  "target_x_norm": 0.477,
+  "grab_hysteresis_px": 1.0,
+  "grab_roi_norm": [0.4205078125, 0.49375, 0.510546875, 0.5256944444444445],
+  "close_area_frac_decoded": 0.006488444010416667,
+  "close_area_frac_region": null,
+  "max_grab_area_frac": 0.011424696180555555
+}

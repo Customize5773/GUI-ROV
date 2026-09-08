@@ -60,7 +60,7 @@ class TestToggleAutonomous(unittest.TestCase):
                       "kill-switch akan abort pada sisa nilai sesi sebelumnya")
         self.assertIn("fsm_axes.update", self.src)
 
-    def test_mode_dipindah_sesudah_start_bukan_sebelum(self):
+    def test_mode_dipindah_sesudah_axis_netral_tanpa_runner_pi(self):
         assign = [n for b in self.cabang for n in ast.walk(b)
                   if isinstance(n, ast.Assign)
                   and any(isinstance(t, ast.Name)
@@ -70,11 +70,13 @@ class TestToggleAutonomous(unittest.TestCase):
         start = [n for b in self.cabang for n in ast.walk(b)
                  if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
                  and n.func.attr == "start"]
-        self.assertTrue(start, "runner.start() tak dipanggil di cabang autonomous")
+        self.assertFalse(start, "control_main adalah pemilik Autonomous; runner Pi tidak boleh start")
+        updates = [n for b in self.cabang for n in ast.walk(b)
+                   if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                   and n.func.attr == 'update']
         self.assertGreater(
-            assign[0].lineno, max(c.lineno for c in start),
-            "current_control_mode diset SEBELUM start() — jendela balapan "
-            "kill-switch vs FSM yatim (journal 22 Agu 11:48:05)")
+            assign[0].lineno, max(c.lineno for c in updates),
+            "current_control_mode harus dipindah setelah axis dinetralkan")
 
 
 if __name__ == "__main__":
