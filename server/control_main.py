@@ -571,13 +571,27 @@ def load_servo_config():
 
     servo_cfg = cfg
     mission_cfg = mission
+    # >>> PENGATURAN COUNTER: nilai gerak dibaca dari control_config.yaml bagian mission.
+    # Kolom: (durasi, surge, sway, yaw, heave, gripper, target_depth, servo).
+    # Jalur ini memakai 4 sumbu; roll dan pitch belum tersedia sebagai kolom.
+    # Durasi dalam detik; command sumbu -1000..1000 (0 = netral), bukan m/s atau derajat.
+    # depth_target dalam meter; None = tidak mengirim target pada awal tahap.
+    # servo=True: surge/sway dihitung ulang oleh servo_step dari deteksi visual.
+    # Counter adalah auto_index (CASE 0..6), bukan jumlah DOF atau jumlah thruster.
     AUTO_STEPS = [
+        # CASE 0: diam awal selama settle_s.
         (mission["settle_s"], 0, 0, 0, 0, None, None, False),
+        # CASE 1: kirim depth_m; tunggu toleransi tercapai atau depth_wait_s habis.
         (mission["depth_wait_s"], 0, 0, 0, 0, None, mission["depth_m"], False),
+        # CASE 2: cari target dengan surge + yaw bolak-balik; deteksi segar menuju CASE 4.
         (mission["search_timeout_s"], mission["search_surge"], 0, mission["search_yaw"], 0, None, None, False),
-        (0, 0, 0, 0, 0, None, None, False),  # CASE 3 cadangan; dilewati
+        # CASE 3: tahap cadangan; dilewati langsung menuju CASE 4, tanpa mengirim gerakan.
+        (0, 0, 0, 0, 0, None, None, False),
+        # CASE 4: koreksi sway visual + surge bersyarat; gate grab terpenuhi menuju CASE 5.
         (mission["servo_timeout_s"], mission["approach_surge"], 0, 0, 0, None, None, True),
+        # CASE 5: close gripper dan tunggu; command sumbu nol.
         (mission["gripper_hold_s"], 0, 0, 0, 0, "close", None, False),
+        # CASE 6: target naik dihitung dinamis di autonomous_control, menggunakan rise_m.
         (mission["rise_wait_s"], 0, 0, 0, 0, None, None, False),
     ]
     print(f"[SERVO] tuning dimuat: source={cfg['source']} "

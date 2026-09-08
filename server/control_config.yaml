@@ -10,6 +10,7 @@
 # File ini dibaca ulang SETIAP KALI mode autonomous dinyalakan: edit yaml,
 # toggle mode di GUI, tanpa restart server dan tanpa redeploy apa pun ke Pi.
 
+# >>> PENGATURAN KOREKSI SWAY: kp_sway, kd_sway, dan max_speed di bagian ini.
 servo_hook:
   # Satu profil untuk kontrol dan visual; nilai geometri ditimpa profil ini.
   calibration_file: ../shared/grab-calibration.json
@@ -78,21 +79,38 @@ servo_hook:
   close_area_frac_decoded: null
   close_area_frac_region: null
 
+# >>> PENGATURAN GERAK FULL COUNTER: ubah nilai di bawah ini.
+# Dimuat ulang saat mode autonomous dinyalakan.
 mission:
+  # CASE 0: waktu diam awal (detik); semua command sumbu nol.
   settle_s: 3.0
-  depth_m: 1.0
+  # CASE 1: target kedalaman absolut via depth_apply, bukan command heave langsung.
+  depth_m: 1.0          # <<< TARGET KEDALAMAN (meter)
+  # CASE 1: batas waktu menunggu kedalaman (detik); habis waktu juga lanjut.
   depth_wait_s: 3.0
+  # CASE 1: lanjut lebih awal jika selisih kedalaman kurang dari nilai ini (meter).
   depth_tol_m: 0.1
+  # CASE 2: batas pencarian (detik); tanpa deteksi sampai batas ini, misi dihentikan.
   search_timeout_s: 8.0
   # Command ±1000, placeholder pelan: wajib trial kolam. Search TANPA sway.
-  search_yaw: 100
-  search_surge: -100
+  # CASE 2: besar command putar, bukan derajat/detik; tanda dibalik tiap search_sweep_s.
+  search_yaw: 100       # <<< YAW SAAT MENCARI (-1000..1000; arah bergantian)
+  # CASE 2: command maju/mundur saat mencari; sway tetap nol. Ikuti CONTROL-MAPPING.md untuk arah fisik.
+  search_surge: -100    # <<< SURGE SAAT MENCARI (-1000..1000)
+  # CASE 2: interval pembalikan arah yaw (detik), bukan durasi seluruh pencarian.
   search_sweep_s: 2.0
-  approach_surge: -100
+  # CASE 4: command mendekat hanya saat target cukup tengah; perubahan dibatasi slew.
+  approach_surge: -100  # <<< SURGE MENDEKATI TARGET (-1000..1000)
   # 10 pengamatan pada 4 FPS ~2.5 s; sediakan waktu masuk area + satu retry.
+  # CASE 4: batas waktu koreksi visual (detik); timeout menghentikan misi.
   servo_timeout_s: 6.0
+  # CASE 4: batas umur acuan visual untuk menghentikan misi (detik); max_age menghentikan gerak lebih awal.
   lost_timeout_s: 10.0
+  # CASE 5: waktu tunggu setelah perintah close (detik); bukan konfirmasi benda sudah tergenggam.
   gripper_hold_s: 1.5
-  rise_m: 0.5
+  # CASE 6: target = max(0, kedalaman saat itu - rise_m), dikirim melalui depth_apply.
+  rise_m: 0.5           # <<< JARAK NAIK SETELAH GRIPPER (meter)
+  # CASE 6: waktu tunggu naik (detik); setelah selesai target kedalaman tetap aktif.
   rise_wait_s: 3.0
+  # Batas usia telemetri yang dianggap segar (detik) untuk pemeriksaan misi.
   telemetry_max_age: 1.0
