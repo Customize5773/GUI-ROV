@@ -2443,7 +2443,17 @@ function renderControlMode(mode) {
 }
 function setControlMode(mode) {
   if (controlMode === mode) return;
-  if (!send({ type: "cmd", name: "control_mode", value: mode })) return;
+  const packet = { type: "cmd", name: "control_mode", value: mode };
+  if (mode === "autonomous") {
+    const input = document.getElementById("depthDasarInput");
+    const depth = input?.value.trim() ? Number(input.value) : NaN;
+    if (!Number.isFinite(depth) || depth < 0) {
+      log("DEPTH DASAR tidak valid; AUTO_STEPS tidak dimulai", "err");
+      return;
+    }
+    packet.depth_dasar = depth;
+  }
+  if (!send(packet)) return;
   renderControlMode(mode);
   log(`Permintaan mode ${mode.toUpperCase()} terkirim; menunggu telemetri ROV`, "info");
   if (mode === "autonomous" && !state.armed) {

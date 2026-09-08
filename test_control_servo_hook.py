@@ -417,6 +417,26 @@ class UrutanCounter(_ServoBase):
     def assert_neutral(self):
         self.assertEqual([self.sent[-1][a] for a in self.cm.AXES], [0] * 4)
 
+    def test_reload_literal_dan_depth_gui(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".py") as source:
+            source.write("AUTO_STEPS = [(2, -100, 0, 0, 0, None, 1.0)]")
+            source.flush()
+            self.assertEqual(self.cm.read_auto_steps(source.name, .5)[0],
+                             (2, -100, 0, 0, 0, None, .5))
+            source.seek(0)
+            source.truncate()
+            source.write("AUTO_STEPS = [(4, -300, 0, 0, 0, None, None)]")
+            source.flush()
+            self.assertEqual(self.cm.read_auto_steps(source.name, .7)[0],
+                             (4, -300, 0, 0, 0, None, None))
+            for invalid in ["[(1, 2000, 0, 0, 0, None, None)]", "[]", "make_steps()"]:
+                source.seek(0)
+                source.truncate()
+                source.write("AUTO_STEPS = " + invalid)
+                source.flush()
+                with self.assertRaises(ValueError):
+                    self.cm.read_auto_steps(source.name, .5)
+
     def test_enam_langkah_persis_dan_tidak_ditimpa_reset(self):
         expected = [(3.0, 0, 0, 0, 0, None, None),
                     (2.0, 0, 0, 0, 0, None, None),

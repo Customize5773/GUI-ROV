@@ -805,6 +805,7 @@ wss.on("connection", (ws, req) => {
             JSON.stringify({
                 type: "control_mode",
                 value: mode,
+                depth_dasar: msg.depth_dasar,
                 t: Date.now()
             })
         );

@@ -28,6 +28,7 @@ Catatan:
 - server.js tetap menjadi bridge.
 """
 
+import ast
 import json
 import math
 import os
@@ -149,8 +150,8 @@ def get_mode():
         return control_mode
 
 
-def set_mode(mode):
-    global control_mode
+def set_mode(mode, depth_dasar=None):
+    global control_mode, AUTO_STEPS
 
     mode = str(mode).lower().strip()
 
@@ -163,6 +164,13 @@ def set_mode(mode):
         # Publish mode setelah reset/config siap. Main loop memakai lock yang
         # sama agar toggle tidak berpotongan dengan tick yang menutup gripper.
         if old != mode and mode == MODE_AUTONOMOUS:
+            try:
+                steps = read_auto_steps(__file__, depth_dasar)
+            except (OSError, SyntaxError, ValueError, TypeError) as exc:
+                print(f"[AUTO] tidak dimulai: {exc}")
+                send_command("control_mode", MODE_MANUAL)
+                return
+            AUTO_STEPS = steps
             autonomous_reset()
         control_mode = mode
         if old != mode and mode == MODE_MANUAL:
@@ -693,7 +701,8 @@ def servo_step(surge_step):
 # AUTONOMOUS - FULL COUNTER
 # ============================================================
 
-# Urutan berdasarkan durasi; edit nilai di sini lalu restart control_main.
+# Dibaca ulang dari file setiap toggle AUTONOMOUS; simpan tanpa restart server.
+# Depth non-None menggunakan DEPTH DASAR GUI saat memulai urutan.
 AUTO_STEPS = [
     # duration, surge, sway, yaw, heave, gripper, depth
     (3.0, 0, 0, 0, 0, None, None),
@@ -707,6 +716,35 @@ AUTO_STEPS = [
 
     (1.0, 0, 0, 0, 0, None, None),
 ]
+
+
+def read_auto_steps(path, depth_dasar=None):
+    """Baca tuple literal saja; perubahan kode lain tidak dieksekusi ulang."""
+    with open(path, encoding="utf-8") as source:
+        tree = ast.parse(source.read())
+    values = [node.value for node in tree.body if isinstance(node, ast.Assign)
+              and any(isinstance(t, ast.Name) and t.id == "AUTO_STEPS" for t in node.targets)]
+    if len(values) != 1:
+        raise ValueError("AUTO_STEPS harus satu daftar literal")
+    steps = ast.literal_eval(values[0])
+    def number(value):
+        return type(value) in (int, float) and math.isfinite(value)
+    if depth_dasar is not None and (not number(depth_dasar) or depth_dasar < 0):
+        raise ValueError("DEPTH DASAR tidak valid")
+    if not isinstance(steps, list) or not steps:
+        raise ValueError("AUTO_STEPS kosong / bukan list")
+    result = []
+    for step in steps:
+        if not isinstance(step, (tuple, list)) or len(step) != 7:
+            raise ValueError("setiap langkah harus tujuh kolom")
+        duration, *axes, gripper, depth = step
+        if (not number(duration) or duration < 0
+                or any(not number(v) or abs(v) > 1000 for v in axes)
+                or gripper not in (None, "open", "close")
+                or (depth is not None and (not number(depth) or depth < 0))):
+            raise ValueError("nilai AUTO_STEPS tidak valid")
+        result.append((*step[:6], depth_dasar if depth is not None and depth_dasar is not None else depth))
+    return result
 
 
 auto_index = 0
@@ -738,7 +776,7 @@ def autonomous_reset():
     auto_finished = False
 
     # Muat ulang konfigurasi telemetri/visi. AUTO_STEPS tetap memakai literal
-    # di atas; perubahan urutan memerlukan restart proses.
+    # di atas yang dibaca ulang oleh set_mode sebelum reset.
     load_servo_config()
     servo_reset()
 
@@ -871,7 +909,7 @@ def mode_listener():
         if msg.get("type") != "control_mode":
             continue
 
-        set_mode(msg.get("value"))
+        set_mode(msg.get("value"), msg.get("depth_dasar"))
 
 
 # ============================================================

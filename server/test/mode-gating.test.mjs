@@ -64,6 +64,7 @@ test("toggle gagal kirim tidak mengubah mode; telemetri dapat memulihkan manual"
   const context = vm.createContext({
     els: { modeLabel: {textContent: "MANUAL"}, btnMode: {setAttribute() {}} },
     state: {armed: false},
+    document: {getElementById: () => ({value: "0.50"})},
     send: packet => { if (!connected) return false; packets.push(packet); return true; },
     log: text => logs.push(text),
   });
@@ -75,6 +76,7 @@ test("toggle gagal kirim tidak mengubah mode; telemetri dapat memulihkan manual"
   vm.runInContext('setControlMode("autonomous")', context);
   assert.equal(context.els.modeLabel.textContent, "AUTONOMOUS");
   assert.equal(packets[0].name, "control_mode");
+  assert.equal(packets[0].depth_dasar, 0.5);
   assert.ok(logs.some(text => text.includes("menunggu ARM")));
   assert.ok(packets.every(packet => packet.name !== "arm"));
   vm.runInContext('renderControlMode("manual")', context);
