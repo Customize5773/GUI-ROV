@@ -3,8 +3,10 @@
 control_main.py
 Pusat kontrol ROV:
 
-MANUAL
-    joystick.py -> UDP 14600 -> control_main -> UDP 14601 -> server.js
+MANUAL (BUKAN lewat file ini)
+    GUI pollGamepad -> WebSocket -> server.js -> Pi
+    joystick.py -> UDP 14600 -> control_main hanya sebagai KILL-SWITCH
+    autonomous; frame motion manual tidak pernah dikirim dari sini.
 
 AUTONOMOUS
     full-counter FSM -> UDP 14601 -> server.js
@@ -21,8 +23,8 @@ Non-motion autonomous command:
     depth_target = target meter
 
 Catatan:
-- GUI hanya memilih control_mode.
-- joystick.py tetap menjadi pembaca F310.
+- GUI memilih control_mode DAN mengemudikan manual.
+- joystick.py membaca F310 khusus untuk abort autonomous.
 - server.js tetap menjadi bridge.
 """
 
@@ -261,10 +263,12 @@ def joystick_snapshot():
     return axes, stale
 
 
-def manual_control():
-    axes, stale = joystick_snapshot()
-
-    send_motion(*((0, 0, 0, 0) if stale else axes), src="operator")
+# MANUAL tidak dikemudikan dari sini. Axis manual datang dari GUI
+# (pollGamepad -> WS -> server.js -> Pi) supaya profil joystick operator,
+# kendali keyboard, dan input axis dashboard tetap berlaku. Dua sumber yang
+# sama-sama menulis dict joystick di Pi hanya membuat stik saling adu.
+# joystick.py tetap dibaca, tapi HANYA sebagai kill-switch autonomous
+# (lihat autonomous_control()).
 
 
 # ============================================================
@@ -583,9 +587,12 @@ def load_servo_config():
         (mission["settle_s"], 0, 0, 0, 0, None, None, False),
         # CASE 1: kirim depth_m; tunggu toleransi tercapai atau depth_wait_s habis.
         (mission["depth_wait_s"], 0, 0, 0, 0, None, mission["depth_m"], False),
-        # CASE 2: cari target dengan surge + yaw bolak-balik; deteksi segar menuju CASE 4.
+        # CASE 2: cari target dengan surge + yaw bolak-balik; deteksi segar menuju CASE 3.
         (mission["search_timeout_s"], mission["search_surge"], 0, mission["search_yaw"], 0, None, None, False),
-        # CASE 3: tahap cadangan; dilewati langsung menuju CASE 4, tanpa mengirim gerakan.
+        # CASE 3: gerakan bebas sebelum servo; isi durasi dan command sumbu sendiri.
+        # Format: (detik, surge, sway, yaw, heave, gripper, depth_target, servo).
+        # Durasi 0 = langsung lanjut; isi durasi > 0 agar command dikirim selama tahap ini.
+        # Command -1000..1000; 0 = netral. Setelah durasi habis, lanjut CASE 4.
         (0, 0, 0, 0, 0, None, None, False),
         # CASE 4: koreksi sway visual + surge bersyarat; gate grab terpenuhi menuju CASE 5.
         (mission["servo_timeout_s"], mission["approach_surge"], 0, 0, 0, None, None, True),
@@ -830,9 +837,6 @@ def autonomous_control():
     if auto_index >= len(AUTO_STEPS):
         finish_auto("urutan selesai", hold_here=False)
         return
-    if auto_index == 3:
-        enter_case(4)
-        return
     duration, surge, sway, yaw, heave, gripper, depth_target, servo = AUTO_STEPS[auto_index]
     elapsed = time.monotonic() - auto_step_start
 
@@ -841,7 +845,7 @@ def autonomous_control():
             finish_auto("QR TIDAK PERNAH terdeteksi: timeout pencarian")
             return
         if fresh_vision:
-            enter_case(4)
+            enter_case(3)
             return
         yaw *= 1 if int(elapsed / mission_cfg["search_sweep_s"]) % 2 == 0 else -1
 
@@ -980,9 +984,7 @@ def main():
 
             with mode_lock:
                 mode = get_mode()
-                if mode == MODE_MANUAL:
-                    manual_control()
-                elif mode == MODE_AUTONOMOUS:
+                if mode == MODE_AUTONOMOUS:
                     autonomous_control()
 
             time.sleep(LOOP_DT)

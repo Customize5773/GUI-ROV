@@ -52,13 +52,32 @@ class TagAsalFrame(unittest.TestCase):
     def _motion(self):
         return [p for p in self.sent if p["type"] == "control"]
 
-    def test_frame_manual_bertag_operator(self):
-        self._stik(surge=300)
-        self.cm.manual_control()
+    def test_manual_tidak_dikirim_control_main(self):
+        """MANUAL milik GUI, bukan control_main.
 
-        frame = self._motion()[-1]
-        self.assertEqual(frame["src"], "operator")
-        self.assertEqual(frame["surge"], 300)
+        Axis manual datang dari pollGamepad -> WS -> server.js -> Pi supaya
+        profil joystick operator tetap berlaku. Kalau control_main ikut
+        mengirim, dua sumber menulis dict joystick yang sama di Pi dan stik
+        terasa aneh (nilai adu, deadzone/expo ganda).
+        """
+        self.assertFalse(hasattr(self.cm, "manual_control"))
+
+        self._stik(surge=300)
+        self.sent.clear()
+
+        # Satu tick MANUAL: tidak boleh ada frame motion sama sekali.
+        self.assertEqual(self.cm.get_mode(), self.cm.MODE_MANUAL)
+        self.assertEqual(self._motion(), [])
+
+    def test_stik_tetap_dibaca_untuk_abort(self):
+        """joystick.py tetap perlu: satu-satunya kill-switch saat autonomous."""
+        self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
+        self._stik(surge=400)
+        self.sent.clear()
+
+        self.cm.autonomous_control()
+
+        self.assertEqual(self.cm.get_mode(), self.cm.MODE_MANUAL)
 
     def test_frame_autonomous_bertag_fsm(self):
         self.cm.set_mode(self.cm.MODE_AUTONOMOUS)

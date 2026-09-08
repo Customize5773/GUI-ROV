@@ -825,15 +825,14 @@ wss.on("connection", (ws, req) => {
     // ================= COMMAND KE ROV =================
     if (msg.type === "cmd") {
 
-      if (
-        msg.name === "surge" ||
-        msg.name === "sway" ||
-        msg.name === "heave" ||
-        msg.name === "yaw"
-      ) {
-        console.log(`[WS BLOCK] GUI axis ditolak: ${msg.name}=${msg.value}`);
-        return;
-      }
+      /* Axis GUI (surge/sway/heave/yaw) SENGAJA diteruskan apa adanya ke Pi.
+         Pernah diblokir di sini supaya control_main.py jadi satu-satunya jalur
+         manual — akibatnya kendali manual kehilangan profil joystick operator
+         (deadzone/expo/min-max per-axis), kendali keyboard, dan input axis
+         manual di dashboard, semuanya sekaligus. Tanpa tag `src` rov_agent.py
+         menaruhnya di dict joystick = operator; axis autonomous tetap
+         terpisah karena bertag src="fsm". */
+
       /* ================= MANIPULATOR ================= */
 
       if (msg.name === "manipulator") {

@@ -2285,8 +2285,14 @@ function pollGamepad() {
   if (changed || nowT - gpLastSent >= GP_SEND_INTERVAL) {
     gpLastSent = nowT;
 
-    // GUI hanya membaca dan menampilkan joystick.
-    // TIDAK mengirim axis joystick ke server/ROV.
+    /* GUI adalah sumber axis MANUAL. Nilai di sini sudah dibentuk profil
+       operator (deadzone/expo/min-max per-axis dari halaman Setup > Joystick),
+       jadi rasa stik sama persis dengan yang dipratinjau di sana.
+       joystick.py TIDAK memakai profil itu — perannya tinggal kill-switch
+       autonomous di control_main.py. */
+    for (const a of ["surge", "sway", "yaw", "heave"]) {
+      sendCmd(a, gpLast[a], true);
+    }
   }
   commitButtonCache();
 }

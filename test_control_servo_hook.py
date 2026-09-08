@@ -531,7 +531,9 @@ class UrutanMisi(_ServoBase):
         self.assertLess(self.sent[-1]["yaw"], 0)
         self.vision()
         self.step()
-        self.assertEqual(self.cm.auto_index, 4)  # CASE 3 dilewati
+        self.assertEqual(self.cm.auto_index, 3)
+        self.step()  # Durasi CASE 3 bawaan nol: lanjut pada tick berikutnya.
+        self.assertEqual(self.cm.auto_index, 4)
         for _ in range(self.ticks):
             self.vision()
             self.step()
@@ -548,6 +550,30 @@ class UrutanMisi(_ServoBase):
         # Jangan mengganti target 0.4 dengan depth aktual pada akhir timer.
         self.assertAlmostEqual(self.commands("depth_apply")[-1], 0.4)
         self.assertEqual(self.commands("gripper"), ["close"])
+
+    def test_case3_mengirim_gerakan_sampai_durasi_habis(self):
+        self.cm.AUTO_STEPS[3] = (1.0, -120, 80, -60, 40, None, None, False)
+        self.cm.enter_case(2)
+        self.vision()
+        self.step()
+        self.assertEqual(self.cm.auto_index, 3)
+        for _ in range(2):
+            self.step(0.4)
+            self.assertEqual(self.cm.auto_index, 3)
+            frame = self.sent[-1]
+            self.assertEqual([frame[a] for a in self.cm.AXES], [-120, 80, -60, 40])
+            self.assertEqual(frame["src"], "fsm")
+        self.step(0.21)
+        self.assertEqual(self.cm.auto_index, 4)
+        self.assertEqual(self.commands("gripper"), [])
+
+    def test_case3_disarm_menghentikan_gerakan(self):
+        self.cm.AUTO_STEPS[3] = (1.0, -120, 80, -60, 40, None, None, False)
+        self.cm.enter_case(3)
+        self.step()
+        self.state(armed=False)
+        self.cm.autonomous_control()
+        self.assert_stopped()
 
     def test_settle_dimulai_setelah_arm_dan_tidak_mengirim_arm(self):
         self.state(armed=False)
