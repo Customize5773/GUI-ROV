@@ -1,5 +1,5 @@
 // Visual guide only. QR coordinates come from the displayed camera's browser decoder.
-export function drawGrabOverlay(canvas, img, qr, roi, calibration = null) {
+export function drawGrabOverlay(canvas, img, qr, roi, calibration = null, backend = null) {
   const ctx = canvas.getContext('2d');
   const box = img.getBoundingClientRect();
   canvas.width = Math.round(box.width);
@@ -42,7 +42,34 @@ export function drawGrabOverlay(canvas, img, qr, roi, calibration = null) {
       status = `${inside ? 'QR dalam area XY' : 'QR di luar area'} · X ${(nx*100).toFixed(1)}% Y ${(ny*100).toFixed(1)}%`;
     }
   }
+  if (backend) {
+    const [x,y,w,h] = backend.bbox;
+    const [bx,by] = point(x/backend.frame_w,y/backend.frame_h);
+    const [ex,ey] = point((x+w)/backend.frame_w,(y+h)/backend.frame_h);
+    const decoded = typeof backend.data === 'string' && backend.data.length > 0;
+    const color = decoded ? '#2ee6a6' : '#f5c518';
+    ctx.strokeStyle = color; ctx.fillStyle = color;
+    ctx.strokeRect(bx,by,ex-bx,ey-by);
+    const source = backend.method === 'qr_decode' ? 'QR' : 'YOLO QR';
+    const confidence = backend.method === 'qr_decode' ? '' : ` ${Math.round(backend.confidence*100)}%`;
+    ctx.fillText(`${source}${confidence}`,Math.max(4,bx),Math.max(16,by-6));
+    status = decoded ? `${source} terbaca: ${backend.data.slice(0,60)}` : 'YOLO QR terdeteksi · belum terbaca';
+  }
   ctx.fillStyle='rgba(0,0,0,.72)'; ctx.fillRect(12,48,Math.min(box.width-24,460),46);
   ctx.fillStyle='#fff'; ctx.fillText(status,20,66);
   ctx.fillStyle='#f5c518'; ctx.fillText('Acuan meja · grab tetap menunggu gate kontrol',20,84);
+}
+
+// Pi computes observation age; local elapsed time also expires a disconnected feed.
+export function freshWallQr(telemetry, elapsedSeconds = 0) {
+  return ['qr_vision', 'qr_region'].map(channel => {
+    const det = telemetry?.[channel], receipt = telemetry?.vision_receipts?.[channel];
+    if (!det || det.active_cam !== 'WALL' || !Number.isFinite(receipt?.age)
+        || receipt.age < 0 || receipt.age + elapsedSeconds > 1
+        || !Number.isFinite(det.frame_w) || !Number.isFinite(det.frame_h)
+        || det.frame_w <= 0 || det.frame_h <= 0
+        || !Array.isArray(det.bbox) || det.bbox.length !== 4
+        || !det.bbox.every(Number.isFinite) || det.bbox[2] <= 0 || det.bbox[3] <= 0) return null;
+    return {det, age: receipt.age};
+  }).filter(Boolean).sort((a,b) => a.age-b.age)[0]?.det || null;
 }

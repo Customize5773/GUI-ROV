@@ -1,0 +1,135 @@
+...........................................[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] /tmp/tmpm6ggqr_v.yaml tidak terpakai (grab_roi_norm harus [x1,y1,x2,y2] atau null) — urutan autonomous dihentikan
+[SERVO] /tmp/tmpm6ggqr_v.yaml tidak terpakai (grab_roi_norm di luar batas frame) — urutan autonomous dihentikan
+[SERVO] /tmp/tmpm6ggqr_v.yaml tidak terpakai (grab_roi_norm di luar batas frame) — urutan autonomous dihentikan
+[SERVO] /tmp/tmpm6ggqr_v.yaml tidak terpakai (grab_roi_norm di luar batas frame) — urutan autonomous dihentikan
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] channel=qr_vision ex=0.0000 area_frac=0.15 threshold=0.1 xy=(0.5, 0.5) in_grab=True close_frames=1/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] /tmp/tmptu69bhbp.yaml tidak terpakai (source='hokk' tidak dikenal, pilih ['hook', 'qr']) — urutan autonomous dihentikan
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.0100 area_frac=0.15 threshold=0.1 xy=(0.505, 0.5) in_grab=True close_frames=1/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] /tmp/tmppzsjt09b.yaml tidak terpakai (target_x_norm harus di antara 0 dan 1) — urutan autonomous dihentikan
+[SERVO] /tmp/tmppzsjt09b.yaml tidak terpakai (target_x_norm harus di antara 0 dan 1) — urutan autonomous dihentikan
+[SERVO] /tmp/tmppzsjt09b.yaml tidak terpakai (target_x_norm harus di antara 0 dan 1) — urutan autonomous dihentikan
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=1.0000 area_frac=0.15 threshold=0.1 xy=(1.0, 0.5) in_grab=False close_frames=0/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.5000 area_frac=0.15 threshold=0.1 xy=(0.75, 0.5) in_grab=False close_frames=0/3
+[SERVO] tuning dimuat: source=qr invert_sway=True tol=0.08 max_age=1.0s
+[SERVO] channel=qr_vision ex=0.5000 area_frac=0.15 threshold=0.1 xy=(0.75, 0.5) in_grab=False close_frames=0/3
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[AUTO] selesai: telemetry depth hilang; target native terakhir dipertahankan; motion nol, tahan kedalaman
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[AUTO] -> CASE 4
+[AUTO] selesai: DISARM; motion nol, tahan kedalaman
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[AUTO] -> CASE 1
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[AUTO] -> CASE 4
+[AUTO] selesai: telemetry depth hilang; target native terakhir dipertahankan; motion nol, tahan kedalaman
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[AUTO] -> CASE 1
+[AUTO] -> CASE 2
+[AUTO] -> CASE 3
+[AUTO] -> CASE 4
+[AUTO] -> CASE 5
+[AUTO] selesai: urutan selesai; target kedalaman tetap aktif; motion nol, tahan kedalaman
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[KILL-SWITCH] stik F310 digerakkan saat autonomous — abort, kembali ke MANUAL
+[MODE] AUTONOMOUS -> MANUAL
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+........
+----------------------------------------------------------------------
+Ran 51 tests in 0.206s
+
+OK
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[SERVO] tuning dimuat: source=qr invert_sway=False tol=0.08 max_age=1.0s
+[AUTO] FSM reset -> CASE 0
+[MODE] MANUAL -> AUTONOMOUS
+[KILL-SWITCH] stik F310 digerakkan saat autonomous — abort, kembali ke MANUAL
+[MODE] AUTONOMOUS -> MANUAL

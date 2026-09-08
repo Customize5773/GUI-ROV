@@ -785,6 +785,23 @@ def _reject_vision(channel, reason):
     return None
 
 
+def _qr_overlay_fields(value, frame_w, frame_h):
+    """Optional display geometry; malformed overlays never affect control fields."""
+    clean = {}
+    if value.get("active_cam") in ("WALL", "BOTTOM"):
+        clean["active_cam"] = value["active_cam"]
+    try:
+        x, y, w, h = map(float, value["bbox"])
+        if (all(math.isfinite(v) for v in (x, y, w, h))
+                and 0 <= x < frame_w and 0 <= y < frame_h
+                and w > 0 and h > 0 and x + w <= frame_w + 1
+                and y + h <= frame_h + 1):
+            clean["bbox"] = [x, y, w, h]
+    except (KeyError, TypeError, ValueError):
+        pass
+    return clean
+
+
 def _validate_qr_region(value):
     """Validasi region kotak QR (tanpa decode) pada batas jaringan worker -> Pi.
 
@@ -815,6 +832,7 @@ def _validate_qr_region(value):
 
     last_vision_reject["qr_region"] = None
     return {
+        **_qr_overlay_fields(value, frame_w, frame_h),
         "status": str(value.get("status", ""))[:40],
         "method": "yolo_qr_region",
         "confidence": confidence,
@@ -884,6 +902,7 @@ def _validate_qr_vision(value):
 
     last_vision_reject["qr"] = None
     return {
+        **_qr_overlay_fields(value, frame_w, frame_h),
         "status": status,
         "method": value['method'],
         "data": data,

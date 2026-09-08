@@ -1,5 +1,6 @@
 """QR proposals in a gripper ROI, always returned in full-frame coordinates."""
 import math
+from functools import lru_cache
 
 DEFAULT_ROI = (0.25, 0.10, 0.75, 0.80)
 
@@ -36,6 +37,64 @@ def _decode_live_candidate(frame, quad):
     return []
 
 
+@lru_cache(maxsize=1)
+def _wechat_decoder():
+    import cv2
+    import logging
+    factory = getattr(cv2, 'wechat_qrcode_WeChatQRCode', None)
+    if factory is None:
+        logging.getLogger(__name__).warning(
+            'QR recovery unavailable: install opencv-contrib-python without opencv-python overwriting cv2')
+        return None
+    # YOLO supplies the crop; this decoder needs no downloaded detector/SR model.
+    return factory()
+
+
+def _decode_wechat_candidate(frame, quad):
+    """Independent decoder on a small current-frame crop, at most four passes."""
+    import cv2
+    import numpy as np
+    from vision.qr_detect import _stretch
+    decoder = _wechat_decoder()
+    if decoder is None:
+        return []
+    q = np.asarray(quad)
+    lo, hi = q.min(axis=0), q.max(axis=0)
+    pad = .25 * max(hi - lo)
+    h, w = frame.shape[:2]
+    xa, ya = max(0, round(lo[0]-pad)), max(0, round(lo[1]-pad))
+    xb, yb = min(w, round(hi[0]+pad)), min(h, round(hi[1]+pad))
+    crop = frame[ya:yb, xa:xb]
+    if min(crop.shape[:2]) < 24:
+        return []
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
+    green = crop[:, :, 1] if crop.ndim == 3 else gray
+    attempts = ((gray, 1), (gray, 2), (green, 3), (_stretch(gray), 3))
+    # Small symbols benefit from enlargement before native-resolution retries.
+    if max(hi - lo) < 80:
+        attempts = (attempts[2], attempts[0], attempts[1], attempts[3])
+    for channel, requested_scale in attempts:
+        scale = min(requested_scale, 640.0 / max(gray.shape))
+        image = cv2.resize(channel, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+        try:
+            texts, corners = decoder.detectAndDecode(image)
+        except cv2.error:
+            continue
+        found = []
+        for text, points in zip(texts, corners):
+            points = np.asarray(points, dtype=np.float32)
+            if (not isinstance(text, str) or not text.strip() or points.shape != (4, 2)
+                    or not np.isfinite(points).all() or np.any(points < 0)
+                    or np.any(points[:, 0] >= image.shape[1])
+                    or np.any(points[:, 1] >= image.shape[0])
+                    or cv2.contourArea(points) <= 0):
+                continue
+            found.append(dict(data=text.strip(), pts=points / scale + (xa, ya)))
+        if found:
+            return found
+    return []
+
+
 def parse_roi(value):
     values = tuple(float(v) for v in value.split(','))
     if (len(values) != 4 or not all(math.isfinite(v) for v in values)
@@ -58,8 +117,11 @@ def _detect_yolo_gripper_qr(detector, frame, roi=DEFAULT_ROI, region_conf=0.6, l
     detection = dict(detection)
     x, y, bw, bh = detection['bbox']
     quad = [[x, y], [x+bw, y], [x+bw, y+bh], [x, y+bh]]
-    decoded = (_decode_live_candidate(crop, quad) if live else
-               _decode_tracked_roi(crop, quad, full_cascade=True)) or []
+    if live:
+        # Try the small crop first; avoid six broad ZXing passes when it decodes.
+        decoded = _decode_wechat_candidate(crop, quad) or _decode_live_candidate(crop, quad)
+    else:
+        decoded = _decode_tracked_roi(crop, quad, full_cascade=True) or []
     # A nearby QR in the padded decode crop must not validate a different box.
     decoded = [dict(d) for d in decoded
                if x <= d['pts'][:, 0].mean() <= x+bw
@@ -96,12 +158,22 @@ def detect_gripper_qr(detector, frame, roi=DEFAULT_ROI, region_conf=0.6, live=Fa
     detection = None
     if not candidates:
         detection, decoded = _detect_yolo_gripper_qr(detector, frame, roi, region_conf, live=live)
+        if len(decoded) > 1:
+            return None, []
         if decoded:
             detection['method'] = 'yolo_qr'
             return detection, decoded
         # Live control has a fixed, short decode workload. Exhaustive recovery
         # can take seconds on a failed frame and starve fresh vision updates.
         candidates = (_zxing_qr(_stretch(gray)) if live else decode_qr(crop)) or []
+        if live and not candidates:
+            # Recover small QR missed by YOLO at native resolution. Keep the
+            # extra pass bounded, with points restored to original ROI pixels.
+            scale = min(2.0, 1280.0 / max(gray.shape))
+            if scale > 1:
+                enlarged = cv2.resize(_stretch(gray), None, fx=scale, fy=scale,
+                                      interpolation=cv2.INTER_CUBIC)
+                candidates = _zxing_qr(enlarged, scale) or []
     if len(candidates) > 1:
         return None, []
     if not candidates:

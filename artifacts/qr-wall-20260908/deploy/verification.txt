@@ -1,0 +1,13 @@
+active
+active
+active
+MainPID=8436
+NRestarts=0
+
+MainPID=8437
+NRestarts=0
+ffff8c1c0000-ffff8c1d4000 r-xp 00000000 b3:02 522221                     /home/hydroships/rov-agent/vendor/qr-opencv-headless-5.0.0.93/opencv_contrib_python_headless.libs/libdrm-7ea97f77.so.2.4.0
+959600532d44b3a32511fd0ecae4a388ea0a3813877029b670c8183c2e0cfbcd  /home/hydroships/rov-agent/rov_agent.py
+407bcec6bfb07374b350d08732107465daea39384bc64be8e8144e2422ac6a74  /home/hydroships/rov-agent/vision/qr_gripper.py
+01331ae1a65a21d81310b5584900f73c3012ab4bdcf6aa26085c1870eea45da8  /home/hydroships/rov-agent/backups/qr-recovery-20260908-2350/staged/wheels/opencv_contrib_python_headless-5.0.0.93-cp37-abi3-manylinux_2_28_aarch64.whl
+throttled=0xe0006

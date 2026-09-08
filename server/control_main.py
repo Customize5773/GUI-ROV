@@ -13,7 +13,7 @@ AUTONOMOUS
 
 VISI (hook)
     worker YOLO di Pi -> rov_agent.py -> telemetry -> server.js
-                      -> UDP 14603 -> control_main (CASE bertanda servo)
+                      -> UDP 14603 -> control_main (telemetri dan helper visi)
 
 Motion:
     surge, sway, yaw, heave = -1000..1000
@@ -448,7 +448,7 @@ servo_seen_hook = False
 def load_servo_config():
     """Baca ulang tuning dari yaml. Dipanggil tiap autonomous dinyalakan."""
     global servo_cfg
-    global servo_pid, mission_cfg, AUTO_STEPS
+    global servo_pid, mission_cfg
 
     mission_cfg = None
     servo_cfg = None
@@ -575,32 +575,6 @@ def load_servo_config():
 
     servo_cfg = cfg
     mission_cfg = mission
-    # >>> PENGATURAN COUNTER: nilai gerak dibaca dari control_config.yaml bagian mission.
-    # Kolom: (durasi, surge, sway, yaw, heave, gripper, target_depth, servo).
-    # Jalur ini memakai 4 sumbu; roll dan pitch belum tersedia sebagai kolom.
-    # Durasi dalam detik; command sumbu -1000..1000 (0 = netral), bukan m/s atau derajat.
-    # depth_target dalam meter; None = tidak mengirim target pada awal tahap.
-    # servo=True: surge/sway dihitung ulang oleh servo_step dari deteksi visual.
-    # Counter adalah auto_index (CASE 0..6), bukan jumlah DOF atau jumlah thruster.
-    AUTO_STEPS = [
-        # CASE 0: diam awal selama settle_s.
-        (mission["settle_s"], 0, 0, 0, 0, None, None, False),
-        # CASE 1: kirim depth_m; tunggu toleransi tercapai atau depth_wait_s habis.
-        (mission["depth_wait_s"], 0, 0, 0, 0, None, mission["depth_m"], False),
-        # CASE 2: cari target dengan surge + yaw bolak-balik; deteksi segar menuju CASE 3.
-        (mission["search_timeout_s"], mission["search_surge"], 0, mission["search_yaw"], 0, None, None, False),
-        # CASE 3: gerakan bebas sebelum servo; isi durasi dan command sumbu sendiri.
-        # Format: (detik, surge, sway, yaw, heave, gripper, depth_target, servo).
-        # Durasi 0 = langsung lanjut; isi durasi > 0 agar command dikirim selama tahap ini.
-        # Command -1000..1000; 0 = netral. Setelah durasi habis, lanjut CASE 4.
-        (0, 0, 0, 0, 0, None, None, False),
-        # CASE 4: koreksi sway visual + surge bersyarat; gate grab terpenuhi menuju CASE 5.
-        (mission["servo_timeout_s"], mission["approach_surge"], 0, 0, 0, None, None, True),
-        # CASE 5: close gripper dan tunggu; command sumbu nol.
-        (mission["gripper_hold_s"], 0, 0, 0, 0, "close", None, False),
-        # CASE 6: target naik dihitung dinamis di autonomous_control, menggunakan rise_m.
-        (mission["rise_wait_s"], 0, 0, 0, 0, None, None, False),
-    ]
     print(f"[SERVO] tuning dimuat: source={cfg['source']} "
           f"invert_sway={cfg['invert_sway']} "
           f"tol={cfg['center_tol_norm']} max_age={cfg['max_age']}s")
@@ -719,8 +693,20 @@ def servo_step(surge_step):
 # AUTONOMOUS - FULL COUNTER
 # ============================================================
 
-# Diisi dari YAML saat autonomous_reset; kolom lama tetap dipertahankan.
-AUTO_STEPS = []
+# Urutan berdasarkan durasi; edit nilai di sini lalu restart control_main.
+AUTO_STEPS = [
+    # duration, surge, sway, yaw, heave, gripper, depth
+    (3.0, 0, 0, 0, 0, None, None),
+    (2.0, 0, 0, 0, 0, None, None),
+
+    # contoh struktur command non-motion
+    (1.0, 0, 0, 0, 0, None, None),
+    (2.0, 0, 0, 0, 0, None, 1.0),
+
+    (3.0, -500, 0, 0, 0, None, None),
+
+    (1.0, 0, 0, 0, 0, None, None),
+]
 
 
 auto_index = 0
@@ -728,7 +714,6 @@ auto_step_start = 0.0
 auto_gripper_sent = False
 auto_depth_sent = False
 auto_finished = False
-auto_gripped = False
 auto_depth_target = None
 
 
@@ -738,14 +723,13 @@ def autonomous_reset():
     global auto_step_start
     global auto_gripper_sent
     global auto_depth_sent
-    global auto_finished, auto_gripped, auto_depth_target
+    global auto_finished, auto_depth_target
     global latest_hook, latest_qr_metric, last_hook_time, last_vision_receipt
 
     with hook_lock:
         latest_hook = latest_qr_metric = None
         latest_qr_xy_norm = None
         last_hook_time = last_vision_receipt = 0.0
-    auto_gripped = False
     auto_depth_target = None
     auto_index = 0
     auto_step_start = time.monotonic()
@@ -753,8 +737,8 @@ def autonomous_reset():
     auto_depth_sent = False
     auto_finished = False
 
-    # Tuning dibaca ulang di sini: operator kolam cukup mengedit yaml lalu
-    # menyalakan ulang mode autonomous, tanpa restart server.
+    # Muat ulang konfigurasi telemetri/visi. AUTO_STEPS tetap memakai literal
+    # di atas; perubahan urutan memerlukan restart proses.
     load_servo_config()
     servo_reset()
 
@@ -794,7 +778,7 @@ def enter_case(index):
 
 def autonomous_control():
     global auto_step_start, auto_gripper_sent, auto_depth_sent
-    global auto_gripped, auto_depth_target
+    global auto_depth_target
 
     # ── Kill-switch operator ──────────────────────────────────────────────
     # Di arsitektur ini stik F310 TIDAK lagi sampai ke Pi saat autonomous
@@ -821,11 +805,6 @@ def autonomous_control():
     depth_now = current_depth()
     with hook_lock:
         armed = vehicle_state.get("armed") is True
-        vision_age = time.monotonic() - last_hook_time
-        fresh_vision = latest_hook is not None and vision_age <= servo_cfg["max_age"]
-    if depth_now is None:
-        finish_auto("telemetry depth hilang; target native terakhir dipertahankan", hold_here=False)
-        return
     if not armed:
         if auto_index == 0:
             auto_step_start = time.monotonic()  # settle dihitung sesudah ARM
@@ -833,39 +812,23 @@ def autonomous_control():
         else:
             finish_auto("DISARM", hold_here=False)
         return
+    if depth_now is None:
+        finish_auto("telemetry depth hilang; target native terakhir dipertahankan", hold_here=False)
+        return
 
     if auto_index >= len(AUTO_STEPS):
         finish_auto("urutan selesai", hold_here=False)
         return
-    duration, surge, sway, yaw, heave, gripper, depth_target, servo = AUTO_STEPS[auto_index]
+    duration, surge, sway, yaw, heave, gripper, depth_target = AUTO_STEPS[auto_index]
     elapsed = time.monotonic() - auto_step_start
 
-    if auto_index == 2:
-        if elapsed >= duration:
-            finish_auto("QR TIDAK PERNAH terdeteksi: timeout pencarian")
-            return
-        if fresh_vision:
-            enter_case(3)
-            return
-        yaw *= 1 if int(elapsed / mission_cfg["search_sweep_s"]) % 2 == 0 else -1
-
-    if servo:
-        if elapsed >= duration or vision_age > mission_cfg["lost_timeout_s"]:
-            finish_auto("timeout servo / QR hilang > batas")
-            return
-        surge, sway, ready = servo_step(surge)
-        if ready:
-            enter_case(5)
-            send_command("gripper", AUTO_STEPS[5][5])
-            auto_gripper_sent = True
-            auto_gripped = True  # perintah close terkirim, bukan bukti grip fisik
-            return
-
-    if auto_index in (5, 6) and not auto_gripped:
-        finish_auto("CASE gripper/naik tanpa pemicu visual")
+    if elapsed >= duration:
+        if auto_index + 1 >= len(AUTO_STEPS):
+            finish_auto("urutan selesai; target kedalaman tetap aktif", hold_here=False)
+        else:
+            enter_case(auto_index + 1)
         return
-    if auto_index == 6 and not auto_depth_sent:
-        depth_target = max(0.0, depth_now - mission_cfg["rise_m"])
+
     if not auto_depth_sent and depth_target is not None:
         send_command("depth_apply", float(depth_target))
         auto_depth_target = float(depth_target)
@@ -875,14 +838,6 @@ def autonomous_control():
         send_command("gripper", gripper)
         auto_gripper_sent = True
 
-    # CASE 2/4 punya cabang sukses/abort sendiri; timeout tak boleh menutup capit.
-    if auto_index not in (2, 4) and (elapsed >= duration or (
-            auto_index == 1 and abs(depth_now - depth_target) < mission_cfg["depth_tol_m"])):
-        if auto_index == 6:
-            finish_auto("naik selesai; target kedalaman tetap aktif", hold_here=False)
-        else:
-            enter_case(auto_index + 1)
-        return
     send_motion(surge, sway, yaw, heave, src="fsm")
 
 

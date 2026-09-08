@@ -6,6 +6,8 @@
  */
 
 import assert from "assert";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 import {
   PILOT_MODE_MAP,
   ARDUSUB_MODE_TO_TAB,
@@ -51,6 +53,33 @@ test("depth-set kini dipasangkan ke STABILIZE, bukan ALT_HOLD", () => {
   // di sini jadi satu-satunya yang mendorong wahana ke setpoint.
   assert.strictEqual(DEPTH_HOLD_MODES.has("STABILIZE"), true);
   assert.strictEqual(DEPTH_HOLD_MODES.has("ALT_HOLD"), false);
+});
+
+test("toggle gagal kirim tidak mengubah mode; telemetri dapat memulihkan manual", () => {
+  const source = readFileSync(new URL("../../public/js/app.js", import.meta.url), "utf8");
+  const code = source.slice(source.indexOf('let controlMode = "manual";'),
+                            source.indexOf('els.btnMode.onclick ='));
+  const packets = [], logs = [];
+  let connected = false;
+  const context = vm.createContext({
+    els: { modeLabel: {textContent: "MANUAL"}, btnMode: {setAttribute() {}} },
+    state: {armed: false},
+    send: packet => { if (!connected) return false; packets.push(packet); return true; },
+    log: text => logs.push(text),
+  });
+  vm.runInContext(code, context);
+  vm.runInContext('setControlMode("autonomous")', context);
+  assert.equal(context.els.modeLabel.textContent, "MANUAL");
+  assert.equal(packets.length, 0);
+  connected = true;
+  vm.runInContext('setControlMode("autonomous")', context);
+  assert.equal(context.els.modeLabel.textContent, "AUTONOMOUS");
+  assert.equal(packets[0].name, "control_mode");
+  assert.ok(logs.some(text => text.includes("menunggu ARM")));
+  assert.ok(packets.every(packet => packet.name !== "arm"));
+  vm.runInContext('renderControlMode("manual")', context);
+  assert.equal(context.els.modeLabel.textContent, "MANUAL");
+  assert.equal(packets.length, 1, "sinkronisasi telemetri tidak mengirim command");
 });
 
 let failed = 0;

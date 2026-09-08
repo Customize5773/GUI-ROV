@@ -1,0 +1,48 @@
+MainPID=8436
+NRestarts=0
+ActiveState=active
+
+MainPID=8437
+NRestarts=0
+ActiveState=active
+
+MainPID=1062
+NRestarts=0
+ActiveState=active
+Environment=PYTHONPATH=/home/hydroships/rov-agent/vendor/qr-opencv-headless-5.0.0.93:/home/hydroships/rov-agent PYTHONUNBUFFERED=1
+Sep 08 23:56:09 hydroships2026 python[8436]: [GRIPPER] Controller initialized
+Sep 08 23:56:09 hydroships2026 python[8436]: [M5] runner siap — toggle Autonomous di GUI akan menjalankan FSM
+Sep 08 23:56:09 hydroships2026 python[8436]: [UDP] Listening command on 0.0.0.0:14550
+Sep 08 23:56:09 hydroships2026 python[8436]: [QGC] Listening MAVLink commands on UDP :14560
+Sep 08 23:56:09 hydroships2026 python[8436]: [MAV] ACK cmd=511 result=0
+Sep 08 23:56:09 hydroships2026 python[8436]: [MAV] ACK cmd=511 result=0
+Sep 08 23:56:09 hydroships2026 python[8436]: [MAV] ACK cmd=511 result=0
+Sep 08 23:56:09 hydroships2026 python[8437]: [ WARN:0@0.486] global net_impl_backend.cpp:345 setPreferableTarget Targets are not supported by the new graph engine for now
+Sep 08 23:56:09 hydroships2026 python[8437]: [qr-worker] INFO [vision] ONNX hook aktif: vision/best_new_320.onnx (conf>=0.10, imgsz=320, keypoints=0, underwater=False)
+Sep 08 23:56:10 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886570.8637648}
+Sep 08 23:56:11 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886571.4849825}
+Sep 08 23:56:12 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886572.0817814}
+Sep 08 23:56:13 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886573.1265347}
+Sep 08 23:56:14 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886574.1432378}
+Sep 08 23:56:15 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886575.1438336}
+Sep 08 23:56:16 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886576.202321}
+Sep 08 23:56:17 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886577.2470484}
+Sep 08 23:56:18 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886578.1727965}
+Sep 08 23:56:19 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886579.1662097}
+Sep 08 23:56:20 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886580.0982966}
+Sep 08 23:56:21 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886581.0461762}
+Sep 08 23:56:22 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886582.0292332}
+Sep 08 23:56:22 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886582.9389052}
+Sep 08 23:56:23 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886583.9174287}
+Sep 08 23:56:24 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886584.981396}
+Sep 08 23:56:26 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886586.0704367}
+Sep 08 23:56:26 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886586.9830086}
+Sep 08 23:56:27 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886587.9177432}
+Sep 08 23:56:28 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886588.826578}
+Sep 08 23:56:29 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886589.7462227}
+Sep 08 23:56:30 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886590.7124403}
+Sep 08 23:56:31 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886591.696328}
+Sep 08 23:56:32 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886592.8036227}
+Sep 08 23:56:34 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886594.2530503}
+Sep 08 23:56:35 hydroships2026 python[8437]: {"status":"no_detection","timestamp":1788886595.2328908}
+throttled=0xe0006

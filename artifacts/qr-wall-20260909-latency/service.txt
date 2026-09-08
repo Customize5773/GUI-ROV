@@ -1,0 +1,22 @@
+MainPID=8436
+NRestarts=0
+ActiveState=active
+
+MainPID=10163
+NRestarts=0
+ActiveState=active
+
+MainPID=1062
+NRestarts=0
+ActiveState=active
+bc2ad43e8825ab7cb49bd09479dc8e2547823888f6f101e5b0c2cd9104cd4340  /home/hydroships/rov-agent/vision/qr_gripper.py
+Sep 09 00:14:56 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887696.6445622}
+Sep 09 00:14:57 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887697.6117303}
+Sep 09 00:14:58 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887698.5157309}
+Sep 09 00:14:59 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887699.439102}
+Sep 09 00:15:00 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887700.4104867}
+Sep 09 00:15:01 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887701.363842}
+Sep 09 00:15:02 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887702.2718751}
+Sep 09 00:15:03 hydroships2026 python[10163]: {"status":"no_detection","timestamp":1788887703.2842093}
+84724
+throttled=0xe0008

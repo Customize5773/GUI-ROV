@@ -1,6 +1,6 @@
 // app.js — dashboard utama Hydroship ROV
 import { CONFIG } from "./config.js";
-import { drawGrabOverlay } from './grab-overlay.js';
+import { drawGrabOverlay, freshWallQr } from './grab-overlay.js';
 import { RovScene } from "./scene.js";
 import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, getQrState, decodeClientQr } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
@@ -462,6 +462,9 @@ function applyTelemetry(d) {
   els.depth.parentElement.classList.toggle("readout--danger", danger);
 
   if (typeof d.armed === "boolean") confirmArm(d.armed);
+  if (d.control_mode === "manual" || d.control_mode === "autonomous") {
+    renderControlMode(d.control_mode);
+  }
   if (typeof d.light === "boolean") confirmLight(d.light);
 
   // Mode pilot: satu-satunya penggerak sorotan tab adalah mode yang dilaporkan
@@ -479,6 +482,7 @@ function applyTelemetry(d) {
     syncModeTabs(d.mode, lastPosHold);
   }
 
+  wallQrTelemetry = { data: d, at: performance.now() };
   applyMission5(d.mission5);
   const autoInput = document.getElementById('autonomousInput');
   const controlOutput = document.getElementById('controlOutput');
@@ -960,6 +964,7 @@ async function scanControlQR() {
 setInterval(scanControlQR, 200);
 
 let wallGrabQr = null;
+let wallQrTelemetry = null;
 function renderGrabOverlay() {
   const canvas = document.getElementById('grabOverlayCanvas');
   if (!canvas) return;
@@ -970,7 +975,8 @@ function renderGrabOverlay() {
   if (!visible) { wallGrabQr = null; return; }
   const qr = wallGrabQr?.url === CONFIG.CAMERA_URL && performance.now()-wallGrabQr.at < 600
     ? wallGrabQr.qr : null;
-  drawGrabOverlay(canvas, els.camImg, qr, CONFIG.GRAB_PREVIEW_ROI, CONFIG.GRAB_CALIBRATION);
+  drawGrabOverlay(canvas, els.camImg, qr, CONFIG.GRAB_PREVIEW_ROI, CONFIG.GRAB_CALIBRATION,
+    freshWallQr(wallQrTelemetry?.data, (performance.now() - (wallQrTelemetry?.at ?? 0))/1000));
 }
 
 /*  WebSocket  */
@@ -1006,6 +1012,7 @@ function connect() {
   };
   ws.onclose = () => {
     linkStale = false;
+    wallQrTelemetry = null;
     setLink("off");
     /* Link putus = GUI tidak lagi punya otoritas kontrol. Kunci E-Stop dan
        netralkan axis lokal supaya saat WS tersambung lagi joystick tidak
@@ -2429,13 +2436,19 @@ els.btnMute.onclick = () => {
 
 /* ============ toggle Manual / Autonomous ============ */
 let controlMode = "manual";
+function renderControlMode(mode) {
+  controlMode = mode;
+  els.modeLabel.textContent = mode.toUpperCase();
+  els.btnMode.setAttribute("aria-pressed", String(mode === "autonomous"));
+}
 function setControlMode(mode) {
   if (controlMode === mode) return;
-  controlMode = mode;
-  els.modeLabel.textContent = controlMode.toUpperCase();
-  els.btnMode.setAttribute("aria-pressed", String(controlMode === "autonomous"));
-  sendCmd("control_mode", controlMode);
-  log(`Mode kontrol: ${controlMode.toUpperCase()}`, "ok");
+  if (!send({ type: "cmd", name: "control_mode", value: mode })) return;
+  renderControlMode(mode);
+  log(`Permintaan mode ${mode.toUpperCase()} terkirim; menunggu telemetri ROV`, "info");
+  if (mode === "autonomous" && !state.armed) {
+    log("AUTO_STEPS menunggu ARM di CASE 0; tombol mode tidak melakukan ARM", "warn");
+  }
 }
 els.btnMode.onclick = () => {
   setControlMode(controlMode === "manual" ? "autonomous" : "manual");

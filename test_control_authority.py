@@ -88,23 +88,12 @@ class TagAsalFrame(unittest.TestCase):
         self.assertEqual(self._motion()[-1]["src"], "fsm")
 
     def test_frame_autonomous_bergerak_tetap_bertag_fsm(self):
-        """CASE gerak, bukan CASE diam: justru di sinilah bug lama meledak.
-
-        Sejak servo hook disambungkan, axis yang bergerak di CASE 4 bisa sway
-        (mengoreksi lateral) ATAU surge (setelah hook di tengah) — yang dijaga
-        di sini bukan axis mana, melainkan bahwa frame non-netral apa pun tetap
-        bertag "fsm". Gerbang surge sendiri diuji di test_control_servo_hook.
-        """
+        """CASE 4 mengirim surge literal melalui jalur FSM."""
         self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
-        self.cm.auto_index = next(
-            i for i, step in enumerate(self.cm.AUTO_STEPS) if step[7])
+        self.cm.auto_index = 4
         self.cm.vehicle_state = {"depth": 1.0, "armed": True}
         self.cm.last_vehicle_time = time.monotonic()
         self.cm.auto_step_start = time.monotonic()
-
-        # Hook melenceng ke kanan -> servo menggerakkan sway.
-        self.cm.latest_hook = (640.0 * 0.75, 640.0)
-        self.cm.last_hook_time = time.monotonic()
 
         self.sent.clear()
         self.cm.autonomous_control()
