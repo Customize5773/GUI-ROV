@@ -705,12 +705,12 @@ def servo_step(surge_step):
 # Depth non-None menggunakan DEPTH DASAR GUI saat memulai urutan.
 AUTO_STEPS = [
     # duration, surge, sway, yaw, heave, gripper, depth
-    (3.0, 0, 0, 0, 0, None, None),
+    (3.0, 0, 0, 1000, 0, None, 1.0),
     (2.0, 0, 0, 0, 0, None, None),
 
     # contoh struktur command non-motion
     (1.0, 0, 0, 0, 0, None, None),
-    (2.0, 0, 0, 0, 0, None, 1.0),
+    (2.0, 0, 0, 0, 0, None, None),
 
     (3.0, -500, 0, 0, 0, None, None),
 
