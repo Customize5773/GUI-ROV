@@ -402,21 +402,33 @@
                 <span class="panel__title">MISSION 5 — DOCKING</span>
                 <span class="badge" id="mission5State">IDLE</span>
               </div>
-              <div class="readout"><span class="readout__k">CAM AKTIF</span><span class="readout__v readout__v--text" id="mission5Cam">—</span></div>
+              <div class="docking-grid">
+              <div class="readout"><span class="readout__k">KAMERA</span><span class="readout__v readout__v--text" id="mission5Cam">—</span></div>
               <div class="readout"><span class="readout__k">DISTANCE Z</span><span class="readout__v" id="mission5Z">—</span><span class="readout__u">m</span></div>
               <div class="readout"><span class="readout__k">OFFSET X</span><span class="readout__v" id="mission5OffX">—</span><span class="readout__u">px</span></div>
               <div class="readout"><span class="readout__k">OFFSET Y</span><span class="readout__v" id="mission5OffY">—</span><span class="readout__u">px</span></div>
-              <div class="readout"><span class="readout__k">SISA WAKTU HEAT</span><span class="readout__v" id="mission5TimeLeft">—</span><span class="readout__u">s</span></div>
+              <div class="readout"><span class="readout__k">SISA HEAT</span><span class="readout__v" id="mission5TimeLeft">—</span><span class="readout__u">s</span></div>
               <!-- Kenapa FSM menolak deteksi + progres latch YOLO. Bbox di overlay
                    TIDAK membuktikan FSM menerima deteksi (jalur gambarnya lain),
                    jadi dua readout inilah satu-satunya kabar dari sisi Pi. -->
               <div class="readout"><span class="readout__k">LOCK YOLO</span><span class="readout__v readout__v--text" id="mission5Lock">—</span></div>
+              </div>
               <div class="readout"><span class="readout__k">GATE TOLAK</span><span class="readout__v readout__v--text" id="mission5Reject">—</span></div>
               <div class="axes" role="group" aria-label="Gripper">
                 <span class="axis__k">Gripper</span>
                 <button class="ctrl" id="btnGripOpen" title="Buka gripper (H)"><span class="ctrl__led"></span> OPEN</button>
                 <button class="ctrl" id="btnGripClose" title="Tutup gripper (G)"><span class="ctrl__led"></span> CLOSE</button>
               </div>
+              <details class="docking-details">
+                <summary>Diagnostik kendali</summary>
+                <div class="docking-details__body">
+                  <div class="readout"><span class="readout__k">AXIS AUTO · PI</span><span class="readout__v readout__v--text" id="autonomousInput">Belum ada telemetry</span></div>
+                  <div class="readout"><span class="readout__k">KIRIM · PIXHAWK</span><span class="readout__v readout__v--text" id="controlOutput">Belum ada telemetry</span></div>
+                </div>
+              </details>
+              <details class="docking-details">
+                <summary>Trial &amp; run terakhir</summary>
+                <div class="docking-details__body">
               <!-- Counter trial Misi 2/3 (Guidebook KKI 2026 §4.7.4) — INDIKATOR
                    SAJA. Tombol "Gagal, Ulangi" dipindah ke Setup (advanced
                    setting) supaya tidak tersenggol pilot saat pegang stik. -->
@@ -429,7 +441,9 @@
               <div class="readout"><span class="readout__k">SKOR</span><span class="readout__v" id="runLastScore">—</span><span class="readout__u">/100</span></div>
               <div class="readout"><span class="readout__k">DURASI</span><span class="readout__v" id="runLastDur">—</span><span class="readout__u">s</span></div>
               <div class="readout"><span class="readout__k">QR RATE</span><span class="readout__v" id="runLastQr">—</span><span class="readout__u">%</span></div>
-              <a class="card__link" href="/api/autonomous.log">Download log autonomous terbaru</a>
+              <a class="card__link" href="/api/autonomous.log">Unduh log autonomous</a>
+                </div>
+              </details>
             </section>
 
             <!-- LIVE CAMERA -->

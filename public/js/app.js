@@ -480,6 +480,18 @@ function applyTelemetry(d) {
   }
 
   applyMission5(d.mission5);
+  const autoInput = document.getElementById('autonomousInput');
+  const controlOutput = document.getElementById('controlOutput');
+  const ai = d.autonomous_input;
+  const co = d.control_output;
+  if (autoInput) autoInput.textContent = ai?.axes
+    ? `S ${ai.axes.surge} / W ${ai.axes.sway} / H ${ai.axes.heave} / Y ${ai.axes.yaw} · ${ai.age_ms == null ? 'belum diterima' : Math.round(ai.age_ms) + ' ms'}`
+    : 'Belum ada telemetry';
+  if (controlOutput) controlOutput.textContent = co?.error
+    ? `Gagal kirim: ${co.error}`
+    : co?.manual_control
+      ? `${co.source} · ${d.fc_link !== 'ok' || co.age_ms == null || co.age_ms > 500 ? 'kiriman lama / cek link' : co.stale ? 'input basi / netral' : 'input aktif'} · x ${co.manual_control.x} / y ${co.manual_control.y} / z ${co.manual_control.z} / r ${co.manual_control.r}`
+      : 'Belum ada telemetry';
   // Worker YOLO laptop masuk sebagai d.hook_xy dan tetap aktif saat FSM idle.
   if (d.hook_xy && d.hook_xy.bbox) {
     drawHookBbox({ ...d.hook_xy, active_cam: "WALL" });
@@ -958,7 +970,7 @@ function renderGrabOverlay() {
   if (!visible) { wallGrabQr = null; return; }
   const qr = wallGrabQr?.url === CONFIG.CAMERA_URL && performance.now()-wallGrabQr.at < 600
     ? wallGrabQr.qr : null;
-  drawGrabOverlay(canvas, els.camImg, qr, CONFIG.GRAB_PREVIEW_ROI);
+  drawGrabOverlay(canvas, els.camImg, qr, CONFIG.GRAB_PREVIEW_ROI, CONFIG.GRAB_CALIBRATION);
 }
 
 /*  WebSocket  */

@@ -356,6 +356,13 @@ def accept_vision_message(msg):
         return
     value = msg.get("value")
     center = parser(value)
+    if (servo_cfg.get('frame_size') is not None and
+            (not isinstance(value, dict) or
+             [value.get('frame_w'), value.get('frame_h')] != servo_cfg['frame_size'])):
+        return
+    if (channel == 'qr_vision' and servo_cfg.get('target_data') is not None
+            and (not isinstance(value, dict) or value.get('data') != servo_cfg['target_data'])):
+        return
     try:
         age, receipt = float(msg["age"]), float(msg["received"])
         if (center is None or not math.isfinite(age) or not math.isfinite(receipt)
@@ -451,6 +458,28 @@ def load_servo_config():
             document = yaml.safe_load(f)
             cfg = document["servo_hook"]
             mission = document["mission"]
+        profile = None
+        if cfg.get('calibration_file'):
+            path = os.path.join(os.path.dirname(SERVO_CONFIG_PATH), cfg['calibration_file'])
+            with open(path, encoding='utf-8') as f:
+                profile = json.load(f)
+            if profile.get('camera') != 'WALL' or profile.get('frame_size') != [1280,720]:
+                raise ValueError('profil harus WALL 1280x720 sesuai pengukuran')
+            for key in ('target_x_norm', 'grab_roi_norm', 'close_area_frac_decoded',
+                        'close_area_frac_region', 'max_grab_area_frac', 'target_data'):
+                cfg[key] = profile[key]
+            cfg['grab_hysteresis_px'] = profile.get('grab_hysteresis_px', 0.0)
+        hysteresis = float(cfg.get('grab_hysteresis_px', 0.0))
+        if not math.isfinite(hysteresis) or not 0 <= hysteresis <= 3:
+            raise ValueError('grab_hysteresis_px harus 0..3 piksel')
+        max_area = cfg.get('max_grab_area_frac')
+        if max_area is not None:
+            max_area = float(max_area)
+            if not math.isfinite(max_area) or not 0 < max_area <= 1:
+                raise ValueError('max_grab_area_frac tidak valid')
+        target_data = cfg.get('target_data')
+        if target_data is not None and (not isinstance(target_data, str) or not target_data):
+            raise ValueError('target_data tidak valid')
 
         for key in ("settle_s", "depth_m", "depth_wait_s", "depth_tol_m",
                     "search_timeout_s", "search_yaw", "search_surge",
@@ -497,6 +526,9 @@ def load_servo_config():
                 if not math.isfinite(value) or not 0 < value <= 1:
                     raise ValueError(f"{key} harus null atau 0 < fraksi <= 1")
             thresholds[key] = value
+        if (max_area is not None and thresholds['close_area_frac_decoded'] is not None
+                and max_area <= thresholds['close_area_frac_decoded']):
+            raise ValueError('batas luas maksimum harus melebihi ambang minimum')
 
         servo_pid = PID(
             float(cfg["kp_sway"]),
@@ -519,6 +551,10 @@ def load_servo_config():
             **thresholds,
             "target_x_norm": target_x,
             "grab_roi_norm": grab_roi,
+            "max_grab_area_frac": max_area,
+            "target_data": target_data,
+            "frame_size": profile['frame_size'] if profile else None,
+            "grab_hysteresis_px": hysteresis,
             "source": source,
             "invert_sway": bool(cfg["invert_sway"]),
             "max_speed": float(cfg["max_speed"]),
@@ -535,13 +571,27 @@ def load_servo_config():
 
     servo_cfg = cfg
     mission_cfg = mission
+    # >>> PENGATURAN COUNTER: nilai gerak dibaca dari control_config.yaml bagian mission.
+    # Kolom: (durasi, surge, sway, yaw, heave, gripper, target_depth, servo).
+    # Jalur ini memakai 4 sumbu; roll dan pitch belum tersedia sebagai kolom.
+    # Durasi dalam detik; command sumbu -1000..1000 (0 = netral), bukan m/s atau derajat.
+    # depth_target dalam meter; None = tidak mengirim target pada awal tahap.
+    # servo=True: surge/sway dihitung ulang oleh servo_step dari deteksi visual.
+    # Counter adalah auto_index (CASE 0..6), bukan jumlah DOF atau jumlah thruster.
     AUTO_STEPS = [
+        # CASE 0: diam awal selama settle_s.
         (mission["settle_s"], 0, 0, 0, 0, None, None, False),
+        # CASE 1: kirim depth_m; tunggu toleransi tercapai atau depth_wait_s habis.
         (mission["depth_wait_s"], 0, 0, 0, 0, None, mission["depth_m"], False),
+        # CASE 2: cari target dengan surge + yaw bolak-balik; deteksi segar menuju CASE 4.
         (mission["search_timeout_s"], mission["search_surge"], 0, mission["search_yaw"], 0, None, None, False),
-        (0, 0, 0, 0, 0, None, None, False),  # CASE 3 cadangan; dilewati
+        # CASE 3: tahap cadangan; dilewati langsung menuju CASE 4, tanpa mengirim gerakan.
+        (0, 0, 0, 0, 0, None, None, False),
+        # CASE 4: koreksi sway visual + surge bersyarat; gate grab terpenuhi menuju CASE 5.
         (mission["servo_timeout_s"], mission["approach_surge"], 0, 0, 0, None, None, True),
+        # CASE 5: close gripper dan tunggu; command sumbu nol.
         (mission["gripper_hold_s"], 0, 0, 0, 0, "close", None, False),
+        # CASE 6: target naik dihitung dinamis di autonomous_control, menggunakan rise_m.
         (mission["rise_wait_s"], 0, 0, 0, 0, None, None, False),
     ]
     print(f"[SERVO] tuning dimuat: source={cfg['source']} "
@@ -622,8 +672,18 @@ def servo_step(surge_step):
     roi = servo_cfg['grab_roi_norm']
     in_grab = (roi is not None and xy is not None
                and roi[0] <= xy[0] <= roi[2] and roi[1] <= xy[1] <= roi[3])
-    close_ready = (di_tengah and in_grab and threshold is not None
-                   and metric[1] > threshold)
+    # Enter only inside the calibrated rectangle. Once collecting frames,
+    # tolerate subpixel boundary noise, but close only back inside it.
+    keep_grab = in_grab
+    size = servo_cfg.get('frame_size')
+    if servo_hits > 0 and roi is not None and xy is not None and size:
+        hx, hy = (servo_cfg['grab_hysteresis_px'] / side for side in size)
+        keep_grab = (roi[0]-hx <= xy[0] <= roi[2]+hx
+                     and roi[1]-hy <= xy[1] <= roi[3]+hy)
+    close_ready = (di_tengah and keep_grab and threshold is not None
+                   and metric[1] > threshold
+                   and (servo_cfg.get('max_grab_area_frac') is None
+                        or metric[1] <= servo_cfg['max_grab_area_frac']))
     # _tally normal punya peluruhan; capit butuh N tick BERUNTUN.
     if not close_ready:
         servo_hits = 0
@@ -639,9 +699,13 @@ def servo_step(surge_step):
     # menyentak rangka, dan sentakan itu jatuh persis saat ROV paling dekat hook.
     servo_surge_out = _slew_limit(
         servo_surge_out, float(surge_step) if di_tengah else 0.0, slew_axis, dt)
+    # Jangan melewati payload saat menunggu 10 frame baru pada worker 4 FPS.
+    if close_ready or (metric is not None and servo_cfg.get('max_grab_area_frac') is not None
+                       and metric[1] > servo_cfg['max_grab_area_frac']):
+        servo_surge_out = 0.0
 
     return (clamp(servo_surge_out), sway,
-            servo_hits >= servo_cfg["centered_ticks"])
+            in_grab and servo_hits >= servo_cfg["centered_ticks"])
 
 
 # ============================================================

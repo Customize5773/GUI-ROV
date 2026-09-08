@@ -56,3 +56,11 @@ def test_quad_from_bbox_urutan_sudut():
     from tools.qr_vision_worker import _quad_from_bbox
 
     assert _quad_from_bbox((10, 20, 30, 40)) == [[10, 20], [40, 20], [40, 60], [10, 60]]
+
+
+def test_camera_role_wall_default_and_bottom_override(monkeypatch):
+    from tools.qr_vision_worker import build_arg_parser
+    monkeypatch.delenv('QR_CAMERA_ROLE', raising=False)
+    argv = ['--camera', 'http://localhost:8080/stream', '--model', 'x']
+    assert build_arg_parser().parse_args(argv).camera_role == 'WALL'
+    assert build_arg_parser().parse_args(argv + ['--camera-role', 'BOTTOM']).camera_role == 'BOTTOM'

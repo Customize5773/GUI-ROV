@@ -473,10 +473,10 @@ class TestWiringDiRovAgent(unittest.TestCase):
         # Langkah 1-2 = CASE MOTION; FSM mengambil alih dari langkah 3.
         self.assertIn('os.environ.get("M5_START_STATE", "M5_YOLO_SEARCH")', self.src)
 
-    def test_toggle_autonomous_me_zero_kan_heading_sebelum_runner_start(self):
+    def test_toggle_autonomous_me_zero_kan_heading_sebelum_mode_aktif(self):
         branch = self.src.index('if requested == "autonomous":')
         zero = self.src.index('state["heading"] = 0.0', branch)
-        start = self.src.index('mission5_runner.start()', zero)
+        start = self.src.index('current_control_mode = "autonomous"', zero)
         self.assertLess(zero, start)
         self.assertIn('state["heading_compass"] = yaw_f', self.src)
         main_fn = next(node for node in self.tree.body
@@ -506,23 +506,24 @@ class TestWiringDiRovAgent(unittest.TestCase):
     def test_qr_docking_memakai_kamera_bottom_dekat_gripper(self):
         with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
             bridge = fh.read()
-        # True = CASE (langkah 1-2) lalu rantai ke FSM (langkah 3-8) — jalur lomba.
-        self.assertIn('CUSTOM_MOTION_ENABLED = True', bridge)
+        # Bridge legacy tetap BOTTOM; toggle Autonomous memakai control_main.
+        self.assertIn('CUSTOM_MOTION_ENABLED = False', bridge)
         self.assertIn('qr_url=cfg.get("bottom_url")', bridge)
         self.assertIn('hook_url=None', bridge)
         self.assertIn('calib_file=cfg.get("calib_bottom")', bridge)
 
-    def test_yolo_laptop_diteruskan_ke_pi_dengan_watchdog(self):
+    def test_yolo_pi_diteruskan_ke_control_main_dengan_watchdog(self):
         with open("server/server.js", encoding="utf-8") as fh:
             server = fh.read()
         with open("rov_mission5_bridge.py", encoding="utf-8") as fh:
             bridge = fh.read()
         with open("autonomy/tools/hook_vision_worker.py", encoding="utf-8") as fh:
             worker = fh.read()
-        self.assertIn('name: "hook_vision"', server)
+        self.assertIn('["hook_vision", data.hook_xy', server)
         self.assertIn('process.platform === "win32" ? "python" : "python3"', server)
         self.assertIn('elif name == "hook_vision"', self.src)
-        self.assertIn('time.monotonic() - latest_hook_vision_received <= 1.0', self.src)
+        self.assertIn('hook_age <= HOOK_VISION_MAX_AGE', self.src)
+        self.assertIn('HOOK_VISION_MAX_AGE = 1.0', self.src)
         self.assertIn("'frame_w': detection.get('frame_w')", worker)
         self.assertIn('hook_enabled=False', bridge,
                       "Pi tidak boleh menjalankan detector hook lokal saat YOLO berasal dari laptop")
@@ -532,7 +533,10 @@ class TestWiringDiRovAgent(unittest.TestCase):
     def test_validasi_yolo_menolak_bbox_di_luar_frame(self):
         node = next(n for n in self.tree.body
                     if isinstance(n, ast.FunctionDef) and n.name == "_validate_hook_vision")
-        scope = {"math": math}
+        scope = {"math": math, "last_vision_reject": {"hook": None}}
+        reject = next(n for n in self.tree.body
+                      if isinstance(n, ast.FunctionDef) and n.name == '_reject_vision')
+        exec(compile(ast.Module(body=[reject], type_ignores=[]), 'rov_agent.py', 'exec'), scope)
         exec(compile(ast.Module(body=[node], type_ignores=[]), "rov_agent.py", "exec"), scope)
         validate = scope["_validate_hook_vision"]
         valid = {"status": "relative_only", "method": "yolov8", "confidence": 0.9,

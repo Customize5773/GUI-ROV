@@ -376,6 +376,7 @@ class GateSurge(_ServoBase):
 
     def test_surge_terbuka_setelah_di_tengah(self):
         self.lihat_hook(0.0)
+        self.cm.latest_qr_metric = ('qr_vision', 0.05)  # centered but still far
 
         for _ in range(20):
             surge, _sway, _ = self.tick()
@@ -391,6 +392,7 @@ class GateSurge(_ServoBase):
     def test_kehilangan_deteksi_menutup_surge_lagi(self):
         """Acuan basi menghentikan seluruh gerak seketika."""
         self.lihat_hook(0.0)
+        self.cm.latest_qr_metric = ('qr_vision', 0.05)
         for _ in range(20):
             self.tick()
 
@@ -711,6 +713,16 @@ class UrutanMisi(_ServoBase):
 
 
 class GrabAreaXY(_ServoBase):
+    def test_stop_surge_while_collecting_grab_frames(self):
+        self.frame()
+        self.assertEqual(self.tick()[0], 0)
+
+    def test_too_close_never_grabs_or_advances(self):
+        self.cm.servo_cfg['max_grab_area_frac'] = .12
+        for _ in range(5):
+            self.assertFalse(self.frame())
+            self.assertEqual(self.tick()[0], 0)
+
     def frame(self, x=.5, y=.5):
         self.lihat_hook(2*x-1)
         self.cm.latest_qr_xy_norm = (x, y)
