@@ -407,7 +407,7 @@ class UrutanCounter(_ServoBase):
     def tick(self, dt=0.0, depth=0.0, armed=True):
         self.now += dt
         self.cm.accept_vision_message({"type": "vehicle_state",
-                                      "value": {"depth": depth, "armed": armed}})
+                                      "value": {"depth": depth, "armed": armed, "heading": 0.0, "control_mode": "autonomous"}})
         self.cm.autonomous_control()
 
     def commands(self, name):
@@ -422,13 +422,18 @@ class UrutanCounter(_ServoBase):
             source.write("AUTO_STEPS = [(2, -100, 0, 0, 0, None, 1.0)]")
             source.flush()
             self.assertEqual(self.cm.read_auto_steps(source.name, .5)[0],
-                             (2, -100, 0, 0, 0, None, .5))
+                             (2, -100, 0, 0, 0, None, 1.0))
             source.seek(0)
             source.truncate()
             source.write("AUTO_STEPS = [(4, -300, 0, 0, 0, None, None)]")
             source.flush()
             self.assertEqual(self.cm.read_auto_steps(source.name, .7)[0],
-                             (4, -300, 0, 0, 0, None, None))
+                             (4, -300, 0, 0, 0, None, .7))
+            source.seek(0)
+            source.truncate()
+            source.write("AUTO_STEPS = [(2, 0, 0, 0, 0, None, 0.0)]")
+            source.flush()
+            self.assertEqual(self.cm.read_auto_steps(source.name, .7)[0][6], 0.0)
             for invalid in ["[(1, 2000, 0, 0, 0, None, None)]", "[]", "make_steps()"]:
                 source.seek(0)
                 source.truncate()
@@ -436,6 +441,41 @@ class UrutanCounter(_ServoBase):
                 source.flush()
                 with self.assertRaises(ValueError):
                     self.cm.read_auto_steps(source.name, .5)
+
+    def test_depth_kode_prioritas_dan_none_kembali_ke_gui(self):
+        self.cm.set_mode("manual")
+        self.cm.set_mode("autonomous", .5)
+        self.sent.clear()
+        self.assertEqual([step[6] for step in self.cm.AUTO_STEPS],
+                         [.5, .5, .5, 1.0, .5, .5])
+        for duration in [3, 2, 1, 2, 3, 1]:
+            self.tick()
+            self.tick(duration + .01)
+        self.assertEqual(self.commands("depth_apply"), [.5, 1.0, .5])
+
+    def test_yaw_target_derajat_dan_wrap(self):
+        self.cm.AUTO_STEPS[0] = (3, 0, 0, 10, 0, None, None)
+        self.tick()
+        self.assertEqual(self.sent[-1]["yaw"], 60)
+        self.cm.vehicle_state["heading"] = 350
+        self.cm.autonomous_control()
+        self.assertEqual(self.sent[-1]["yaw"], 120)
+        self.cm.vehicle_state["heading"] = 10
+        self.cm.autonomous_control()
+        self.assertEqual(self.sent[-1]["yaw"], 0)
+        self.cm.vehicle_state["heading"] = float("nan")
+        self.cm.autonomous_control()
+        self.assertTrue(self.cm.auto_finished)
+        self.assert_neutral()
+
+    def test_menunggu_mode_pi_sebelum_koreksi_heading(self):
+        self.cm.vehicle_state = {"armed": True, "depth": .5,
+                                 "heading": 180, "control_mode": "manual"}
+        self.cm.last_vehicle_time = self.now
+        self.cm.autonomous_control()
+        self.assertFalse(self.cm.auto_finished)
+        self.assert_neutral()
+        self.assertEqual(self.commands("depth_apply"), [])
 
     def test_enam_langkah_persis_dan_tidak_ditimpa_reset(self):
         expected = [(3.0, 0, 0, 0, 0, None, None),
@@ -496,10 +536,10 @@ class UrutanCounter(_ServoBase):
         self.assert_neutral()
 
     def test_gripper_non_motion_hanya_sekali(self):
-        self.cm.AUTO_STEPS = [(1.0, 0, 0, 0, 0, "open", None)]
+        self.cm.AUTO_STEPS = [(1.0, 0, 0, 0, 0, 1580, None)]
         self.tick()
         self.tick(0.5)
-        self.assertEqual(self.commands("gripper"), ["open"])
+        self.assertEqual(self.commands("gripper_pwm"), [1580])
 
 
 class GrabAreaXY(_ServoBase):

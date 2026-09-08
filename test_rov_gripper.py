@@ -16,6 +16,22 @@ from gripper_controller import (
 )
 
 
+class TestDirectPwm(unittest.TestCase):
+    def test_target_pwm_valid_dan_penolakan_nilai_tidak_aman(self):
+        from unittest.mock import Mock
+        from gripper_controller import GripperController
+        controller = GripperController.__new__(GripperController)
+        controller._set_target = Mock()
+        for pwm in (1350, 1450, 1500, 1580):
+            controller.set_pwm(pwm)
+            controller._set_target.assert_called_with(pwm)
+        controller._set_target.reset_mock()
+        for invalid in (0, 1349, 1581, True, "close", float("nan"), float("inf")):
+            with self.assertRaises(ValueError):
+                controller.set_pwm(invalid)
+        controller._set_target.assert_not_called()
+
+
 class TestGripperValueToPwm(unittest.TestCase):
     def test_string_open_close(self):
         self.assertEqual(gripper_value_to_pwm("close"), GRIPPER_PWM_CLOSE)

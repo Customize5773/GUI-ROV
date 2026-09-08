@@ -25,7 +25,7 @@ vm.runInNewContext(source.slice(start, end), {
 const decoded = { center: [320, 240], area: 20000, frame_w: 640, frame_h: 480, data: 'QR1' };
 const region = { center: [321, 240], area: 40000, frame_w: 640, frame_h: 480 };
 const data = {
-  armed: true, depth: 0.93, qr_vision: decoded, qr_region: region,
+  armed: true, depth: 0.93, heading: 15, control_mode: "autonomous", qr_vision: decoded, qr_region: region,
   vision_receipts: {
     qr_vision: { received: 100, age: 0.4 },
     qr_region: { received: 100.3, age: 0.1 },
@@ -35,7 +35,7 @@ handler(Buffer.from(JSON.stringify(data)), {});
 assert.deepEqual(packets, [
   { type: 'qr_vision', value: decoded, received: 100, age: 0.4 },
   { type: 'qr_region', value: region, received: 100.3, age: 0.1 },
-  { type: 'vehicle_state', value: { depth: 0.93, armed: true } },
+  { type: 'vehicle_state', value: { depth: 0.93, armed: true, heading: 15, control_mode: "autonomous" } },
 ]);
 packets.length = 0;
 data.vision_receipts.qr_vision.age = 2.5;

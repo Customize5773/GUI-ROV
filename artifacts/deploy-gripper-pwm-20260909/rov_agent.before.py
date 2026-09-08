@@ -1635,12 +1635,6 @@ def command_listener():
                         print("[MAVSTREAM] off")
                     mavlink_stream_requested_at = None
 
-            elif name == "gripper_pwm":
-                if gripper is None:
-                    print("[GRIPPER] Controller belum siap")
-                    continue
-                gripper.set_pwm(value)
-
             elif name == "gripper":
 
                 if gripper is None:

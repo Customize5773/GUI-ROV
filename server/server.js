@@ -1034,6 +1034,7 @@ controlMainUdp.on("message", (buf, rinfo) => {
 
         if (
             msg.name === "gripper" ||
+            msg.name === "gripper_pwm" ||
             msg.name === "depth_apply" ||
             // Abort stik F310: control_main sudah pindah ke MANUAL, Pi harus
             // ikut — kalau tidak, Pi tetap mengira dirinya autonomous.
@@ -1180,7 +1181,7 @@ udp.on("message", (buf, rinfo) => {
 
   controlModeUdp.send(Buffer.from(JSON.stringify({
     type: "vehicle_state",
-    value: { depth: data.depth, armed: data.armed },
+    value: { depth: data.depth, armed: data.armed, heading: data.heading, control_mode: data.control_mode },
   })), CONTROL_HOOK_PORT, "127.0.0.1", (err) => {
     if (err && DEBUG) console.error("[STATE -> control_main] gagal:", err.message);
   });
