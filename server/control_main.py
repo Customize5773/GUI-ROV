@@ -45,6 +45,9 @@ sys.path.insert(
                  "autonomy"),
 )
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from rov_heading import heading_bias
+
 try:
     import yaml
     from control.visual_servo import PID, _slew_limit, _tally
@@ -701,8 +704,7 @@ def servo_step(surge_step):
 # AUTONOMOUS - FULL COUNTER
 # ============================================================
 
-# Dibaca ulang dari file setiap toggle AUTONOMOUS; simpan tanpa restart server.
-# Depth non-None menggunakan DEPTH DASAR GUI saat memulai urutan.
+# Depth angka di kode diprioritaskan; None memakai DEPTH DASAR GUI.
 AUTO_STEPS = [
     # duration, surge, sway, yaw, heave, gripper, depth
     (3.0, 0, 0, 1000, 0, None, 1.0),
@@ -737,13 +739,16 @@ def read_auto_steps(path, depth_dasar=None):
     for step in steps:
         if not isinstance(step, (tuple, list)) or len(step) != 7:
             raise ValueError("setiap langkah harus tujuh kolom")
-        duration, *axes, gripper, depth = step
+        duration, surge, sway, yaw_deg, heave, gripper, depth = step
+        axes = (surge, sway, heave)
         if (not number(duration) or duration < 0
                 or any(not number(v) or abs(v) > 1000 for v in axes)
-                or gripper not in (None, "open", "close")
+                or not number(yaw_deg) or not -360 <= yaw_deg <= 360
+                or (gripper is not None and (not number(gripper)
+                    or not 1350 <= gripper <= 1580))
                 or (depth is not None and (not number(depth) or depth < 0))):
             raise ValueError("nilai AUTO_STEPS tidak valid")
-        result.append((*step[:6], depth_dasar if depth is not None and depth_dasar is not None else depth))
+        result.append((*step[:6], depth if depth is not None else depth_dasar))
     return result
 
 
@@ -843,6 +848,8 @@ def autonomous_control():
     depth_now = current_depth()
     with hook_lock:
         armed = vehicle_state.get("armed") is True
+        heading = vehicle_state.get("heading")
+        rov_autonomous = vehicle_state.get("control_mode") == MODE_AUTONOMOUS
     if not armed:
         if auto_index == 0:
             auto_step_start = time.monotonic()  # settle dihitung sesudah ARM
@@ -854,10 +861,22 @@ def autonomous_control():
         finish_auto("telemetry depth hilang; target native terakhir dipertahankan", hold_here=False)
         return
 
+    # Tunggu konfirmasi mode Pi: heading relatif direset di sana saat toggle.
+    if not rov_autonomous:
+        if auto_index == 0:
+            auto_step_start = time.monotonic()
+            send_motion(0, 0, 0, 0, src="fsm")
+        else:
+            finish_auto("otoritas autonomous Pi hilang", hold_here=False)
+        return
+    if (type(heading) not in (int, float) or not math.isfinite(heading)):
+        finish_auto("telemetri heading tidak valid", hold_here=False)
+        return
+
     if auto_index >= len(AUTO_STEPS):
         finish_auto("urutan selesai", hold_here=False)
         return
-    duration, surge, sway, yaw, heave, gripper, depth_target = AUTO_STEPS[auto_index]
+    duration, surge, sway, yaw_deg, heave, gripper, depth_target = AUTO_STEPS[auto_index]
     elapsed = time.monotonic() - auto_step_start
 
     if elapsed >= duration:
@@ -868,14 +887,16 @@ def autonomous_control():
         return
 
     if not auto_depth_sent and depth_target is not None:
-        send_command("depth_apply", float(depth_target))
+        if auto_depth_target != float(depth_target):
+            send_command("depth_apply", float(depth_target))
         auto_depth_target = float(depth_target)
         auto_depth_sent = True
     if not auto_gripper_sent and gripper is not None:
         send_motion(0, 0, 0, 0, src="fsm")
-        send_command("gripper", gripper)
+        send_command("gripper_pwm", gripper)
         auto_gripper_sent = True
 
+    yaw = heading_bias(yaw_deg, heading)
     send_motion(surge, sway, yaw, heave, src="fsm")
 
 

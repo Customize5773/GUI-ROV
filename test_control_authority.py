@@ -91,7 +91,7 @@ class TagAsalFrame(unittest.TestCase):
         """CASE 4 mengirim surge literal melalui jalur FSM."""
         self.cm.set_mode(self.cm.MODE_AUTONOMOUS)
         self.cm.auto_index = 4
-        self.cm.vehicle_state = {"depth": 1.0, "armed": True}
+        self.cm.vehicle_state = {"depth": 1.0, "armed": True, "heading": 0.0, "control_mode": "autonomous"}
         self.cm.last_vehicle_time = time.monotonic()
         self.cm.auto_step_start = time.monotonic()
 
