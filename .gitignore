@@ -161,3 +161,4 @@ logs
 # systemd default di Pi.
 autonomy/vision/*_320.onnx
 autonomy/vision/*_416.onnx
+Hookv3.v1i.yolov8.zip
