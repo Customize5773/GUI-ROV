@@ -705,29 +705,48 @@ def servo_step(surge_step):
 # ============================================================
 
 # Depth angka di kode diprioritaskan; None memakai DEPTH DASAR GUI.
+depth_auto = 1.0  # Target kedalaman autonomous (meter).
 AUTO_STEPS = [
     # duration, surge, sway, yaw, heave, gripper, depth
-    (3.0, 0, 0, 1000, 0, None, 1.0),
-    (2.0, 0, 0, 0, 0, None, None),
-
+    (3.0, 400, 600, 0, 0, None, depth_auto), # maju
+    (1.0, 0, 0, 90, 0, None, depth_auto), # putar kanan  
     # contoh struktur command non-motion
-    (1.0, 0, 0, 0, 0, None, None),
-    (2.0, 0, 0, 0, 0, None, None),
-
-    (3.0, -500, 0, 0, 0, None, None),
-
-    (1.0, 0, 0, 0, 0, None, None),
+    (6.0, 0, 0, 180, 0, None, depth_auto), # putar balik
+    (10.0, 0, -800, 180, 0, None, depth_auto), # bergerak ke kiri (sway) , waktu (paling kiri) disesuaikan
+    
+    (2.0, 0, 0, 180, 0, 1580, depth_auto), # buka gripper
+    (6.0, 250, 0, 180, 0, 1580, depth_auto), # maju ke hook
+    (2.0, 150, 0, 180, 0, 1500, depth_auto), # hold gripper
+    (4.0, 0, 0, 180, 0, 1350, depth_auto), # tutup gripper
+    (4.0, -400, 0, 180, 0, 1350, 0.0), # mundur, depth 0.0 = naik ke permukaan
+    (4.0, 400, 0, 180, 0, 1350, 0.0), # maju / last motion
+    (4.0, 0, 0, 180, 0, 1350, 0.0), # finish
+    
 ]
 
 
 def read_auto_steps(path, depth_dasar=None):
-    """Baca tuple literal saja; perubahan kode lain tidak dieksekusi ulang."""
+    """Baca literal dan referensi depth_auto tanpa mengeksekusi kode lain."""
     with open(path, encoding="utf-8") as source:
         tree = ast.parse(source.read())
     values = [node.value for node in tree.body if isinstance(node, ast.Assign)
               and any(isinstance(t, ast.Name) and t.id == "AUTO_STEPS" for t in node.targets)]
     if len(values) != 1:
         raise ValueError("AUTO_STEPS harus satu daftar literal")
+    for step_node in ast.walk(values[0]):
+        if not isinstance(step_node, (ast.Tuple, ast.List)) or len(step_node.elts) != 7:
+            continue
+        node = step_node.elts[6]
+        if isinstance(node, ast.Name) and node.id == "depth_auto":
+            depths = [item.value for item in tree.body if isinstance(item, ast.Assign)
+                      and any(isinstance(t, ast.Name) and t.id == "depth_auto"
+                              for t in item.targets)]
+            if len(depths) != 1:
+                raise ValueError("depth_auto harus satu angka literal")
+            depth_value = ast.literal_eval(depths[0])
+            if type(depth_value) not in (int, float) or not math.isfinite(depth_value) or depth_value < 0:
+                raise ValueError("depth_auto tidak valid")
+            step_node.elts[6] = ast.Constant(value=depth_value)
     steps = ast.literal_eval(values[0])
     def number(value):
         return type(value) in (int, float) and math.isfinite(value)

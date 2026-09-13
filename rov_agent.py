@@ -2428,11 +2428,11 @@ def connect_pixhawk():
     gripper = GripperController(master)
     print("[GRIPPER] Controller initialized")
 
-    # Runner FSM misi 5. Gagal-lunak: kalau paket autonomy/opencv belum ada di
-    # Pi, ini mencetak alasannya dan mengembalikan None — agent tetap jalan
-    # penuh untuk kontrol manual, cuma toggle Autonomous yang tidak berefek.
+    # Runner FSM misi 5 HANYA untuk telemetri/visualisasi GUI. Gerak autonomous
+    # datang dari full counter control_main.py (axis src="fsm"); runner ini
+    # tidak pernah di-start. Gagal-lunak: None = tak ada visualisasi FSM.
     if setup_mission5_runner() is not None:
-        print("[M5] runner siap — toggle Autonomous di GUI akan menjalankan FSM")
+        print("[M5] runner siap (visualisasi saja) — gerak autonomous = full counter control_main")
 
     # Minta stream data secara periodik
     try:

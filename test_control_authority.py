@@ -33,6 +33,8 @@ def _load_control_main():
     spec = importlib.util.spec_from_file_location("control_main_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # set_mode membaca AUTO_STEPS dari __file__; arahkan ke tabel uji.
+    module.__file__ = os.path.join(ROOT, "auto_steps_fixture.py")
     return module
 
 

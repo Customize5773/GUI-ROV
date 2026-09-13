@@ -60,6 +60,8 @@ def _load_control_main():
     spec = importlib.util.spec_from_file_location("control_main_servo_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # set_mode membaca AUTO_STEPS dari __file__; arahkan ke tabel uji.
+    module.__file__ = os.path.join(ROOT, "auto_steps_fixture.py")
     return module
 
 
@@ -417,30 +419,44 @@ class UrutanCounter(_ServoBase):
     def assert_neutral(self):
         self.assertEqual([self.sent[-1][a] for a in self.cm.AXES], [0] * 4)
 
+    def test_tabel_misi_asli_valid(self):
+        """Tabel di control_main.py sendiri harus lolos validator, atau
+        autonomous menolak mulai di kolam."""
+        self.cm.read_auto_steps(
+            os.path.join(ROOT, "server", "control_main.py"), .5)
+
     def test_reload_literal_dan_depth_gui(self):
-        with tempfile.NamedTemporaryFile("w+", suffix=".py") as source:
-            source.write("AUTO_STEPS = [(2, -100, 0, 0, 0, None, 1.0)]")
-            source.flush()
-            self.assertEqual(self.cm.read_auto_steps(source.name, .5)[0],
+        # File ditulis lalu ditutup tiap kali: Windows tak bisa membuka ulang
+        # NamedTemporaryFile yang masih terbuka.
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "steps.py")
+
+            def read(literal, depth):
+                with open(path, "w", encoding="utf-8") as source:
+                    source.write("AUTO_STEPS = " + literal)
+                return self.cm.read_auto_steps(path, depth)
+
+            self.assertEqual(read("[(2, -100, 0, 0, 0, None, 1.0)]", .5)[0],
                              (2, -100, 0, 0, 0, None, 1.0))
-            source.seek(0)
-            source.truncate()
-            source.write("AUTO_STEPS = [(4, -300, 0, 0, 0, None, None)]")
-            source.flush()
-            self.assertEqual(self.cm.read_auto_steps(source.name, .7)[0],
+            self.assertEqual(read("[(4, -300, 0, 0, 0, None, None)]", .7)[0],
                              (4, -300, 0, 0, 0, None, .7))
-            source.seek(0)
-            source.truncate()
-            source.write("AUTO_STEPS = [(2, 0, 0, 0, 0, None, 0.0)]")
-            source.flush()
-            self.assertEqual(self.cm.read_auto_steps(source.name, .7)[0][6], 0.0)
+            self.assertEqual(read("[(2, 0, 0, 0, 0, None, 0.0)]", .7)[0][6], 0.0)
             for invalid in ["[(1, 2000, 0, 0, 0, None, None)]", "[]", "make_steps()"]:
-                source.seek(0)
-                source.truncate()
-                source.write("AUTO_STEPS = " + invalid)
-                source.flush()
                 with self.assertRaises(ValueError):
-                    self.cm.read_auto_steps(source.name, .5)
+                    read(invalid, .5)
+
+    def test_reload_depth_auto(self):
+        with tempfile.TemporaryDirectory() as folder:
+            path = os.path.join(folder, "steps.py")
+            for value in ["1.0", "0.7", "-1", "True", "float('nan')"]:
+                with open(path, "w", encoding="utf-8") as source:
+                    source.write("depth_auto = " + value + "\n"
+                                 "AUTO_STEPS = [(1, 0, 0, 0, 0, None, depth_auto)]\n")
+                if value in ["1.0", "0.7"]:
+                    self.assertEqual(self.cm.read_auto_steps(path, .5)[0][6], float(value))
+                else:
+                    with self.assertRaises(ValueError):
+                        self.cm.read_auto_steps(path, .5)
 
     def test_depth_kode_prioritas_dan_none_kembali_ke_gui(self):
         self.cm.set_mode("manual")
