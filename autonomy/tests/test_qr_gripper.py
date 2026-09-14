@@ -76,8 +76,22 @@ def test_live_failed_frame_never_enters_exhaustive_decode(monkeypatch):
     detection, decoded = detect_gripper_qr(Detector(.8), np.zeros((720,1280,3),np.uint8), live=True)
     assert not decoded
     assert detection['confidence'] == .8
-    assert len(calls) == 9  # raw ROI + six candidate passes + stretch + upscale
+    assert len(calls) == 13  # seven cheap ROI passes before YOLO + six candidate passes
     assert max(max(s) for s in calls) <= 1280
+
+
+def test_live_cheap_qr_touching_roi_edge_falls_through_to_yolo(monkeypatch):
+    # Rekaman 1789422820867 t=125.456: pass 2x menemukan QR yang menyentuh tepi
+    # bawah ROI; dulu frame ditolak total padahal YOLO membacanya.
+    monkeypatch.setattr('vision.qr_detect.ZXING_OK', True)
+    edge = np.float32([[400,434],[488,434],[488,504],[400,504]])
+    monkeypatch.setattr('vision.qr_detect._zxing_qr', lambda image, scale=1:
+                        [dict(data='C', pts=edge)] if scale == 2 else [])
+    inner = np.float32([[110,110],[170,110],[170,170],[110,170]])
+    monkeypatch.setattr('vision.qr_gripper._decode_wechat_candidate', lambda *a:
+                        [dict(data='C', pts=inner)])
+    detection, decoded = detect_gripper_qr(Detector(.8), np.zeros((720,1280,3),np.uint8), live=True)
+    assert detection['method'] == 'yolo_qr' and decoded[0]['data'] == 'C'
 
 
 def test_live_requires_fast_decoder(monkeypatch):

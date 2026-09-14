@@ -135,6 +135,44 @@ def _detect_yolo_gripper_qr(detector, frame, roi=DEFAULT_ROI, region_conf=0.6, l
     return detection, decoded
 
 
+def _cheap_zxing_passes(crop, gray, cv2, zxing_qr, stretch):
+    """Tujuh pass ZXing terbatas (sisi <=1280 px); berhenti di hasil pertama.
+
+    Urutan = frekuensi menang terukur: luma mentah, stretch, stretch 2x, lalu
+    kanal L (LAB) dan G (hijau, paling kuat bawah air) pada 1x dan 2x.
+    QR yang titiknya keluar dari crop (menempel tepi ROI) diabaikan di sini,
+    supaya frame itu tetap lanjut ke YOLO alih-alih ditolak validasi akhir.
+    """
+    import numpy as np
+    h, w = gray.shape[:2]
+
+    def inside(item):
+        pts = np.asarray(item.get('pts'), dtype=np.float32)
+        return (pts.shape == (4, 2) and np.isfinite(pts).all() and (pts >= 0).all()
+                and (pts[:, 0] < w).all() and (pts[:, 1] < h).all())
+
+    s = stretch(gray)
+    scale = min(2.0, 1280.0 / max(gray.shape))
+
+    def big(image):
+        return cv2.resize(image, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+
+    passes = [lambda: zxing_qr(gray), lambda: zxing_qr(s)]
+    if scale > 1:
+        passes.append(lambda: zxing_qr(big(s), scale))
+    if crop.ndim == 3:
+        lum = stretch(cv2.cvtColor(crop, cv2.COLOR_BGR2LAB)[:, :, 0])
+        green = stretch(crop[:, :, 1])
+        passes += [lambda: zxing_qr(lum), lambda: zxing_qr(green)]
+        if scale > 1:
+            passes += [lambda: zxing_qr(big(lum), scale), lambda: zxing_qr(big(green), scale)]
+    for run in passes:
+        found = [item for item in run() if inside(item)]
+        if found:
+            return found
+    return []
+
+
 def detect_gripper_qr(detector, frame, roi=DEFAULT_ROI, region_conf=0.6, live=False):
     """Fast verified decode, YOLO, then full ROI decode for missed proposals.
 
@@ -151,10 +189,15 @@ def detect_gripper_qr(detector, frame, roi=DEFAULT_ROI, region_conf=0.6, live=Fa
     if x2 <= x1 or y2 <= y1:
         return None, []
     crop = frame[y1:y2, x1:x2]
-    # One cheap checksum/quiet-zone-verified pass avoids paying YOLO and its
-    # failed decode cascade for a plainly readable QR on Raspberry Pi.
     gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if crop.ndim == 3 else crop
-    candidates = _zxing_qr(gray) if ZXING_OK else []
+    if live:
+        # ZXing murah SEBELUM YOLO. Rekaman hydroship_record_1789422820867.webm:
+        # 191/193 QR yang terbaca produksi sudah terbaca tahap ini, tapi ~90
+        # di antaranya dulu menunggu YOLO (~530 ms di Pi) lebih dulu. Kanal L/G
+        # memulihkan 13 dari 66 miss. Total beban tetap (7 pass ZXing).
+        candidates = _cheap_zxing_passes(crop, gray, cv2, _zxing_qr, _stretch)
+    else:
+        candidates = _zxing_qr(gray) if ZXING_OK else []
     detection = None
     if not candidates:
         detection, decoded = _detect_yolo_gripper_qr(detector, frame, roi, region_conf, live=live)
@@ -165,15 +208,8 @@ def detect_gripper_qr(detector, frame, roi=DEFAULT_ROI, region_conf=0.6, live=Fa
             return detection, decoded
         # Live control has a fixed, short decode workload. Exhaustive recovery
         # can take seconds on a failed frame and starve fresh vision updates.
-        candidates = (_zxing_qr(_stretch(gray)) if live else decode_qr(crop)) or []
-        if live and not candidates:
-            # Recover small QR missed by YOLO at native resolution. Keep the
-            # extra pass bounded, with points restored to original ROI pixels.
-            scale = min(2.0, 1280.0 / max(gray.shape))
-            if scale > 1:
-                enlarged = cv2.resize(_stretch(gray), None, fx=scale, fy=scale,
-                                      interpolation=cv2.INTER_CUBIC)
-                candidates = _zxing_qr(enlarged, scale) or []
+        if not live:
+            candidates = decode_qr(crop) or []
     if len(candidates) > 1:
         return None, []
     if not candidates:
