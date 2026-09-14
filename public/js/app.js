@@ -1,6 +1,5 @@
 // app.js — dashboard utama Hydroship ROV
 import { CONFIG } from "./config.js";
-import { drawGrabOverlay, freshWallQr } from './grab-overlay.js';
 import { RovScene } from "./scene.js";
 import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, getQrState, decodeClientQr } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
@@ -482,7 +481,6 @@ function applyTelemetry(d) {
     syncModeTabs(d.mode, lastPosHold);
   }
 
-  wallQrTelemetry = { data: d, at: performance.now() };
   applyMission5(d.mission5);
   const autoInput = document.getElementById('autonomousInput');
   const controlOutput = document.getElementById('controlOutput');
@@ -940,7 +938,6 @@ function renderFocusReadout(score) {
 }
 
 async function scanControlQR() {
-  renderGrabOverlay();
   if (currentPageName !== "control") return;
   if (document.hidden) return;   // jendela GUI di belakang popout kamera
   if (!els.camImg || !els.camImg.naturalWidth) return;
@@ -953,8 +950,6 @@ async function scanControlQR() {
     const scannedUrl = CONFIG.CAMERA_URL;
     const { qr, sharpness } = await decodeClientQr(els.camImg, qrScanCanvas, 1280, { sharpness: true });
     if (scannedUrl !== CONFIG.CAMERA_URL) return;
-    wallGrabQr = { qr, url: scannedUrl, at: performance.now() };
-    renderGrabOverlay();
     setClientQr(qr ? qr.data : null);
     renderQrReadout();
     if (sharpness !== null) renderFocusReadout(sharpness);
@@ -962,22 +957,6 @@ async function scanControlQR() {
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
 setInterval(scanControlQR, 200);
-
-let wallGrabQr = null;
-let wallQrTelemetry = null;
-function renderGrabOverlay() {
-  const canvas = document.getElementById('grabOverlayCanvas');
-  if (!canvas) return;
-  const camera = CONFIG.CAMERAS.find(c => c.url === CONFIG.CAMERA_URL);
-  const visible = currentPageName === 'control' && camera?.role === 'WALL'
-    && els.camNoSignal.style.display === 'none';
-  canvas.hidden = !visible;
-  if (!visible) { wallGrabQr = null; return; }
-  const qr = wallGrabQr?.url === CONFIG.CAMERA_URL && performance.now()-wallGrabQr.at < 600
-    ? wallGrabQr.qr : null;
-  drawGrabOverlay(canvas, els.camImg, qr, CONFIG.GRAB_PREVIEW_ROI, CONFIG.GRAB_CALIBRATION,
-    freshWallQr(wallQrTelemetry?.data, (performance.now() - (wallQrTelemetry?.at ?? 0))/1000));
-}
 
 /*  WebSocket  */
 let ws = null, demo = null, pingT = 0, linkStale = false;
@@ -1012,7 +991,6 @@ function connect() {
   };
   ws.onclose = () => {
     linkStale = false;
-    wallQrTelemetry = null;
     setLink("off");
     /* Link putus = GUI tidak lagi punya otoritas kontrol. Kunci E-Stop dan
        netralkan axis lokal supaya saat WS tersambung lagi joystick tidak

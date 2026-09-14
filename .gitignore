@@ -161,3 +161,4 @@ logs
 # systemd default di Pi.
 autonomy/vision/*_320.onnx
 autonomy/vision/*_416.onnx
+Planning/hydroship_record_1789422820867.webm
