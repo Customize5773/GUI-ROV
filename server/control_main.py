@@ -95,6 +95,14 @@ MODE_AUTONOMOUS = "autonomous"
 # operator mengambil alih.
 OPERATOR_ABORT_DEADZONE = 15
 
+# Heading hold KHUSUS autonomous (default rov_heading.py 6/250/2° dipakai manual).
+# Uji sim kki_arena 2026-09-13: saat geser menyamping, heading melenceng lalu
+# mempercepat sendiri; dengan 6/250/2° koreksi terlambat dan ROV berputar ~180°.
+# Nilai lebih kuat ini WAJIB dicek di kolam (bisa berosilasi bila respons lambat).
+AUTO_HEADING_GAIN = 12.0
+AUTO_HEADING_LIMIT = 500.0
+AUTO_HEADING_DEADBAND_DEG = 1.0
+
 AXES = ("surge", "sway", "yaw", "heave")
 
 # ============================================================
@@ -688,7 +696,8 @@ def servo_step(surge_step):
               f"xy={xy} in_grab={in_grab} close_frames={servo_hits}/{servo_cfg['centered_ticks']}")
 
     # Gerbang surge. Transisi 0 -> penuh tetap lewat slew: lompatan command
-    # menyentak rangka, dan sentakan itu jatuh persis saat ROV paling dekat hook.
+    # menyentak rangka, dan sentakan itu jatuh persis saat ROV p
+    # aling dekat hook.
     servo_surge_out = _slew_limit(
         servo_surge_out, float(surge_step) if di_tengah else 0.0, slew_axis, dt)
     # Jangan melewati payload saat menunggu 10 frame baru pada worker 4 FPS.
@@ -705,24 +714,26 @@ def servo_step(surge_step):
 # ============================================================
 
 # Depth angka di kode diprioritaskan; None memakai DEPTH DASAR GUI.
-depth_auto = 1.0  # Target kedalaman autonomous (meter).
+depth_auto = 0.3  # Target kedalaman autonomous (meter).
+
+# TARGET POIN 20
 AUTO_STEPS = [
     # duration, surge, sway, yaw, heave, gripper, depth
-    (3.0, 400, 600, 0, 0, None, depth_auto), # maju
-    (1.0, 0, 0, 90, 0, None, depth_auto), # putar kanan  
-    # contoh struktur command non-motion
-    (6.0, 0, 0, 180, 0, None, depth_auto), # putar balik
-    (10.0, 0, -800, 180, 0, None, depth_auto), # bergerak ke kiri (sway) , waktu (paling kiri) disesuaikan
-    
-    (2.0, 0, 0, 180, 0, 1580, depth_auto), # buka gripper
-    (6.0, 250, 0, 180, 0, 1580, depth_auto), # maju ke hook
-    (2.0, 150, 0, 180, 0, 1500, depth_auto), # hold gripper
-    (4.0, 0, 0, 180, 0, 1350, depth_auto), # tutup gripper
-    (4.0, -400, 0, 180, 0, 1350, 0.0), # mundur, depth 0.0 = naik ke permukaan
-    (4.0, 400, 0, 180, 0, 1350, 0.0), # maju / last motion
-    (4.0, 0, 0, 180, 0, 1350, 0.0), # finish
-    
+    (3.0, -200, 0, 0, 0, None, depth_auto), 
+    (3.0, 0, 0, 0, 0, None, 0.0)
 ]
+
+# Tabel sebelumnya (dengan putar kanan/putar balik) — simpan untuk dibandingkan:
+# TARGET POIN 40 
+# AUTO_STEPS = [
+#     # duration, surge, sway, yaw, heave, gripper, depth
+#     (2.0, -200, 0, 0, 0, None, 0.10), 
+#     (6.0, 0, 0, 0, 0, None, depth_auto), 
+#     (3.0, 250, 0, 0, 0, None, depth_auto), 
+#     (3.0, 0, 0, 0, 0, 1350, depth_auto), 
+#     (3.0, -300, 0, 0, 0, 1350, 0.0), 
+#     (3.0, 300, 0, 0, 0, 1350, 0.0)
+# ]
 
 
 def read_auto_steps(path, depth_dasar=None):
@@ -915,7 +926,8 @@ def autonomous_control():
         send_command("gripper_pwm", gripper)
         auto_gripper_sent = True
 
-    yaw = heading_bias(yaw_deg, heading)
+    yaw = heading_bias(yaw_deg, heading, gain=AUTO_HEADING_GAIN,
+                       limit=AUTO_HEADING_LIMIT, deadband=AUTO_HEADING_DEADBAND_DEG)
     send_motion(surge, sway, yaw, heave, src="fsm")
 
 

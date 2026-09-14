@@ -41,6 +41,26 @@ def _jsonable(value):
     return value
 
 
+def decode_without_yolo(frame, cv2, stretch, zxing_qr):
+    """Jalur tanpa YOLO: ZXing frame penuh, mentah lalu contrast-stretch.
+
+    ponytail: hanya jenjang ZXing murah dari decode_qr (~0,055 s/frame di Pi);
+    rantai pyzbar/tile yang bisa makan detik per frame sengaja dilewati. QR
+    sulit (riak/haze berat) bisa lolos — pakai decode_qr penuh bila hit-rate kurang.
+    """
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if frame.ndim == 3 else frame
+    decoded = zxing_qr(gray) or zxing_qr(stretch(gray))
+    if not decoded:
+        return None, []
+    h, w = gray.shape[:2]
+    pts = decoded[0]['pts']
+    x1, y1 = max(0.0, float(pts[:, 0].min())), max(0.0, float(pts[:, 1].min()))
+    x2, y2 = min(float(w), float(pts[:, 0].max())), min(float(h), float(pts[:, 1].max()))
+    detection = {'bbox': [x1, y1, max(1.0, x2 - x1), max(1.0, y2 - y1)],
+                 'confidence': 1.0, 'method': 'qr_decode'}
+    return detection, decoded
+
+
 def build_arg_parser():
     from vision.qr_gripper import parse_roi
     ap = argparse.ArgumentParser(description='Laptop-side YOLO QR worker')
@@ -53,7 +73,8 @@ def build_arg_parser():
     ap.add_argument('--proposal-conf', type=float,
                     default=float(os.environ.get('QR_PROPOSAL_CONF', 0.1)),
                     help='kandidat di bawah --conf wajib berhasil decode')
-    ap.add_argument('--model', required=True)
+    ap.add_argument('--model', default=None,
+                    help='bobot YOLO region QR; kosong = decode ZXing frame penuh (ringan, tanpa YOLO)')
     ap.add_argument('--calib', default=None,
                     help='npz kalibrasi CAM BOTTOM; tanpa ini pose=None dan '
                          'gate squaring M5_QR_DOCK ikut mati')
@@ -97,15 +118,17 @@ def main():
     try:
         import cv2
         import numpy as np
-        from vision.qr_detect import (_order_quad_points,
+        from vision.qr_detect import (_order_quad_points, _stretch, _zxing_qr,
                                       estimate_pose_pts, parse_payload, wall_from_qr)
-        from vision.yolo_hook import make_detector
-        # Detektor dipakai apa adanya: untuk model detect-only blok keypoint-nya
-        # menghasilkan None di kedua backend, jadi jalur hook/pose tak tersentuh.
-        from vision.qr_gripper import detect_gripper_qr
         if not 0 < args.proposal_conf <= args.conf <= 1:
             raise ValueError('require 0 < proposal-conf <= conf <= 1')
-        detector = make_detector(args.model, conf=args.proposal_conf, imgsz=args.imgsz)
+        detector = None
+        if args.model:
+            from vision.yolo_hook import make_detector
+            # Detektor dipakai apa adanya: untuk model detect-only blok keypoint-nya
+            # menghasilkan None di kedua backend, jadi jalur hook/pose tak tersentuh.
+            from vision.qr_gripper import detect_gripper_qr
+            detector = make_detector(args.model, conf=args.proposal_conf, imgsz=args.imgsz)
         K = dist = None
         calibration = None
         if args.calib:
@@ -175,8 +198,12 @@ def main():
                               'reason': 'kalibrasi %s != stream %dx%d' % (
                                   calibration.get('image_size'), w, h),
                               'timestamp': time.time()})
-                detection, decoded = detect_gripper_qr(
-                    detector, frame, args.gripper_roi, args.conf, live=True)
+                if detector is not None:
+                    detection, decoded = detect_gripper_qr(
+                        detector, frame, args.gripper_roi, args.conf, live=True)
+                else:
+                    detection, decoded = decode_without_yolo(
+                        frame, cv2, _stretch, _zxing_qr)
                 # Never publish geometry already older than the controller gate.
                 if time.time() - captured_at > 1.0:
                     detection, decoded = None, []

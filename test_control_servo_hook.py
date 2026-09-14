@@ -397,8 +397,24 @@ class GateSurge(_ServoBase):
 
 
 class UrutanCounter(_ServoBase):
+    # Tabel milik test ini sendiri: auto_steps_fixture.py boleh diisi tabel
+    # pengujian operator tanpa mengubah angka yang dicek di bawah.
+    STEPS = """AUTO_STEPS = [
+        (3.0, 0, 0, 0, 0, None, None),
+        (2.0, 0, 0, 0, 0, None, None),
+        (1.0, 0, 0, 0, 0, None, None),
+        (2.0, 0, 0, 0, 0, None, 1.0),
+        (3.0, -500, 0, 0, 0, None, None),
+        (1.0, 0, 0, 0, 0, None, None),
+    ]"""
+
     def setUp(self):
         super().setUp()
+        folder = tempfile.mkdtemp()
+        self.addCleanup(lambda: __import__("shutil").rmtree(folder, ignore_errors=True))
+        self.cm.__file__ = os.path.join(folder, "steps.py")
+        with open(self.cm.__file__, "w", encoding="utf-8") as source:
+            source.write(self.STEPS)
         self.now = 100.0
         clock = patch.object(self.cm.time, "monotonic", side_effect=lambda: self.now)
         clock.start()
@@ -472,10 +488,10 @@ class UrutanCounter(_ServoBase):
     def test_yaw_target_derajat_dan_wrap(self):
         self.cm.AUTO_STEPS[0] = (3, 0, 0, 10, 0, None, None)
         self.tick()
-        self.assertEqual(self.sent[-1]["yaw"], 60)
+        self.assertEqual(self.sent[-1]["yaw"], round(10 * self.cm.AUTO_HEADING_GAIN))
         self.cm.vehicle_state["heading"] = 350
         self.cm.autonomous_control()
-        self.assertEqual(self.sent[-1]["yaw"], 120)
+        self.assertEqual(self.sent[-1]["yaw"], round(20 * self.cm.AUTO_HEADING_GAIN))
         self.cm.vehicle_state["heading"] = 10
         self.cm.autonomous_control()
         self.assertEqual(self.sent[-1]["yaw"], 0)
