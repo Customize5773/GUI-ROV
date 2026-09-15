@@ -571,10 +571,22 @@ body[data-theme="light"] .theme__icon::after {
 }
 
 .qr-valid {
-  min-height: 1em;
+  min-height: 28px;
+  padding: 4px 14px;
+  border-radius: 6px;
+  border: 1px solid transparent;
   color: var(--ok);
-  font: 700 12px "JetBrains Mono", ui-monospace, monospace;
-  letter-spacing: .08em;
+  background: rgba(55, 211, 146, .12);
+  font: 700 18px "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .12em;
+}
+.qr-valid:empty {
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+}
+.qr-valid:not(:empty) {
+  border-color: rgba(55, 211, 146, .4);
 }
 
 /* main grid */
