@@ -714,26 +714,24 @@ def servo_step(surge_step):
 # ============================================================
 
 # Depth angka di kode diprioritaskan; None memakai DEPTH DASAR GUI.
-depth_auto = 0.3  # Target kedalaman autonomous (meter).
+depth_auto = 0.31  # Target kedalaman autonomous (meter).
 
 # TARGET POIN 20
-AUTO_STEPS = [
-    # duration, surge, sway, yaw, heave, gripper, depth
-    (3.0, -200, 0, 0, 0, None, depth_auto), 
-    (3.0, 0, 0, 0, 0, None, 0.0)
-]
-
-# Tabel sebelumnya (dengan putar kanan/putar balik) — simpan untuk dibandingkan:
-# TARGET POIN 40 
 # AUTO_STEPS = [
 #     # duration, surge, sway, yaw, heave, gripper, depth
-#     (2.0, -200, 0, 0, 0, None, 0.10), 
-#     (6.0, 0, 0, 0, 0, None, depth_auto), 
-#     (3.0, 250, 0, 0, 0, None, depth_auto), 
-#     (3.0, 0, 0, 0, 0, 1350, depth_auto), 
-#     (3.0, -300, 0, 0, 0, 1350, 0.0), 
-#     (3.0, 300, 0, 0, 0, 1350, 0.0)
+#     (3.0, -200, 0, 0, 0, None, depth_auto), 
+#     (3.0, 0, 0, 0, 0, None, 0.0)
 # ]
+
+AUTO_STEPS = [
+    # duration, surge, sway, yaw, heave, gripper, depth
+    (3.0, -200, 0, 0, 0, None, 0.10), 
+    (6.0, 0, 0, 0, 0, None, depth_auto), 
+    (7.0, 275, 0, 0, 0, None, depth_auto), 
+    (3.0, 0, 0, 0, 0, 1350, depth_auto), 
+    (4.0, -500, 0, 0, 0, 1350, 0.0), 
+    (3.0, 500, 0, 0, 0, 1350, 0.0)
+]
 
 
 def read_auto_steps(path, depth_dasar=None):
