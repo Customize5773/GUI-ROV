@@ -714,7 +714,7 @@ def servo_step(surge_step):
 # ============================================================
 
 # Depth angka di kode diprioritaskan; None memakai DEPTH DASAR GUI.
-depth_auto = 0.31  # Target kedalaman autonomous (meter).
+depth_auto = 0.0  # Target kedalaman autonomous (meter).
 
 # TARGET POIN 20
 # AUTO_STEPS = [

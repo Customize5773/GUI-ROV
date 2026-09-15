@@ -113,7 +113,6 @@ const ACTION_LABELS = {
   emergency_stop: "Emergency stop",
   mode_stabilize: "Mode stabilize",
   mode_depth_hold: "Mode alt hold",
-  mode_poshold: "Mode pos hold (alt hold + tahan heading)",
   input_hold_set: "Input hold set",
   mount_tilt_up: "Mount tilt up",
   mount_tilt_down: "Mount tilt down",
@@ -127,6 +126,7 @@ const ACTION_LABELS = {
   lights_brighter: "Lights brighter",
   lights_dimmer: "Lights dimmer",
   camera_stream: "Camera Stream",
+  qr_clear: "Clear hasil QR",
   // Depth-set: SET merekam kedalaman saat ini sebagai setpoint, toggle
   // menyalakan/mematikannya. Menahan kedalaman baru benar-benar terjadi kalau
   // wahana juga ada di mode Alt Hold — lihat rov_modes.py.

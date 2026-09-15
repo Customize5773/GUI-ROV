@@ -48,8 +48,12 @@
 
    v10: 4 aksi baru yang men-trigger tombol GUI yang sudah ada (light,
    snapshot, record, toggle mode manual/autonomous) supaya bisa di-bind ke
-   tombol joystick lewat halaman Setup > Joystick. */
-export const SCHEMA_VERSION = 10;
+   tombol joystick lewat halaman Setup > Joystick.
+
+   v11: aksi "mode_poshold" diganti "qr_clear" (bersihkan hasil pembacaan QR di
+   readout). Tombol X yang operator ikat ke poshold dimigrasikan otomatis lewat
+   ACTION_MIGRATION. */
+export const SCHEMA_VERSION = 11;
 
 export const BUTTON_ACTIONS = [
   "no_function",
@@ -61,10 +65,10 @@ export const BUTTON_ACTIONS = [
   "emergency_stop",
   "mode_stabilize",
   "mode_depth_hold",
-  // Alt Hold + tahan heading (overlay sisi Pi). Tidak ter-bind di
-  // defaultButtonLayer(): ke-16 tombol pad sudah terpakai. Bind manual lewat
-  // halaman Setup > Joystick.
-  "mode_poshold",
+  // Bersihkan hasil pembacaan QR di readout Control/Camera (v11, menggantikan
+  // "mode_poshold"). Tidak ter-bind di defaultButtonLayer(): ke-16 tombol pad
+  // sudah terpakai. Bind manual lewat halaman Setup > Joystick.
+  "qr_clear",
   "input_hold_set",
   "mount_tilt_up",
   "mount_tilt_down",
@@ -132,6 +136,10 @@ const ACTION_MIGRATION = {
   // ACRO dihapus dari dashboard (v7): tombol yang masih terikat ke aksi ini
   // dimigrasikan ke no_function alih-alih diam-diam macet.
   mode_acro: "no_function",
+
+  // v11: poshold dilepas dari daftar aksi tombol; slot yang sama (tombol X pada
+  // profil operator) sekarang membersihkan hasil pembacaan QR.
+  mode_poshold: "qr_clear",
 };
 
 export function migrateButtonAction(action) {

@@ -1,7 +1,7 @@
 // app.js — dashboard utama Hydroship ROV
 import { CONFIG } from "./config.js";
 import { RovScene } from "./scene.js";
-import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, getQrState, decodeClientQr } from "./core.js";
+import { setServices, pilotAxes, snapshotImage, createRecorder, makeFullscreen, camProxy, setPyQr, setClientQr, clearQr, getQrState, decodeClientQr } from "./core.js";
 import { telemetryPage } from "./pages/telemetry.js";
 import { missionPage } from "./pages/mission.js";
 import { cameraPage } from "./pages/camera.js";
@@ -1770,11 +1770,6 @@ function executeJoystickAction(action, mode = "toggle") {
       return;
     }
 
-    case "mode_poshold": {
-      requestPilotMode("poshold", "POS HOLD");
-      return;
-    }
-
     case "input_hold_set": {
       sendCmd("input_hold_set", true);
       log("Input hold set", "ok");
@@ -1784,6 +1779,13 @@ function executeJoystickAction(action, mode = "toggle") {
     case "mount_center": {
       sendCmd("mount_center", true);
       log("Mount center", "ok");
+      return;
+    }
+
+    case "qr_clear": {
+      clearQr();
+      renderQrReadout();
+      log("Hasil pembacaan QR dibersihkan", "ok");
       return;
     }
 
