@@ -571,13 +571,13 @@ body[data-theme="light"] .theme__icon::after {
 }
 
 .qr-valid {
-  min-height: 28px;
-  padding: 4px 14px;
+  min-height: 34px;
+  padding: 6px 18px;
   border-radius: 6px;
   border: 1px solid transparent;
   color: var(--ok);
   background: rgba(55, 211, 146, .12);
-  font: 700 18px "JetBrains Mono", ui-monospace, monospace;
+  font: 700 24px "JetBrains Mono", ui-monospace, monospace;
   letter-spacing: .12em;
 }
 .qr-valid:empty {
