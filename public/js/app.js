@@ -62,7 +62,7 @@ const els = {
   runLastScore: $("runLastScore"), runLastDur: $("runLastDur"), runLastQr: $("runLastQr"),
   depthTarget: $("vDepthTarget"),
   depthTargetInput: $("depthTargetInput"),
-  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"), qrDot: $("qrDot"), qrPreview: $("qrPreview"),
+  vQR: $("vQR"), qrReadout: $("qrReadout"), vQRSide: $("vQRSide"), qrDot: $("qrDot"), qrValid: $("qrValid"),
   vQRFocus: $("vQRFocus"), qrFocusReadout: $("qrFocusReadout"),
   depthHoldBadge: $("depthHoldBadge"),
   poolDepthBadge: $("poolDepthBadge"),
@@ -649,7 +649,6 @@ function setM5Gate(lock, reject) {
 function applyMission5(m5) {
   setPyQr(m5 && m5.qr_data, m5 && m5.qr_wall);
   renderQrReadout();
-  renderQrPreviewImage(getQrState().raw);
 
   if (!els.mission5State) return;
   if (!m5) {
@@ -794,6 +793,7 @@ function renderQrReadout() {
     els.vQR.removeAttribute("title");
     els.qrReadout.classList.remove("is-ok");
   }
+  if (els.qrValid) els.qrValid.textContent = raw ? "VALID" : "";
   els.qrReadout.classList.toggle("is-py", source === "python");
   if (els.vQRSide) {
     els.vQRSide.textContent = side || "";
@@ -803,116 +803,6 @@ function renderQrReadout() {
   if (els.qrDot) {
     els.qrDot.className = "qr-dot" + (changeType === "new" ? " qr-dot--new" : changeType === "same" ? " qr-dot--same" : "");
   }
-}
-
-/* Preview QR — sekedar pembacaan hasil decode. Bila payload QR adalah LINK ke
-   gambar (data-URL image atau URL http/https — halaman web yang menampilkan
-   gambar sekalipun, resolusi gambarnya dilakukan server via /qr/preview karena
-   browser tak bisa fetch lintas-origin) tampilkan gambar tsb di canvas; selain
-   itu (JSON KKI / huruf sisi / teks) cukup render teks hasil decode. Ini murni
-   view berpasif thd hasil decode, bukan screenshot deteksi. */
-let _qrPreviewImg = null;
-let _qrPreviewRaw = null;
-const QR_PREVIEW_PROXY = "/qr/preview?url=";
-
-// URL sumber yang boleh digambar: data-URL image langsung, URL http(s) lewat
-// proxy same-origin (server mengikuti redirect & mengekstrak gambar dari
-// halaman HTML). Selain itu → null (bukan gambar, render teks).
-function qrPreviewSrc(raw) {
-  if (!raw) return null;
-  const s = String(raw).trim();
-  if (/^data:image\/[^;]+;base64,/.test(s)) return s;
-  if (/^https?:\/\//i.test(s)) return QR_PREVIEW_PROXY + encodeURIComponent(s);
-  return null;
-}
-
-// muat sumber gambar (data-URL atau URL hasil proxy) sekali, cache di Image.
-// DrawImage gambar cross-origin tetap sah (canvas mungkin ter-taint tapi kita
-// tak pernah membaca pikselnya), jadi tak bergantung header CORS di host
-// gambar publik macam etsy / cdn3.me-qr.com.
-function loadQrPreviewImage(raw) {
-  if (_qrPreviewImg && _qrPreviewImg._src === raw) return Promise.resolve(_qrPreviewImg);
-  return new Promise((resolve) => {
-    const img = new Image();
-    let done = false;
-    // resolusi server bisa dua-langkah (redirect + HTML→gambar), kasih kelonggaran
-    const timer = setTimeout(() => { if (!done) { done = true; resolve(null); } }, 20000);
-    img._src = raw;
-    img.onload = () => { if (done) return; done = true; clearTimeout(timer); _qrPreviewImg = img; resolve(img); };
-    img.onerror = () => { if (done) return; done = true; clearTimeout(timer); resolve(null); };
-    img.src = qrPreviewSrc(raw) || raw;
-  });
-}
-
-function paintQrText(pCtx, pw, ph, text) {
-  pCtx.fillStyle = "rgba(255,255,255,.97)";
-  pCtx.fillRect(0, 0, pw, ph);
-  pCtx.fillStyle = "#101418";
-  pCtx.textAlign = "center";
-  pCtx.textBaseline = "middle";
-  const words = String(text).split(/\s+/);
-  const lines = [];
-  let line = "";
-  for (const w of words) {
-    const test = line ? line + " " + w : w;
-    pCtx.font = "10px ui-monospace, monospace";
-    if (pCtx.measureText(test).width <= pw - 12) { line = test; }
-    else { if (line) lines.push(line); line = w; }
-  }
-  if (line) lines.push(line);
-  const lh = 14;
-  let y = ph / 2 - ((lines.length - 1) * lh) / 2;
-  for (const l of lines.slice(0, Math.floor(ph / lh))) {
-    pCtx.font = "10px ui-monospace, monospace";
-    pCtx.fillText(l, pw / 2, y);
-    y += lh;
-  }
-}
-
-function renderQrPreviewImage(raw) {
-  if (!els.qrPreview) return;
-  const pCtx = els.qrPreview.getContext("2d");
-  const pw = els.qrPreview.width, ph = els.qrPreview.height;
-
-  if (!raw) {
-    pCtx.clearRect(0, 0, pw, ph);
-    _qrPreviewRaw = null;
-    return;
-  }
-
-  if (qrPreviewSrc(raw)) {
-    // payload = link gambar/halaman → tampilkan gambar hasil decode (via proxy).
-    // Fetch gambar hanya diulang saat payload berubah; render akhir canvas tetap
-    // selalu terjadi tiap scan supaya tidak pernah menggantung kosong.
-    if (_qrPreviewRaw !== raw) {
-      loadQrPreviewImage(raw).then((img) => {
-        if (!els.qrPreview || getQrState().raw !== raw) return;
-        const c2 = els.qrPreview.getContext("2d");
-        const w2 = els.qrPreview.width, h2 = els.qrPreview.height;
-        c2.clearRect(0, 0, w2, h2);
-        // Hindari NaN bila server balas 200 image/* tapi body kosong/0×0:
-        // tanpa guard width/height, drawImage dengan NaN akan diam-diam no-op
-        // dan canvas tampak kosong (transparan mengikuti bg GUI).
-        if (img && img.naturalWidth > 0 && img.naturalHeight > 0) {
-          const sc = Math.min(w2 / img.width, h2 / img.height);
-          const dw = img.width * sc, dh = img.height * sc;
-          c2.drawImage(img, (w2 - dw) / 2, (h2 - dh) / 2, dw, dh);
-          _qrPreviewRaw = raw;
-        } else {
-          // gagal dimuat / body kosong (hotlink/CORS/timeout) → teks link hasil
-          // decode di atas background putih. _qrPreviewRaw TIDAK diset supaya
-          // scan berikutnya tetap mencoba lagi (bukan terkunci kosong permanen).
-          paintQrText(c2, w2, h2, raw);
-        }
-      });
-    }
-    return;
-  }
-
-  // payload biasa (JSON / sisi / teks) → render teks hasil decode jadi gambar
-  pCtx.clearRect(0, 0, pw, ph);
-  paintQrText(pCtx, pw, ph, raw);
-  _qrPreviewRaw = raw;
 }
 
 /* Skor ketajaman ("focus peaking" ala kamera foto) — varians Laplacian 4-neighbor
@@ -953,7 +843,6 @@ async function scanControlQR() {
     setClientQr(qr ? qr.data : null);
     renderQrReadout();
     if (sharpness !== null) renderFocusReadout(sharpness);
-    renderQrPreviewImage(getQrState().raw);
   } catch (e) { /* frame belum siap / cross-origin, lewati */ }
 }
 setInterval(scanControlQR, 200);

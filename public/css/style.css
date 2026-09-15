@@ -569,13 +569,12 @@ body[data-theme="light"] .theme__icon::after {
   flex: 0 0 100%;
   pointer-events: auto;
 }
-.qr-preview {
-  width: 200px;
-  height: 150px;
-  border: 1px solid rgba(255,255,255,.1);
-  border-radius: 4px;
-  background: var(--surface);
-  object-fit: contain;
+
+.qr-valid {
+  min-height: 1em;
+  color: var(--ok);
+  font: 700 12px "JetBrains Mono", ui-monospace, monospace;
+  letter-spacing: .08em;
 }
 
 /* main grid */
